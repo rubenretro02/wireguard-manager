@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,16 @@ export default function AdminPage() {
     role: "user" as UserRole,
   });
 
+  const fetchData = useCallback(async () => {
+    const { data: routersData } = await supabase
+      .from("routers")
+      .select("id, name, host, port, api_port, username, use_ssl, connection_type, created_at")
+      .order("created_at", { ascending: false });
+    if (routersData) setRouters(routersData as Router[]);
+    const { data: usersData } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
+    if (usersData) setUsers(usersData as Profile[]);
+  }, [supabase]);
+
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -59,17 +69,7 @@ export default function AdminPage() {
       setLoading(false);
     };
     checkAuth();
-  }, [router, supabase]);
-
-  const fetchData = async () => {
-    const { data: routersData } = await supabase
-      .from("routers")
-      .select("id, name, host, port, api_port, username, use_ssl, connection_type, created_at")
-      .order("created_at", { ascending: false });
-    if (routersData) setRouters(routersData as Router[]);
-    const { data: usersData } = await supabase.from("profiles").select("*").order("created_at", { ascending: false });
-    if (usersData) setUsers(usersData as Profile[]);
-  };
+  }, [router, supabase, fetchData]);
 
   const handleAddRouter = async () => {
     setAdding(true);
