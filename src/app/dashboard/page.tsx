@@ -29,6 +29,9 @@ export default function DashboardPage() {
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState<WireGuardPeer | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [interfaceFilter, setInterfaceFilter] = useState<string>("all");
+  const [peerMetadata, setPeerMetadata] = useState<Record<string, { created_at: string; created_by_email: string }>>({});
   const [selectedPrefix, setSelectedPrefix] = useState<string>("");
   const [lastOctet, setLastOctet] = useState<string>("");
   const [showOctetSuggestions, setShowOctetSuggestions] = useState(false);
@@ -90,21 +93,45 @@ export default function DashboardPage() {
     }
   }, [createDialogOpen, subnetPrefixes, selectedPrefix]);
 
-  // Filter peers based on search query
-  const filteredPeers = peers.filter((peer) => {
-    if (!searchQuery.trim()) return true;
-    const query = searchQuery.toLowerCase().trim();
-    const name = peer.name || "";
-    const comment = peer.comment || "";
-    const allowedAddress = peer["allowed-address"] || "";
-    const iface = typeof peer.interface === "string" ? peer.interface : "";
-    return (
-      name.toLowerCase().includes(query) ||
-      comment.toLowerCase().includes(query) ||
-      allowedAddress.toLowerCase().includes(query) ||
-      iface.toLowerCase().includes(query)
-    );
-  });
+  // Filter peers based on search query, status, and interface
+  const filteredPeers = useMemo(() => {
+    return peers.filter((peer) => {
+      // Status filter
+      if (statusFilter === "enabled" && peer.disabled) return false;
+      if (statusFilter === "disabled" && !peer.disabled) return false;
+
+      // Interface filter
+      if (interfaceFilter !== "all") {
+        const peerIface = typeof peer.interface === "string" ? peer.interface : "";
+        if (peerIface !== interfaceFilter) return false;
+      }
+
+      // Text search
+      if (!searchQuery.trim()) return true;
+      const query = searchQuery.toLowerCase().trim();
+      const name = String(peer.name || "");
+      const comment = String(peer.comment || "");
+      const allowedAddress = String(peer["allowed-address"] || "");
+      const iface = String(typeof peer.interface === "string" ? peer.interface : "");
+      return (
+        name.toLowerCase().includes(query) ||
+        comment.toLowerCase().includes(query) ||
+        allowedAddress.toLowerCase().includes(query) ||
+        iface.toLowerCase().includes(query)
+      );
+    });
+  }, [peers, searchQuery, statusFilter, interfaceFilter]);
+
+  // Get unique interface names for the filter dropdown
+  const interfaceNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const peer of peers) {
+      if (typeof peer.interface === "string" && peer.interface) {
+        names.add(peer.interface);
+      }
+    }
+    return Array.from(names).sort();
+  }, [peers]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -139,7 +166,32 @@ export default function DashboardPage() {
     setLoading(false);
   }, [selectedRouterId, newPeer.interface]);
 
-  useEffect(() => { if (selectedRouterId) fetchWireGuardData(); }, [selectedRouterId, fetchWireGuardData]);
+  const fetchPeerMetadata = useCallback(async () => {
+    if (!selectedRouterId) return;
+    try {
+      const res = await fetch(`/api/peer-metadata?routerId=${selectedRouterId}`);
+      const data = await res.json();
+      if (data.metadata && Array.isArray(data.metadata)) {
+        const map: Record<string, { created_at: string; created_by_email: string }> = {};
+        for (const m of data.metadata) {
+          map[m.peer_public_key] = {
+            created_at: m.created_at,
+            created_by_email: m.created_by_email || "Unknown",
+          };
+        }
+        setPeerMetadata(map);
+      }
+    } catch {
+      // Silently fail - metadata is optional
+    }
+  }, [selectedRouterId]);
+
+  useEffect(() => {
+    if (selectedRouterId) {
+      fetchWireGuardData();
+      fetchPeerMetadata();
+    }
+  }, [selectedRouterId, fetchWireGuardData, fetchPeerMetadata]);
 
   const handleLogout = async () => { await supabase.auth.signOut(); router.push("/login"); };
 
@@ -149,12 +201,30 @@ export default function DashboardPage() {
       const res = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "createPeer", routerId: selectedRouterId, data: newPeer }) });
       const data = await res.json();
       if (data.peer) {
+        // Save custom metadata (creation date + creator) in Supabase
+        try {
+          await fetch("/api/peer-metadata", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "save",
+              routerId: selectedRouterId,
+              peerPublicKey: data.peer["public-key"] || data.peer[".id"],
+              peerName: newPeer.name,
+              peerInterface: newPeer.interface,
+              allowedAddress: newPeer["allowed-address"],
+            }),
+          });
+        } catch {
+          // Metadata save is best-effort
+        }
         toast.success("Peer created");
         setCreateDialogOpen(false);
         setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
         setSelectedPrefix("");
         setLastOctet("");
         fetchWireGuardData();
+        fetchPeerMetadata();
       }
       else toast.error(data.error || "Failed to create peer");
     } catch { toast.error("Failed to create peer"); }
@@ -266,13 +336,30 @@ PersistentKeepalive = 25`;
         <div>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-medium">WireGuard Peers ({filteredPeers.length}{searchQuery ? ` of ${peers.length}` : ""})</h2>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Input
                 placeholder="Search peers..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-64"
+                className="w-48"
               />
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[130px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="enabled">Enabled</SelectItem>
+                  <SelectItem value="disabled">Disabled</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select value={interfaceFilter} onValueChange={setInterfaceFilter}>
+                <SelectTrigger className="w-[160px]"><SelectValue placeholder="Interface" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Interfaces</SelectItem>
+                  {interfaceNames.map((name) => (
+                    <SelectItem key={name} value={name}>{name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Button variant="ghost" onClick={fetchWireGuardData}>Refresh</Button>
               <Dialog open={createDialogOpen} onOpenChange={(open) => {
                 setCreateDialogOpen(open);
@@ -410,6 +497,8 @@ PersistentKeepalive = 25`;
                     <TableHead>Comment</TableHead>
                     <TableHead>Traffic</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Created By</TableHead>
+                    <TableHead>Created At</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -422,6 +511,20 @@ PersistentKeepalive = 25`;
                       <TableCell className="text-sm">{peer.comment || "-"}</TableCell>
                       <TableCell className="text-sm"><span className="text-green-500">{formatBytes(peer.rx)}</span> / <span className="text-blue-500">{formatBytes(peer.tx)}</span></TableCell>
                       <TableCell><Badge variant={peer.disabled ? "secondary" : "default"}>{peer.disabled ? "Disabled" : "Enabled"}</Badge></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {peerMetadata[peer["public-key"]]?.created_by_email || "-"}
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {peerMetadata[peer["public-key"]]?.created_at
+                          ? new Date(peerMetadata[peer["public-key"]].created_at).toLocaleDateString("en-US", {
+                              year: "numeric",
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })
+                          : "-"}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button variant="ghost" size="sm" onClick={() => downloadConfig(peer)} title="Download .conf">DL</Button>

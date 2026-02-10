@@ -4,64 +4,78 @@ const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
-  console.error("Missing SUPABASE env vars");
+  console.error("Missing SUPABASE env vars. NEXT_PUBLIC_SUPABASE_URL:", !!supabaseUrl, "Key:", !!supabaseKey);
   process.exit(1);
 }
 
+console.log("Connecting to Supabase:", supabaseUrl);
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const { error } = await supabase.rpc("exec_sql", {
-  query: `
-    CREATE TABLE IF NOT EXISTS peer_metadata (
-      id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-      router_id TEXT NOT NULL,
-      peer_public_key TEXT NOT NULL,
-      peer_name TEXT,
-      peer_interface TEXT,
-      allowed_address TEXT,
-      created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-      created_by_email TEXT,
-      created_by_user_id UUID,
-      UNIQUE(router_id, peer_public_key)
-    );
+// First check if table already exists by trying a query
+const { error: checkError } = await supabase
+  .from("peer_metadata")
+  .select("id")
+  .limit(1);
 
-    ALTER TABLE peer_metadata ENABLE ROW LEVEL SECURITY;
+if (!checkError) {
+  console.log("peer_metadata table already exists! No migration needed.");
+  process.exit(0);
+}
 
-    DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Anyone can read peer metadata') THEN
-        CREATE POLICY "Anyone can read peer metadata" ON peer_metadata FOR SELECT USING (true);
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Anyone can insert peer metadata') THEN
-        CREATE POLICY "Anyone can insert peer metadata" ON peer_metadata FOR INSERT WITH CHECK (true);
-      END IF;
-      IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Anyone can delete peer metadata') THEN
-        CREATE POLICY "Anyone can delete peer metadata" ON peer_metadata FOR DELETE USING (true);
-      END IF;
-    END $$;
+if (checkError && checkError.code !== "42P01") {
+  console.log("Table exists but got error:", checkError.message, "code:", checkError.code);
+  // Table likely exists with different permissions, that's OK
+  process.exit(0);
+}
 
-    CREATE INDEX IF NOT EXISTS idx_peer_metadata_router ON peer_metadata(router_id);
-    CREATE INDEX IF NOT EXISTS idx_peer_metadata_key ON peer_metadata(peer_public_key);
-  `,
+// Table doesn't exist - need to create it
+console.log("Table does not exist. Attempting to create via SQL...");
+
+// Try using the SQL endpoint directly
+const sqlQuery = `
+CREATE TABLE IF NOT EXISTS public.peer_metadata (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  router_id TEXT NOT NULL,
+  peer_public_key TEXT NOT NULL,
+  peer_name TEXT,
+  peer_interface TEXT,
+  allowed_address TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+  created_by_email TEXT,
+  created_by_user_id UUID,
+  UNIQUE(router_id, peer_public_key)
+);
+
+ALTER TABLE public.peer_metadata ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Allow all select" ON public.peer_metadata FOR SELECT USING (true);
+CREATE POLICY "Allow all insert" ON public.peer_metadata FOR INSERT WITH CHECK (true);
+CREATE POLICY "Allow all delete" ON public.peer_metadata FOR DELETE USING (true);
+CREATE POLICY "Allow all update" ON public.peer_metadata FOR UPDATE USING (true);
+`;
+
+// Use the Supabase REST SQL endpoint
+const response = await fetch(`${supabaseUrl}/rest/v1/rpc/exec_sql`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "apikey": supabaseKey,
+    "Authorization": `Bearer ${supabaseKey}`,
+  },
+  body: JSON.stringify({ query: sqlQuery }),
 });
 
-if (error) {
-  // If exec_sql doesn't exist, try direct table creation via REST
-  console.log("RPC not available, trying direct approach...");
-
-  // Check if table already exists
-  const { data, error: checkError } = await supabase
-    .from("peer_metadata")
-    .select("id")
-    .limit(1);
-
-  if (checkError && checkError.code === "42P01") {
-    console.log("Table does not exist. Please run the SQL in scripts/create-peer-metadata-table.sql manually in the Supabase SQL Editor.");
-    console.log("URL:", `${supabaseUrl}/project/default/sql`);
-  } else if (checkError) {
-    console.log("Table check error:", checkError.message);
-  } else {
-    console.log("peer_metadata table already exists!");
-  }
+if (response.ok) {
+  console.log("peer_metadata table created successfully via RPC!");
 } else {
-  console.log("peer_metadata table created successfully!");
+  const errText = await response.text();
+  console.log("RPC approach failed:", errText);
+  console.log("");
+  console.log("=== MANUAL SETUP REQUIRED ===");
+  console.log("Please run this SQL in your Supabase SQL Editor:");
+  console.log(`URL: ${supabaseUrl.replace('.supabase.co', '')}/project/default/sql`);
+  console.log("");
+  console.log(sqlQuery);
+  console.log("=== END SQL ===");
 }
