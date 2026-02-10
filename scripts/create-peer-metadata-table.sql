@@ -3,14 +3,14 @@
 
 CREATE TABLE IF NOT EXISTS peer_metadata (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-  router_id UUID NOT NULL REFERENCES routers(id) ON DELETE CASCADE,
+  router_id TEXT NOT NULL,
   peer_mikrotik_id TEXT NOT NULL,
   peer_name TEXT,
   peer_interface TEXT,
   allowed_address TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  created_by UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   created_by_email TEXT,
+  created_by_user_id UUID,
   UNIQUE(router_id, peer_mikrotik_id)
 );
 
@@ -35,6 +35,6 @@ CREATE POLICY "Authenticated users can delete peer metadata"
   TO authenticated
   USING (true);
 
--- Index for fast lookups by router
-CREATE INDEX IF NOT EXISTS idx_peer_metadata_router_id ON peer_metadata(router_id);
-CREATE INDEX IF NOT EXISTS idx_peer_metadata_peer_mikrotik_id ON peer_metadata(peer_mikrotik_id);
+-- Index for fast lookups
+CREATE INDEX IF NOT EXISTS idx_peer_metadata_router ON peer_metadata(router_id);
+CREATE INDEX IF NOT EXISTS idx_peer_metadata_peer ON peer_metadata(peer_mikrotik_id);
