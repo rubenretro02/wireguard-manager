@@ -96,9 +96,10 @@ export default function DashboardPage() {
   // Filter peers based on search query, status, and interface
   const filteredPeers = useMemo(() => {
     return peers.filter((peer) => {
-      // Status filter
-      if (statusFilter === "enabled" && peer.disabled) return false;
-      if (statusFilter === "disabled" && !peer.disabled) return false;
+      // Status filter (disabled can be boolean or string "true"/"false" from MikroTik)
+      const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
+      if (statusFilter === "enabled" && isDisabled) return false;
+      if (statusFilter === "disabled" && !isDisabled) return false;
 
       // Interface filter
       if (interfaceFilter !== "all") {
@@ -166,32 +167,41 @@ export default function DashboardPage() {
     setLoading(false);
   }, [selectedRouterId, newPeer.interface]);
 
-  const fetchPeerMetadata = useCallback(async () => {
-    if (!selectedRouterId) return;
+  // Load peer metadata from localStorage
+  const loadPeerMetadata = useCallback(() => {
     try {
-      const res = await fetch(`/api/peer-metadata?routerId=${selectedRouterId}`);
-      const data = await res.json();
-      if (data.metadata && Array.isArray(data.metadata)) {
-        const map: Record<string, { created_at: string; created_by_email: string }> = {};
-        for (const m of data.metadata) {
-          map[m.peer_public_key] = {
-            created_at: m.created_at,
-            created_by_email: m.created_by_email || "Unknown",
-          };
-        }
-        setPeerMetadata(map);
+      const stored = localStorage.getItem("wg_peer_metadata");
+      if (stored) {
+        const all = JSON.parse(stored) as Record<string, Record<string, { created_at: string; created_by_email: string }>>;
+        setPeerMetadata(all[selectedRouterId] || {});
       }
     } catch {
-      // Silently fail - metadata is optional
+      // Ignore parse errors
+    }
+  }, [selectedRouterId]);
+
+  const savePeerMetadata = useCallback((peerKey: string, email: string) => {
+    try {
+      const stored = localStorage.getItem("wg_peer_metadata");
+      const all: Record<string, Record<string, { created_at: string; created_by_email: string }>> = stored ? JSON.parse(stored) : {};
+      if (!all[selectedRouterId]) all[selectedRouterId] = {};
+      all[selectedRouterId][peerKey] = {
+        created_at: new Date().toISOString(),
+        created_by_email: email,
+      };
+      localStorage.setItem("wg_peer_metadata", JSON.stringify(all));
+      setPeerMetadata(all[selectedRouterId]);
+    } catch {
+      // Ignore storage errors
     }
   }, [selectedRouterId]);
 
   useEffect(() => {
     if (selectedRouterId) {
       fetchWireGuardData();
-      fetchPeerMetadata();
+      loadPeerMetadata();
     }
-  }, [selectedRouterId, fetchWireGuardData, fetchPeerMetadata]);
+  }, [selectedRouterId, fetchWireGuardData, loadPeerMetadata]);
 
   const handleLogout = async () => { await supabase.auth.signOut(); router.push("/login"); };
 
@@ -201,30 +211,15 @@ export default function DashboardPage() {
       const res = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "createPeer", routerId: selectedRouterId, data: newPeer }) });
       const data = await res.json();
       if (data.peer) {
-        // Save custom metadata (creation date + creator) in Supabase
-        try {
-          await fetch("/api/peer-metadata", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "save",
-              routerId: selectedRouterId,
-              peerPublicKey: data.peer["public-key"] || data.peer[".id"],
-              peerName: newPeer.name,
-              peerInterface: newPeer.interface,
-              allowedAddress: newPeer["allowed-address"],
-            }),
-          });
-        } catch {
-          // Metadata save is best-effort
-        }
+        // Save custom metadata (creation date + creator) in localStorage
+        const peerKey = data.peer["public-key"] || data.peer[".id"] || newPeer.name;
+        savePeerMetadata(peerKey, profile?.email || "Unknown");
         toast.success("Peer created");
         setCreateDialogOpen(false);
         setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
         setSelectedPrefix("");
         setLastOctet("");
         fetchWireGuardData();
-        fetchPeerMetadata();
       }
       else toast.error(data.error || "Failed to create peer");
     } catch { toast.error("Failed to create peer"); }
@@ -335,7 +330,7 @@ PersistentKeepalive = 25`;
 
         <div>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-medium">WireGuard Peers ({filteredPeers.length}{searchQuery ? ` of ${peers.length}` : ""})</h2>
+            <h2 className="text-lg font-medium">WireGuard Peers ({filteredPeers.length}{filteredPeers.length !== peers.length ? ` of ${peers.length}` : ""})</h2>
             <div className="flex gap-2 flex-wrap">
               <Input
                 placeholder="Search peers..."
@@ -486,7 +481,7 @@ PersistentKeepalive = 25`;
             </div>
           </div>
 
-          {loading ? <div className="text-center py-12"><div className="animate-spin w-8 h-8 border-2 border-muted-foreground border-t-foreground rounded-full mx-auto" /></div> : filteredPeers.length === 0 ? <div className="text-center py-12 text-muted-foreground">{searchQuery ? "No peers match your search" : "No peers found"}</div> : (
+          {loading ? <div className="text-center py-12"><div className="animate-spin w-8 h-8 border-2 border-muted-foreground border-t-foreground rounded-full mx-auto" /></div> : filteredPeers.length === 0 ? <div className="text-center py-12 text-muted-foreground">{searchQuery || statusFilter !== "all" || interfaceFilter !== "all" ? "No peers match your filters" : "No peers found"}</div> : (
             <div className="bg-card rounded-lg border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -510,7 +505,7 @@ PersistentKeepalive = 25`;
                       <TableCell className="font-mono text-sm">{peer["allowed-address"]}</TableCell>
                       <TableCell className="text-sm">{peer.comment || "-"}</TableCell>
                       <TableCell className="text-sm"><span className="text-green-500">{formatBytes(peer.rx)}</span> / <span className="text-blue-500">{formatBytes(peer.tx)}</span></TableCell>
-                      <TableCell><Badge variant={peer.disabled ? "secondary" : "default"}>{peer.disabled ? "Disabled" : "Enabled"}</Badge></TableCell>
+                      <TableCell>{(() => { const dis = peer.disabled === true || String(peer.disabled) === "true"; return <Badge variant={dis ? "secondary" : "default"}>{dis ? "Disabled" : "Enabled"}</Badge>; })()}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {peerMetadata[peer["public-key"]]?.created_by_email || "-"}
                       </TableCell>
@@ -529,7 +524,7 @@ PersistentKeepalive = 25`;
                         <div className="flex justify-end gap-1">
                           <Button variant="ghost" size="sm" onClick={() => downloadConfig(peer)} title="Download .conf">DL</Button>
                           <Button variant="ghost" size="sm" onClick={() => { setSelectedPeer(peer); setViewConfigOpen(true); }} title="View config">CFG</Button>
-                          <Button variant="ghost" size="sm" onClick={() => handleTogglePeer(peer[".id"], peer.disabled)}>{peer.disabled ? "EN" : "DIS"}</Button>
+                          <Button variant="ghost" size="sm" onClick={() => { const dis = peer.disabled === true || String(peer.disabled) === "true"; handleTogglePeer(peer[".id"], dis); }}>{(peer.disabled === true || String(peer.disabled) === "true") ? "EN" : "DIS"}</Button>
                           <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeletePeer(peer[".id"])}>DEL</Button>
                         </div>
                       </TableCell>

@@ -186,6 +186,8 @@ class MikroTikClassicClient {
           transformed["persistent-keepalive"] = value;
         } else if (key === "lastHandshake") {
           transformed["last-handshake"] = value;
+        } else if (key === "disabled" || key === "running") {
+          transformed[key] = value === true || value === "true";
         } else {
           transformed[key] = value;
         }
