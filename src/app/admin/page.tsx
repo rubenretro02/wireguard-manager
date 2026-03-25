@@ -26,7 +26,7 @@ import {
   Shield,
   Network
 } from "lucide-react";
-import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter } from "@/lib/types";
+import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter, WireGuardInterface } from "@/lib/types";
 
 interface UserRouterWithRelations extends UserRouter {
   profiles: { id: string; email: string; username: string | null } | null;
@@ -49,6 +49,8 @@ export default function AdminPage() {
   const [testingId, setTestingId] = useState<string | null>(null);
   const [editingRouter, setEditingRouter] = useState<Router | null>(null);
   const [editRouterOpen, setEditRouterOpen] = useState(false);
+  const [wgInterfaces, setWgInterfaces] = useState<WireGuardInterface[]>([]);
+  const [loadingInterfaces, setLoadingInterfaces] = useState(false);
   const [newRouter, setNewRouter] = useState({
     name: "",
     host: "",
@@ -179,6 +181,7 @@ export default function AdminPage() {
         toast.success("Router updated successfully");
         setEditRouterOpen(false);
         setEditingRouter(null);
+        setWgInterfaces([]);
         fetchData();
       } else {
         toast.error(data.error || "Failed to update router");
@@ -186,6 +189,30 @@ export default function AdminPage() {
     } catch {
       toast.error("Failed to update router");
     }
+  };
+
+  const fetchWgInterfaces = async (routerId: string) => {
+    setLoadingInterfaces(true);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getInterfaces", routerId }),
+      });
+      const data = await res.json();
+      if (data.interfaces) {
+        setWgInterfaces(data.interfaces);
+      }
+    } catch {
+      console.error("Failed to fetch WireGuard interfaces");
+    }
+    setLoadingInterfaces(false);
+  };
+
+  const openEditRouter = (r: Router) => {
+    setEditingRouter(r);
+    setEditRouterOpen(true);
+    fetchWgInterfaces(r.id);
   };
 
   const handleDeleteRouter = async (id: string) => {
@@ -491,10 +518,7 @@ export default function AdminPage() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => {
-                                  setEditingRouter(r);
-                                  setEditRouterOpen(true);
-                                }}
+                                onClick={() => openEditRouter(r)}
                                 title="Configure"
                               >
                                 <Settings className="w-4 h-4" />
@@ -943,12 +967,27 @@ export default function AdminPage() {
                   </div>
                   <div className="space-y-2">
                     <Label>WireGuard Interface</Label>
-                    <Input
-                      placeholder="wg0"
-                      value={editingRouter.wg_interface || "wg0"}
-                      onChange={(e) => setEditingRouter({ ...editingRouter, wg_interface: e.target.value })}
-                      className="bg-secondary border-border font-mono"
-                    />
+                    <Select
+                      value={editingRouter.wg_interface || ""}
+                      onValueChange={(v) => setEditingRouter({ ...editingRouter, wg_interface: v })}
+                    >
+                      <SelectTrigger className="bg-secondary border-border font-mono">
+                        <SelectValue placeholder={loadingInterfaces ? "Loading..." : "Select interface"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {wgInterfaces.length === 0 ? (
+                          <SelectItem value="_none" disabled>
+                            {loadingInterfaces ? "Loading interfaces..." : "No interfaces found"}
+                          </SelectItem>
+                        ) : (
+                          wgInterfaces.map((iface) => (
+                            <SelectItem key={iface[".id"]} value={iface.name}>
+                              {iface.name}
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </div>

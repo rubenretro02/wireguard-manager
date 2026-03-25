@@ -47,7 +47,6 @@ export default function DashboardPage() {
   // Create peer dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [useSimplifiedMode, setUseSimplifiedMode] = useState(true);
   const [newPeer, setNewPeer] = useState({ interface: "", name: "", "allowed-address": "", comment: "" });
   const [selectedPublicIpId, setSelectedPublicIpId] = useState<string>("");
 
@@ -492,6 +491,7 @@ PersistentKeepalive = 25`;
               <TableHeader>
                 <TableRow className="hover:bg-transparent border-border">
                   <TableHead className="text-muted-foreground">Name</TableHead>
+                  <TableHead className="text-muted-foreground">Interface</TableHead>
                   <TableHead className="text-muted-foreground">Allowed Address</TableHead>
                   <TableHead className="text-muted-foreground">Public IP</TableHead>
                   <TableHead className="text-muted-foreground">Traffic</TableHead>
@@ -518,6 +518,11 @@ PersistentKeepalive = 25`;
                             <Pencil className="w-3 h-3" />
                           </button>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="font-mono text-xs">
+                          {peer.interface || "-"}
+                        </Badge>
                       </TableCell>
                       <TableCell className="font-mono text-sm text-muted-foreground">
                         {peer["allowed-address"]}
@@ -603,101 +608,61 @@ PersistentKeepalive = 25`;
               <Label>Interface</Label>
               <Select value={newPeer.interface} onValueChange={(v) => setNewPeer({ ...newPeer, interface: v })}>
                 <SelectTrigger className="bg-secondary border-border">
-                  <SelectValue />
+                  <SelectValue placeholder="Select interface" />
                 </SelectTrigger>
                 <SelectContent>
-                  {interfaces.map((i) => (
-                    <SelectItem key={i[".id"]} value={i.name}>{i.name}</SelectItem>
-                  ))}
+                  {interfaces.length === 0 ? (
+                    <SelectItem value="_none" disabled>No interfaces found</SelectItem>
+                  ) : (
+                    interfaces.map((i) => (
+                      <SelectItem key={i[".id"]} value={i.name}>{i.name}</SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
-            {useSimplifiedMode ? (
-              <>
-                <div className="space-y-2">
-                  <Label>Public IP</Label>
-                  <Select value={selectedPublicIpId} onValueChange={setSelectedPublicIpId}>
-                    <SelectTrigger className="bg-secondary border-border">
-                      <SelectValue placeholder="Select public IP" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {publicIps.map((ip) => (
-                        <SelectItem key={ip.id} value={ip.id}>
-                          {ip.public_ip} ({ip.internal_subnet}.0/24)
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>Name</Label>
-                  <Input
-                    placeholder="My Device"
-                    value={newPeer.name}
-                    onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
-                    className="bg-secondary border-border"
-                  />
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="space-y-2">
-                  <Label>Name</Label>
-                  <Input
-                    placeholder="My Device"
-                    value={newPeer.name}
-                    onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
-                    className="bg-secondary border-border"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Allowed Address</Label>
-                  <Input
-                    placeholder="10.10.200.5/32"
-                    value={newPeer["allowed-address"]}
-                    onChange={(e) => setNewPeer({ ...newPeer, "allowed-address": e.target.value })}
-                    className="bg-secondary border-border font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Comment (Public IP)</Label>
-                  <Input
-                    placeholder="76.245.59.200"
-                    value={newPeer.comment}
-                    onChange={(e) => setNewPeer({ ...newPeer, comment: e.target.value })}
-                    className="bg-secondary border-border font-mono"
-                  />
-                </div>
-              </>
-            )}
-            <div className="flex items-center gap-2 pt-2">
-              <Label>
-                <input
-                  type="checkbox"
-                  checked={useSimplifiedMode}
-                  onChange={() => setUseSimplifiedMode((v) => !v)}
-                  className="mr-2"
-                />
-                Simplified mode
-              </Label>
+            <div className="space-y-2">
+              <Label>Public IP</Label>
+              <Select value={selectedPublicIpId} onValueChange={setSelectedPublicIpId}>
+                <SelectTrigger className="bg-secondary border-border">
+                  <SelectValue placeholder="Select public IP" />
+                </SelectTrigger>
+                <SelectContent>
+                  {publicIps.length === 0 ? (
+                    <SelectItem value="_none" disabled>No public IPs configured</SelectItem>
+                  ) : (
+                    publicIps.map((ip) => (
+                      <SelectItem key={ip.id} value={ip.id}>
+                        {ip.public_ip} ({ip.internal_subnet}.0/24)
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+              {publicIps.length === 0 && (
+                <p className="text-xs text-amber-400">Configure public IPs in Admin Panel first</p>
+              )}
+            </div>
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                placeholder="My Device"
+                value={newPeer.name}
+                onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
+                className="bg-secondary border-border"
+              />
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
               Cancel
             </Button>
-            {useSimplifiedMode ? (
-              <Button
-                onClick={handleCreatePeerSimplified}
-                disabled={creating || !selectedPublicIpId || !newPeer.interface || !newPeer.name}
-              >
-                {creating ? "Creating..." : "Create"}
-              </Button>
-            ) : (
-              <Button onClick={handleCreatePeer} disabled={creating || !newPeer["allowed-address"]}>
-                {creating ? "Creating..." : "Create"}
-              </Button>
-            )}
+            <Button
+              onClick={handleCreatePeerSimplified}
+              disabled={creating || !selectedPublicIpId || !newPeer.interface || !newPeer.name}
+            >
+              {creating ? "Creating..." : "Create"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
