@@ -145,6 +145,115 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: `Failed to create peer: ${createErrMsg}` }, { status: 500 });
         }
       }
+      case "importPublicIps": {
+        // Read NAT rules from MikroTik to detect existing public IPs
+        console.log("[WireGuard API] Importing public IPs from MikroTik NAT rules...");
+
+        try {
+          // Get NAT rules (srcnat with masquerade or src-nat action)
+          const natRules = await client.executeCommand("/ip/firewall/nat/print");
+
+          // Get IP addresses from interfaces
+          const ipAddresses = await client.executeCommand("/ip/address/print");
+
+          // Get router config
+          const routerConfig = {
+            public_ip_prefix: router.public_ip_prefix,
+            internal_prefix: router.internal_prefix,
+            out_interface: router.out_interface,
+          };
+
+          // Parse NAT rules to find public IP mappings
+          const detectedIps: Array<{
+            ip_number: number;
+            public_ip: string;
+            internal_subnet: string;
+            nat_rule_id: string;
+            has_nat_rule: boolean;
+            has_ip_address: boolean;
+          }> = [];
+
+          if (Array.isArray(natRules)) {
+            for (const rule of natRules) {
+              // Look for srcnat rules that map internal subnets to public IPs
+              const action = String(rule.action || "");
+              const toAddr = String(rule["to-addresses"] || rule["toAddresses"] || "");
+              const srcAddr = String(rule["src-address"] || rule["srcAddress"] || "");
+              const ruleId = String(rule[".id"] || rule["id"] || "");
+
+              if (action === "src-nat" && toAddr) {
+                // Extract the last octet from the public IP
+                const publicIpParts = toAddr.split(".");
+                if (publicIpParts.length === 4) {
+                  const ipNumber = parseInt(publicIpParts[3], 10);
+
+                  // Check if there's a matching internal subnet
+                  let internalSubnet = "";
+                  if (srcAddr) {
+                    const srcParts = srcAddr.split("/")[0].split(".");
+                    if (srcParts.length >= 3) {
+                      internalSubnet = `${srcParts[0]}.${srcParts[1]}.${srcParts[2]}`;
+                    }
+                  }
+
+                  // Check if this IP already exists in our detected list
+                  const exists = detectedIps.find(ip => ip.public_ip === toAddr);
+                  if (!exists && !isNaN(ipNumber)) {
+                    detectedIps.push({
+                      ip_number: ipNumber,
+                      public_ip: toAddr,
+                      internal_subnet: internalSubnet,
+                      nat_rule_id: ruleId,
+                      has_nat_rule: true,
+                      has_ip_address: false,
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          // Also check IP addresses for additional public IPs
+          if (Array.isArray(ipAddresses)) {
+            for (const addr of ipAddresses) {
+              const addressRaw = String(addr.address || "");
+              const address = addressRaw.split("/")[0];
+              if (address && router.public_ip_prefix && address.startsWith(router.public_ip_prefix)) {
+                const parts = address.split(".");
+                if (parts.length === 4) {
+                  const ipNumber = parseInt(parts[3], 10);
+                  const existing = detectedIps.find(ip => ip.public_ip === address);
+                  if (existing) {
+                    existing.has_ip_address = true;
+                  } else if (!isNaN(ipNumber)) {
+                    detectedIps.push({
+                      ip_number: ipNumber,
+                      public_ip: address,
+                      internal_subnet: router.internal_prefix ? `${router.internal_prefix}.${ipNumber}` : "",
+                      nat_rule_id: "",
+                      has_nat_rule: false,
+                      has_ip_address: true,
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          console.log(`[WireGuard API] Detected ${detectedIps.length} public IPs from MikroTik`);
+
+          return NextResponse.json({
+            detectedIps,
+            routerConfig,
+            natRulesCount: Array.isArray(natRules) ? natRules.length : 0,
+            ipAddressesCount: Array.isArray(ipAddresses) ? ipAddresses.length : 0,
+          });
+        } catch (importErr) {
+          const importErrMsg = importErr instanceof Error ? importErr.message : "Unknown error";
+          console.error("[WireGuard API] Failed to import public IPs:", importErrMsg);
+          return NextResponse.json({ error: `Failed to import: ${importErrMsg}` }, { status: 500 });
+        }
+      }
       case "updatePeer": {
         console.log("[WireGuard API] Updating peer:", data.id);
         try {

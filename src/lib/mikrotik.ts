@@ -93,6 +93,12 @@ class MikroTikRestClient {
       return false;
     }
   }
+
+  async executeCommand(path: string): Promise<Record<string, unknown>[]> {
+    // Convert /ip/firewall/nat/print to /ip/firewall/nat
+    const apiPath = path.replace(/\/print$/, "");
+    return this.request<Record<string, unknown>[]>("GET", apiPath);
+  }
 }
 
 // Classic API Client (port 8728/8729) - with connection reuse
@@ -275,6 +281,14 @@ class MikroTikClassicClient {
       throw error;
     }
   }
+
+  async executeCommand(path: string): Promise<Record<string, unknown>[]> {
+    const api = await this.ensureConnected();
+    // Convert /ip/firewall/nat/print to /ip/firewall/nat
+    const menuPath = path.replace(/\/print$/, "");
+    const result = await api.menu(menuPath).getAll();
+    return result as Record<string, unknown>[];
+  }
 }
 
 // Connection cache for reusing clients
@@ -413,6 +427,12 @@ export class MikroTikClient {
     if (this.restClient) return this.restClient.testConnection();
     if (this.classicClient) return this.classicClient.testConnection();
     return false;
+  }
+
+  async executeCommand(path: string): Promise<Record<string, unknown>[]> {
+    if (this.restClient) return this.restClient.executeCommand(path);
+    if (this.classicClient) return this.classicClient.executeCommand(path);
+    throw new Error("No client configured");
   }
 }
 

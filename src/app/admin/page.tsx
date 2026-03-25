@@ -77,6 +77,14 @@ export default function AdminPage() {
   const [addIpOpen, setAddIpOpen] = useState(false);
   const [newIpNumber, setNewIpNumber] = useState("");
   const [addingIp, setAddingIp] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [detectedIps, setDetectedIps] = useState<Array<{
+    ip_number: number;
+    public_ip: string;
+    internal_subnet: string;
+    has_nat_rule: boolean;
+    has_ip_address: boolean;
+  }>>([]);
 
   // User Router Access states
   const [addAccessOpen, setAddAccessOpen] = useState(false);
@@ -323,6 +331,62 @@ export default function AdminPage() {
     }
   };
 
+  const handleImportFromMikroTik = async () => {
+    if (!selectedRouterForIps) return;
+    setImporting(true);
+    setDetectedIps([]);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "importPublicIps", routerId: selectedRouterForIps }),
+      });
+      const data = await res.json();
+      if (data.detectedIps) {
+        setDetectedIps(data.detectedIps);
+        if (data.detectedIps.length === 0) {
+          toast.info("No public IPs detected in MikroTik NAT rules");
+        } else {
+          toast.success(`Detected ${data.detectedIps.length} public IPs from MikroTik`);
+        }
+      } else {
+        toast.error(data.error || "Failed to import");
+      }
+    } catch {
+      toast.error("Failed to import from MikroTik");
+    }
+    setImporting(false);
+  };
+
+  const handleImportDetectedIp = async (ip: { ip_number: number; public_ip: string; internal_subnet: string }) => {
+    try {
+      const res = await fetch("/api/public-ips", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          router_id: selectedRouterForIps,
+          ip_number: ip.ip_number,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Imported ${ip.public_ip}`);
+        setDetectedIps(prev => prev.filter(d => d.ip_number !== ip.ip_number));
+        fetchPublicIps(selectedRouterForIps);
+      } else {
+        toast.error(data.error || "Failed to import IP");
+      }
+    } catch {
+      toast.error("Failed to import IP");
+    }
+  };
+
+  const handleImportAllDetectedIps = async () => {
+    for (const ip of detectedIps) {
+      await handleImportDetectedIp(ip);
+    }
+  };
+
   const handleTogglePublicIp = async (ip: PublicIP) => {
     const res = await fetch("/api/public-ips", {
       method: "PATCH",
@@ -559,7 +623,7 @@ export default function AdminPage() {
                   <CardDescription>Manage public IPs for each router</CardDescription>
                 </div>
                 <div className="flex items-center gap-3">
-                  <Select value={selectedRouterForIps} onValueChange={setSelectedRouterForIps}>
+                  <Select value={selectedRouterForIps} onValueChange={(v) => { setSelectedRouterForIps(v); setDetectedIps([]); }}>
                     <SelectTrigger className="w-[200px] bg-secondary border-border">
                       <Server className="w-4 h-4 mr-2" />
                       <SelectValue placeholder="Select router" />
@@ -570,6 +634,14 @@ export default function AdminPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={handleImportFromMikroTik}
+                    disabled={!selectedRouterForIps || importing}
+                  >
+                    {importing ? "Scanning..." : "Import from MikroTik"}
+                  </Button>
                   <Dialog open={addIpOpen} onOpenChange={setAddIpOpen}>
                     <DialogTrigger asChild>
                       <Button className="gap-2" disabled={!selectedRouter?.public_ip_prefix}>
@@ -616,6 +688,36 @@ export default function AdminPage() {
                 </div>
               </CardHeader>
               <CardContent>
+                {/* Detected IPs from MikroTik */}
+                {detectedIps.length > 0 && (
+                  <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-sm font-medium text-amber-400">
+                        Detected from MikroTik ({detectedIps.length} IPs)
+                      </h4>
+                      <Button size="sm" variant="outline" onClick={handleImportAllDetectedIps}>
+                        Import All
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                      {detectedIps.map((ip) => (
+                        <div key={ip.ip_number} className="flex items-center justify-between p-2 bg-secondary rounded text-sm">
+                          <div>
+                            <span className="font-mono text-emerald-400">{ip.public_ip}</span>
+                            <div className="text-xs text-muted-foreground">
+                              {ip.has_nat_rule && <span className="text-cyan-400">NAT </span>}
+                              {ip.has_ip_address && <span className="text-blue-400">IP</span>}
+                            </div>
+                          </div>
+                          <Button size="sm" variant="ghost" onClick={() => handleImportDetectedIp(ip)}>
+                            <Plus className="w-3 h-3" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {!selectedRouter?.public_ip_prefix ? (
                   <div className="text-center py-8">
                     <Network className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
@@ -623,12 +725,15 @@ export default function AdminPage() {
                     <p className="text-sm text-muted-foreground">
                       Go to Routers tab and click the settings icon to configure IP prefixes.
                     </p>
+                    <Button variant="outline" className="mt-4" onClick={handleImportFromMikroTik} disabled={!selectedRouterForIps || importing}>
+                      {importing ? "Scanning..." : "Auto-detect from MikroTik"}
+                    </Button>
                   </div>
                 ) : publicIps.length === 0 ? (
                   <div className="text-center py-8">
                     <Globe className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
                     <p className="text-muted-foreground">No public IPs configured for this router.</p>
-                    <p className="text-sm text-muted-foreground mt-1">Click "Add IP" to add your first public IP.</p>
+                    <p className="text-sm text-muted-foreground mt-1">Click "Import from MikroTik" or "Add IP" to add public IPs.</p>
                   </div>
                 ) : (
                   <Table>
