@@ -955,14 +955,12 @@ PersistentKeepalive = 25`;
                     size="icon"
                     onClick={handleGenerateKeys}
                     title="Generate new keys">
-                  >
                     <RefreshCw className="w-4 h-4" />
                   </Button>
                 )}
               </div>
             </div>
             {/* Edit Section - Terminal Style */}
-            <div className="space-y-2">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-muted-foreground text-xs">
@@ -973,8 +971,7 @@ PersistentKeepalive = 25`;
                     variant="outline"
                     size="sm"
                     onClick={startDialogEdit}
-                    className="gap-2 h-7 text-xs"
-                  >
+                    className="gap-2 h-7 text-xs">
                     <Pencil className="w-3 h-3" />
                     Edit
                   </Button>
