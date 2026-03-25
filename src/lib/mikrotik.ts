@@ -284,6 +284,41 @@ function getClientCacheKey(config: MikroTikConfig): string {
   return `${config.host}:${config.apiPort}:${config.username}`;
 }
 
+// Function to clear all cached connections
+export async function clearClientCache(): Promise<void> {
+  console.log("[MikroTik] Clearing all client cache...");
+  const disconnectPromises: Promise<void>[] = [];
+  for (const [key, client] of clientCache.entries()) {
+    console.log(`[MikroTik] Disconnecting ${key}`);
+    disconnectPromises.push(
+      client.disconnect().catch(() => {
+        // Ignore disconnect errors
+      })
+    );
+  }
+  await Promise.all(disconnectPromises);
+  clientCache.clear();
+  console.log("[MikroTik] All client cache cleared");
+}
+
+// Function to clear a specific cached connection
+export async function clearClientCacheForRouter(host: string, apiPort: number, username: string): Promise<void> {
+  const cacheKey = `${host}:${apiPort}:${username}`;
+  const client = clientCache.get(cacheKey);
+  if (client) {
+    console.log(`[MikroTik] Disconnecting and clearing cache for ${cacheKey}`);
+    try {
+      await client.disconnect();
+    } catch (err) {
+      console.log(`[MikroTik] Disconnect error (ignored): ${err}`);
+    }
+    clientCache.delete(cacheKey);
+    console.log(`[MikroTik] Cache cleared for ${cacheKey}`);
+  } else {
+    console.log(`[MikroTik] No cached client found for ${cacheKey}`);
+  }
+}
+
 // Unified client that supports both connection types
 export class MikroTikClient {
   private restClient: MikroTikRestClient | null = null;

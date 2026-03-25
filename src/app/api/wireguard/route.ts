@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { MikroTikClient, DEMO_INTERFACES, DEMO_PEERS } from "@/lib/mikrotik";
+import { MikroTikClient, clearClientCacheForRouter } from "@/lib/mikrotik";
 import type { ConnectionType } from "@/lib/types";
 
 export async function POST(request: Request) {
@@ -9,16 +9,25 @@ export async function POST(request: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const { action, routerId, data } = body;
+  const { action, routerId, data, forceRefresh } = body;
 
-  console.log(`[WireGuard API] Action: ${action}, RouterId: ${routerId}`);
+  console.log(`[WireGuard API] Action: ${action}, RouterId: ${routerId}, ForceRefresh: ${forceRefresh || false}`);
 
-  if (routerId === "demo") return handleDemoMode(action, data);
+  // No demo mode - require real router
+  if (!routerId || routerId === "demo") {
+    return NextResponse.json({ error: "Please select a router" }, { status: 400 });
+  }
 
   const { data: router, error: routerError } = await supabase.from("routers").select("*").eq("id", routerId).single();
   if (routerError || !router) {
     console.error("[WireGuard API] Router not found:", routerError);
     return NextResponse.json({ error: "Router not found" }, { status: 404 });
+  }
+
+  // Clear cache if force refresh is requested
+  if (forceRefresh) {
+    console.log(`[WireGuard API] Force refresh requested, clearing cache for router ${router.host}`);
+    await clearClientCacheForRouter(router.host, router.api_port || 8728, router.username);
   }
 
   const connectionType: ConnectionType = router.connection_type || "api";
@@ -44,6 +53,10 @@ export async function POST(request: Request) {
       case "getPeers": {
         const peers = await client.getWireGuardPeers();
         console.log(`[WireGuard API] Got ${peers.length} peers`);
+        if (peers.length > 0) {
+          const addresses = peers.slice(0, 5).map(p => p["allowed-address"]);
+          console.log(`[WireGuard API] Sample addresses: ${addresses.join(", ")}`);
+        }
         return NextResponse.json({ peers });
       }
       case "createPeer": {
@@ -56,6 +69,18 @@ export async function POST(request: Request) {
           const createErrMsg = createErr instanceof Error ? createErr.message : "Unknown error";
           console.error("[WireGuard API] Failed to create peer:", createErrMsg);
           return NextResponse.json({ error: `Failed to create peer: ${createErrMsg}` }, { status: 500 });
+        }
+      }
+      case "updatePeer": {
+        console.log("[WireGuard API] Updating peer:", data.id);
+        try {
+          await client.updateWireGuardPeer(data.id, { name: data.name });
+          console.log("[WireGuard API] Peer updated successfully");
+          return NextResponse.json({ success: true });
+        } catch (updateErr) {
+          const updateErrMsg = updateErr instanceof Error ? updateErr.message : "Unknown error";
+          console.error("[WireGuard API] Failed to update peer:", updateErrMsg);
+          return NextResponse.json({ error: `Failed to update peer: ${updateErrMsg}` }, { status: 500 });
         }
       }
       case "deletePeer": {
@@ -89,24 +114,5 @@ export async function POST(request: Request) {
     const errorMessage = err instanceof Error ? err.message : "Operation failed";
     console.error(`[WireGuard API] Error (${connectionType}):`, errorMessage);
     return NextResponse.json({ error: errorMessage }, { status: 500 });
-  }
-}
-
-function handleDemoMode(action: string, data: Record<string, unknown>) {
-  switch (action) {
-    case "getInterfaces":
-      return NextResponse.json({ interfaces: DEMO_INTERFACES });
-    case "getPeers":
-      return NextResponse.json({ peers: DEMO_PEERS });
-    case "createPeer":
-      return NextResponse.json({ peer: { ".id": `*${Date.now()}`, ...data, disabled: false, rx: 0, tx: 0 } });
-    case "deletePeer":
-    case "enablePeer":
-    case "disablePeer":
-      return NextResponse.json({ success: true });
-    case "testConnection":
-      return NextResponse.json({ connected: true });
-    default:
-      return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
 }

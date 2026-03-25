@@ -1,45 +1,55 @@
-# WireGuard Manager - Proyecto con Supabase
+# WireGuard Manager - Rediseño Completo
 
-## Completado
-- [x] Crear proyecto nuevo con Next.js + shadcn/ui
-- [x] Configurar Supabase (tablas profiles y routers)
-- [x] Implementar autenticación con Supabase Auth
-- [x] Crear página de login/registro
-- [x] Crear dashboard para gestionar peers WireGuard
-- [x] Crear panel de admin para routers y usuarios
-- [x] API routes para routers y WireGuard
-- [x] Modo demo para pruebas sin router real
-- [x] Row Level Security (RLS) configurado
-- [x] Agregar soporte para API clásica (puerto 8728)
-- [x] Agregar columna connection_type a tabla routers
-- [x] UI para seleccionar tipo de conexión al agregar router
-- [x] Generación automática de claves WireGuard
-- [x] Barra de búsqueda para filtrar peers
-- [x] Sugerencias de IP disponibles al crear peers
-- [x] Eliminar registro público (solo admin crea usuarios)
+## Completado ✅
 
-## En Progreso
-- [x] Aumentar timeout de conexión a 60 segundos (era 15)
-- [x] Agregar logs detallados para debugging de creación de peers
+### UI/UX
+- [x] Nuevo diseño dark mode moderno (estilo Vercel/Linear)
+- [x] Sidebar con navegación
+- [x] Stats cards (Total peers, Active, Disabled, Subnets)
+- [x] Tabla moderna con iconos
+- [x] Botón de lápiz para editar nombre del peer
+- [x] Botón para invertir orden (más recientes arriba)
+- [x] Force Refresh button
+- [x] Eliminado modo demo
 
-## Características
-- **Usuarios persistentes** en Supabase (ya no se pierden al reiniciar)
-- **Routers persistentes** en base de datos PostgreSQL
-- **Roles de usuario**: admin y user
-- **Autenticación segura** con Supabase Auth
-- **REST API** para MikroTik RouterOS v7+ (puerto 443 con SSL)
-- **API clásica** para MikroTik (puerto 8728 sin SSL) - RECOMENDADO
-- **Timeout de 60 segundos** para operaciones en el router
+### Backend
+- [x] Función clearClientCacheForRouter para limpiar caché
+- [x] API updatePeer para editar nombre
+- [x] Mejor logging para debugging
 
-## Tipos de Conexión
-| Tipo | Puerto | SSL | Descripción |
-|------|--------|-----|-------------|
-| API | 8728 | No | Protocolo nativo de MikroTik. Funciona sin certificado. **Recomendado** |
-| REST | 443 | Sí | REST API sobre HTTPS. Requiere certificado SSL en el router. |
+## Pendiente 📋
 
-## Pendiente
-- [ ] Agregar soporte para API-SSL (puerto 8729)
-- [ ] Agregar logs de actividad
+### Prioridad Alta
+- [ ] Agregar campos de configuración IP al router (Admin Panel):
+  - public_ip_prefix (ej: 76.245.59)
+  - public_ip_mask (ej: /25)
+  - internal_prefix (ej: 10.10)
+  - out_interface (ej: ether2)
+  - wg_interface (ej: wg0)
 
-## Credenciales de prueba
-Para probar, el admin debe crear usuarios desde el panel de admin.
+- [ ] Crear tabla `public_ips` en Supabase
+- [ ] Crear tabla `user_routers` para control de acceso
+
+- [ ] Auto-import desde MikroTik (solo lectura):
+  - Detectar NAT rules existentes
+  - Detectar IPs públicas
+  - Mapear configuración
+
+### Prioridad Media
+- [ ] Simplificar creación de peer:
+  - Dropdown de IPs públicas (solo las configuradas por admin)
+  - Auto-asignar IP interna disponible
+
+- [ ] Admin Panel:
+  - Agregar/gestionar IPs públicas
+  - Control de acceso por usuario/router
+
+### Prioridad Baja
+- [ ] Crear reglas automáticamente al agregar IP pública:
+  - IP en ether2
+  - NAT rule
+  - IP en WireGuard interface
+
+## Notas
+- El error de Supabase es esperado (faltan variables de entorno en este workspace)
+- Para ver el nuevo diseño, hay que deployar con las credenciales correctas

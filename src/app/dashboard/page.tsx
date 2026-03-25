@@ -7,142 +7,129 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
-import type { Profile, Router, WireGuardInterface, WireGuardPeer } from "@/lib/types";
+import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
+import { StatCard } from "@/components/StatCard";
+import {
+  Users,
+  Globe,
+  Server,
+  Activity,
+  Plus,
+  RefreshCw,
+  Search,
+  Download,
+  Settings,
+  Trash2,
+  Power,
+  PowerOff,
+  Pencil,
+  ArrowUpDown,
+  Eye
+} from "lucide-react";
+import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer } from "@/lib/types";
 
 export default function DashboardPage() {
   const router = useRouter();
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [routers, setRouters] = useState<Router[]>([]);
-  const [selectedRouterId, setSelectedRouterId] = useState<string>("demo");
+  const [routers, setRouters] = useState<RouterType[]>([]);
+  const [selectedRouterId, setSelectedRouterId] = useState<string>("");
   const [interfaces, setInterfaces] = useState<WireGuardInterface[]>([]);
   const [peers, setPeers] = useState<WireGuardPeer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Create peer dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [newPeer, setNewPeer] = useState({ interface: "", name: "", "allowed-address": "", comment: "" });
+
+  // View config dialog
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState<WireGuardPeer | null>(null);
+
+  // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [interfaceFilter, setInterfaceFilter] = useState<string>("all");
-  const [peerMetadata, setPeerMetadata] = useState<Record<string, { created_at: string; created_by_email: string }>>({});
-  const [selectedPrefix, setSelectedPrefix] = useState<string>("");
-  const [lastOctet, setLastOctet] = useState<string>("");
-  const [showOctetSuggestions, setShowOctetSuggestions] = useState(false);
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  // Extract all subnet prefixes from peers
-  const { subnetPrefixes, usedIPsByPrefix } = useMemo(() => {
-    const prefixSet = new Set<string>();
-    const usedByPrefix: Record<string, number[]> = {};
+  // Edit peer
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingPeer, setEditingPeer] = useState<WireGuardPeer | null>(null);
+  const [editName, setEditName] = useState("");
+  const [updating, setUpdating] = useState(false);
 
-    for (const peer of peers) {
-      const addr = peer["allowed-address"]?.split(",")[0]?.split("/")[0] || "";
-      if (addr) {
+  // Stats
+  const stats = useMemo(() => {
+    const total = peers.length;
+    const active = peers.filter(p => {
+      const isDisabled = p.disabled === true || String(p.disabled) === "true";
+      return !isDisabled;
+    }).length;
+    const disabled = total - active;
+    const uniqueSubnets = new Set(
+      peers.map(p => {
+        const addr = p["allowed-address"]?.split(",")[0]?.split("/")[0] || "";
         const parts = addr.split(".");
-        if (parts.length === 4) {
-          const prefix = `${parts[0]}.${parts[1]}.${parts[2]}`;
-          prefixSet.add(prefix);
-          if (!usedByPrefix[prefix]) usedByPrefix[prefix] = [];
-          const octet = parseInt(parts[3], 10);
-          if (!isNaN(octet)) usedByPrefix[prefix].push(octet);
-        }
-      }
-    }
+        return parts.length >= 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : "";
+      }).filter(Boolean)
+    ).size;
 
-    return {
-      subnetPrefixes: Array.from(prefixSet).sort(),
-      usedIPsByPrefix: usedByPrefix,
-    };
+    return { total, active, disabled, uniqueSubnets };
   }, [peers]);
 
-  // Get available octets for selected prefix
-  const availableOctets = useMemo(() => {
-    if (!selectedPrefix) return [];
-    const used = new Set(usedIPsByPrefix[selectedPrefix] || []);
-    const available: number[] = [];
-    for (let i = 2; i <= 254; i++) {
-      if (!used.has(i)) available.push(i);
-    }
-    return available;
-  }, [selectedPrefix, usedIPsByPrefix]);
-
-  const usedOctets = useMemo(() => {
-    if (!selectedPrefix) return [];
-    return (usedIPsByPrefix[selectedPrefix] || []).sort((a, b) => a - b);
-  }, [selectedPrefix, usedIPsByPrefix]);
-
-  // Update allowed-address when prefix or octet changes
-  useEffect(() => {
-    if (selectedPrefix && lastOctet) {
-      setNewPeer(p => ({ ...p, "allowed-address": `${selectedPrefix}.${lastOctet}/32` }));
-    } else {
-      setNewPeer(p => ({ ...p, "allowed-address": "" }));
-    }
-  }, [selectedPrefix, lastOctet]);
-
-  // Set default prefix when dialog opens
-  useEffect(() => {
-    if (createDialogOpen && subnetPrefixes.length > 0 && !selectedPrefix) {
-      setSelectedPrefix(subnetPrefixes[0]);
-    }
-  }, [createDialogOpen, subnetPrefixes, selectedPrefix]);
-
-  // Filter peers based on search query, status, and interface
+  // Filter and sort peers
   const filteredPeers = useMemo(() => {
-    return peers.filter((peer) => {
-      // Status filter (disabled can be boolean or string "true"/"false" from MikroTik)
+    const filtered = peers.filter((peer) => {
       const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
       if (statusFilter === "enabled" && isDisabled) return false;
       if (statusFilter === "disabled" && !isDisabled) return false;
 
-      // Interface filter
-      if (interfaceFilter !== "all") {
-        const peerIface = typeof peer.interface === "string" ? peer.interface : "";
-        if (peerIface !== interfaceFilter) return false;
-      }
-
-      // Text search
       if (!searchQuery.trim()) return true;
       const query = searchQuery.toLowerCase().trim();
       const name = String(peer.name || "");
       const comment = String(peer.comment || "");
       const allowedAddress = String(peer["allowed-address"] || "");
-      const iface = String(typeof peer.interface === "string" ? peer.interface : "");
       return (
         name.toLowerCase().includes(query) ||
         comment.toLowerCase().includes(query) ||
-        allowedAddress.toLowerCase().includes(query) ||
-        iface.toLowerCase().includes(query)
+        allowedAddress.toLowerCase().includes(query)
       );
     });
-  }, [peers, searchQuery, statusFilter, interfaceFilter]);
 
-  // Get unique interface names for the filter dropdown
-  const interfaceNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const peer of peers) {
-      if (typeof peer.interface === "string" && peer.interface) {
-        names.add(peer.interface);
-      }
-    }
-    return Array.from(names).sort();
-  }, [peers]);
+    // Sort by ID (assuming higher ID = newer)
+    const sorted = [...filtered].sort((a, b) => {
+      const idA = a[".id"] || "";
+      const idB = b[".id"] || "";
+      return sortOrder === "desc" ? idB.localeCompare(idA) : idA.localeCompare(idB);
+    });
+
+    return sorted;
+  }, [peers, searchQuery, statusFilter, sortOrder]);
 
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
-      const { data: profileData } = await supabase.from("profiles").select("*").eq("id", user.id).single();
+
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+
       if (profileData) setProfile(profileData as Profile);
-      const { data: routersData } = await supabase.from("routers").select("id, name, host, port, api_port, username, use_ssl, created_at");
+
+      const { data: routersData } = await supabase
+        .from("routers")
+        .select("id, name, host, port, api_port, username, use_ssl, created_at");
+
       if (routersData && routersData.length > 0) {
-        setRouters(routersData as Router[]);
+        setRouters(routersData as RouterType[]);
         setSelectedRouterId(routersData[0].id);
       }
       setLoading(false);
@@ -150,99 +137,142 @@ export default function DashboardPage() {
     checkAuth();
   }, [router, supabase]);
 
-  const fetchWireGuardData = useCallback(async () => {
+  const fetchWireGuardData = useCallback(async (forceRefresh = false) => {
     if (!selectedRouterId) return;
-    setLoading(true);
+    setRefreshing(true);
     try {
-      const intRes = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "getInterfaces", routerId: selectedRouterId }) });
-      const intData = await intRes.json();
+      const [intRes, peerRes] = await Promise.all([
+        fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "getInterfaces", routerId: selectedRouterId, forceRefresh })
+        }),
+        fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "getPeers", routerId: selectedRouterId, forceRefresh })
+        })
+      ]);
+
+      const [intData, peerData] = await Promise.all([intRes.json(), peerRes.json()]);
+
       if (intData.interfaces) {
         setInterfaces(intData.interfaces);
-        if (intData.interfaces.length > 0 && !newPeer.interface) setNewPeer((p) => ({ ...p, interface: intData.interfaces[0].name }));
+        if (intData.interfaces.length > 0 && !newPeer.interface) {
+          setNewPeer(p => ({ ...p, interface: intData.interfaces[0].name }));
+        }
       }
-      const peerRes = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "getPeers", routerId: selectedRouterId }) });
-      const peerData = await peerRes.json();
-      if (peerData.peers) setPeers(peerData.peers);
-    } catch { toast.error("Failed to fetch data"); }
-    setLoading(false);
+      if (peerData.peers) {
+        setPeers(peerData.peers);
+        if (forceRefresh) {
+          toast.success(`Loaded ${peerData.peers.length} peers`);
+        }
+      }
+    } catch {
+      toast.error("Failed to fetch data");
+    }
+    setRefreshing(false);
   }, [selectedRouterId, newPeer.interface]);
-
-  // Load peer metadata from localStorage
-  const loadPeerMetadata = useCallback(() => {
-    try {
-      const stored = localStorage.getItem("wg_peer_metadata");
-      if (stored) {
-        const all = JSON.parse(stored) as Record<string, Record<string, { created_at: string; created_by_email: string }>>;
-        setPeerMetadata(all[selectedRouterId] || {});
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }, [selectedRouterId]);
-
-  const savePeerMetadata = useCallback((peerKey: string, email: string) => {
-    try {
-      const stored = localStorage.getItem("wg_peer_metadata");
-      const all: Record<string, Record<string, { created_at: string; created_by_email: string }>> = stored ? JSON.parse(stored) : {};
-      if (!all[selectedRouterId]) all[selectedRouterId] = {};
-      all[selectedRouterId][peerKey] = {
-        created_at: new Date().toISOString(),
-        created_by_email: email,
-      };
-      localStorage.setItem("wg_peer_metadata", JSON.stringify(all));
-      setPeerMetadata(all[selectedRouterId]);
-    } catch {
-      // Ignore storage errors
-    }
-  }, [selectedRouterId]);
 
   useEffect(() => {
     if (selectedRouterId) {
       fetchWireGuardData();
-      loadPeerMetadata();
     }
-  }, [selectedRouterId, fetchWireGuardData, loadPeerMetadata]);
+  }, [selectedRouterId, fetchWireGuardData]);
 
-  const handleLogout = async () => { await supabase.auth.signOut(); router.push("/login"); };
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
 
   const handleCreatePeer = async () => {
     setCreating(true);
     try {
-      const res = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "createPeer", routerId: selectedRouterId, data: newPeer }) });
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "createPeer", routerId: selectedRouterId, data: newPeer })
+      });
       const data = await res.json();
       if (data.peer) {
-        // Save custom metadata (creation date + creator) in localStorage
-        const peerKey = data.peer["public-key"] || data.peer[".id"] || newPeer.name;
-        savePeerMetadata(peerKey, profile?.email || "Unknown");
-        toast.success("Peer created");
+        toast.success("Peer created successfully");
         setCreateDialogOpen(false);
         setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
-        setSelectedPrefix("");
-        setLastOctet("");
         fetchWireGuardData();
+      } else {
+        toast.error(data.error || "Failed to create peer");
       }
-      else toast.error(data.error || "Failed to create peer");
-    } catch { toast.error("Failed to create peer"); }
+    } catch {
+      toast.error("Failed to create peer");
+    }
     setCreating(false);
   };
 
   const handleDeletePeer = async (id: string) => {
     if (!confirm("Delete this peer?")) return;
-    const res = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "deletePeer", routerId: selectedRouterId, data: { id } }) });
+    const res = await fetch("/api/wireguard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "deletePeer", routerId: selectedRouterId, data: { id } })
+    });
     const data = await res.json();
-    if (data.success) { toast.success("Peer deleted"); fetchWireGuardData(); }
-    else toast.error(data.error || "Failed");
+    if (data.success) {
+      toast.success("Peer deleted");
+      fetchWireGuardData();
+    } else {
+      toast.error(data.error || "Failed to delete");
+    }
   };
 
   const handleTogglePeer = async (id: string, disabled: boolean) => {
     const action = disabled ? "enablePeer" : "disablePeer";
-    const res = await fetch("/api/wireguard", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action, routerId: selectedRouterId, data: { id } }) });
+    const res = await fetch("/api/wireguard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, routerId: selectedRouterId, data: { id } })
+    });
     const data = await res.json();
-    if (data.success) { toast.success(disabled ? "Peer enabled" : "Peer disabled"); fetchWireGuardData(); }
-    else toast.error(data.error || "Failed");
+    if (data.success) {
+      toast.success(disabled ? "Peer enabled" : "Peer disabled");
+      fetchWireGuardData();
+    } else {
+      toast.error(data.error || "Failed");
+    }
   };
 
-  const formatBytes = (bytes?: number) => { if (!bytes) return "0 B"; const sizes = ["B", "KB", "MB", "GB"]; const i = Math.floor(Math.log(bytes) / Math.log(1024)); return `${(bytes / 1024 ** i).toFixed(2)} ${sizes[i]}`; };
+  const handleEditPeer = async () => {
+    if (!editingPeer) return;
+    setUpdating(true);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updatePeer",
+          routerId: selectedRouterId,
+          data: { id: editingPeer[".id"], name: editName }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Peer updated");
+        setEditDialogOpen(false);
+        fetchWireGuardData();
+      } else {
+        toast.error(data.error || "Failed to update");
+      }
+    } catch {
+      toast.error("Failed to update peer");
+    }
+    setUpdating(false);
+  };
+
+  const formatBytes = (bytes?: number) => {
+    if (!bytes) return "0 B";
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${(bytes / 1024 ** i).toFixed(2)} ${sizes[i]}`;
+  };
 
   const generateConfig = (peer: WireGuardPeer) => {
     const iface = interfaces.find((i) => i.name === peer.interface);
@@ -278,275 +308,358 @@ PersistentKeepalive = 25`;
     URL.revokeObjectURL(url);
   };
 
-  if (loading && !profile) return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin w-8 h-8 border-2 border-muted-foreground border-t-foreground rounded-full" /></div>;
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-card">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <div className="w-10 h-10 bg-muted rounded-full flex items-center justify-center">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" /></svg>
-            </div>
-            <h1 className="text-xl font-semibold">WireGuard Manager</h1>
-            <Select value={selectedRouterId} onValueChange={setSelectedRouterId}>
-              <SelectTrigger className="w-[180px]"><SelectValue placeholder="Select router" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="demo">Demo Mode</SelectItem>
-                {routers.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-            {selectedRouterId === "demo" && <Badge variant="secondary">Demo</Badge>}
-          </div>
-          <div className="flex items-center gap-4">
-            <span className="text-muted-foreground text-sm">{profile?.email} <Badge variant={profile?.role === "admin" ? "destructive" : "secondary"}>{profile?.role}</Badge></span>
-            {profile?.role === "admin" && <Button variant="ghost" onClick={() => router.push("/admin")}>Admin</Button>}
-            <Button variant="ghost" onClick={handleLogout}>Logout</Button>
-          </div>
-        </div>
-      </header>
-
-      <main className="container mx-auto px-4 py-8">
-        <div className="mb-8">
-          <h2 className="text-lg font-medium mb-4">WireGuard Interfaces</h2>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {interfaces.map((iface) => (
-              <div key={iface[".id"]} className="bg-card rounded-lg p-4 border">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-medium">{iface.name}</span>
-                  <Badge variant={iface.running ? "default" : "secondary"}>{iface.running ? "Running" : "Stopped"}</Badge>
-                </div>
-                <div className="text-sm text-muted-foreground space-y-1">
-                  <p>Port: {iface["listen-port"]}</p>
-                  <p className="truncate">Key: {iface["public-key"]?.substring(0, 20)}...</p>
-                </div>
-              </div>
+    <DashboardLayout
+      userRole={profile?.role}
+      userEmail={profile?.email}
+      onLogout={handleLogout}
+    >
+      <PageHeader title="Dashboard" description="Manage your WireGuard peers">
+        <Select value={selectedRouterId} onValueChange={setSelectedRouterId}>
+          <SelectTrigger className="w-[200px] bg-secondary border-border">
+            <Server className="w-4 h-4 mr-2 text-muted-foreground" />
+            <SelectValue placeholder="Select router" />
+          </SelectTrigger>
+          <SelectContent>
+            {routers.map((r) => (
+              <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
             ))}
-            {interfaces.length === 0 && <div className="col-span-full text-center py-8 text-muted-foreground">No interfaces found</div>}
-          </div>
+          </SelectContent>
+        </Select>
+      </PageHeader>
+
+      <PageContent>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <StatCard
+            title="Total Peers"
+            value={stats.total}
+            icon={Users}
+          />
+          <StatCard
+            title="Active"
+            value={stats.active}
+            subtitle={`${stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(1) : 0}% of total`}
+            icon={Activity}
+          />
+          <StatCard
+            title="Disabled"
+            value={stats.disabled}
+            icon={PowerOff}
+          />
+          <StatCard
+            title="Subnets"
+            value={stats.uniqueSubnets}
+            icon={Globe}
+          />
         </div>
 
-        <Separator className="my-8" />
-
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-medium">WireGuard Peers ({filteredPeers.length}{filteredPeers.length !== peers.length ? ` of ${peers.length}` : ""})</h2>
-            <div className="flex gap-2 flex-wrap">
-              <Input
-                placeholder="Search peers..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-48"
-              />
+        {/* Peers Table Card */}
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          {/* Table Header */}
+          <div className="px-6 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <h2 className="text-lg font-semibold">
+                Peers
+                <span className="ml-2 text-sm font-normal text-muted-foreground">
+                  ({filteredPeers.length})
+                </span>
+              </h2>
+            </div>
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search peers..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9 w-[200px] bg-secondary border-border"
+                />
+              </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[130px]"><SelectValue placeholder="Status" /></SelectTrigger>
+                <SelectTrigger className="w-[130px] bg-secondary border-border">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Status</SelectItem>
                   <SelectItem value="enabled">Enabled</SelectItem>
                   <SelectItem value="disabled">Disabled</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={interfaceFilter} onValueChange={setInterfaceFilter}>
-                <SelectTrigger className="w-[160px]"><SelectValue placeholder="Interface" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Interfaces</SelectItem>
-                  {interfaceNames.map((name) => (
-                    <SelectItem key={name} value={name}>{name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button variant="ghost" onClick={fetchWireGuardData}>Refresh</Button>
-              <Dialog open={createDialogOpen} onOpenChange={(open) => {
-                setCreateDialogOpen(open);
-                if (!open) {
-                  setSelectedPrefix("");
-                  setLastOctet("");
-                }
-              }}>
-                <DialogTrigger asChild><Button>Add Peer</Button></DialogTrigger>
-                <DialogContent>
-                  <DialogHeader><DialogTitle>Create Peer</DialogTitle><DialogDescription>Add a new WireGuard peer</DialogDescription></DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="space-y-2">
-                      <Label>Interface</Label>
-                      <Select value={newPeer.interface} onValueChange={(v) => setNewPeer({ ...newPeer, interface: v })}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
-                        <SelectContent>{interfaces.map((i) => <SelectItem key={i[".id"]} value={i.name}>{i.name}</SelectItem>)}</SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Name</Label>
-                      <Input placeholder="Ruben PC" value={newPeer.name} onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })} />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Allowed Address</Label>
-                      {subnetPrefixes.length === 0 ? (
-                        <Input
-                          placeholder="10.10.200.5/32"
-                          value={newPeer["allowed-address"]}
-                          onChange={(e) => setNewPeer({ ...newPeer, "allowed-address": e.target.value })}
-                        />
-                      ) : (
-                        <div className="flex gap-2">
-                          <Select value={selectedPrefix} onValueChange={setSelectedPrefix}>
-                            <SelectTrigger className="w-[160px] font-mono">
-                              <SelectValue placeholder="Select subnet" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {subnetPrefixes.map((prefix) => (
-                                <SelectItem key={prefix} value={prefix} className="font-mono">
-                                  {prefix}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <span className="flex items-center text-lg font-mono">.</span>
-                          <div className="relative flex-1">
-                            <Input
-                              type="number"
-                              min="2"
-                              max="254"
-                              placeholder="X"
-                              value={lastOctet}
-                              onChange={(e) => setLastOctet(e.target.value)}
-                              onFocus={() => setShowOctetSuggestions(true)}
-                              onBlur={() => setTimeout(() => setShowOctetSuggestions(false), 200)}
-                              className="font-mono"
-                            />
-                            {showOctetSuggestions && selectedPrefix && (
-                              <div className="absolute z-10 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                                <div className="p-2 border-b bg-muted/50">
-                                  <p className="text-xs font-medium">{selectedPrefix}.X</p>
-                                  <p className="text-xs text-muted-foreground">
-                                    {usedOctets.length} used, {availableOctets.length} available
-                                  </p>
-                                </div>
-                                <div className="p-1">
-                                  <p className="text-xs text-muted-foreground px-2 py-1">Available:</p>
-                                  <div className="flex flex-wrap gap-1 p-2 max-h-20 overflow-y-auto">
-                                    {availableOctets.slice(0, 30).map((octet) => (
-                                      <button
-                                        key={octet}
-                                        type="button"
-                                        className="px-2 py-1 text-xs bg-secondary hover:bg-secondary/80 rounded cursor-pointer font-mono"
-                                        onClick={() => {
-                                          setLastOctet(octet.toString());
-                                          setShowOctetSuggestions(false);
-                                        }}
-                                      >
-                                        {octet}
-                                      </button>
-                                    ))}
-                                    {availableOctets.length > 30 && (
-                                      <span className="text-xs text-muted-foreground px-2">+{availableOctets.length - 30} more</span>
-                                    )}
-                                  </div>
-                                  {usedOctets.length > 0 && (
-                                    <>
-                                      <p className="text-xs text-muted-foreground px-2 py-1 border-t mt-1">Used:</p>
-                                      <div className="flex flex-wrap gap-1 p-2">
-                                        {usedOctets.slice(0, 15).map((octet) => (
-                                          <span key={octet} className="px-2 py-1 text-xs bg-destructive/20 text-destructive rounded font-mono">
-                                            {octet}
-                                          </span>
-                                        ))}
-                                        {usedOctets.length > 15 && (
-                                          <span className="text-xs text-muted-foreground px-2">+{usedOctets.length - 15} more</span>
-                                        )}
-                                      </div>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                          <span className="flex items-center text-sm text-muted-foreground font-mono">/32</span>
-                        </div>
-                      )}
-                      <p className="text-xs text-muted-foreground">
-                        {subnetPrefixes.length === 0
-                          ? "Enter full IP address (no existing subnets detected)"
-                          : "Select subnet and enter last octet"}
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Comment (Endpoint IP)</Label>
-                      <Input placeholder="76.245.59.200" value={newPeer.comment} onChange={(e) => setNewPeer({ ...newPeer, comment: e.target.value })} />
-                      <p className="text-xs text-muted-foreground">IP address used for the Endpoint in config file</p>
-                    </div>
-                  </div>
-                  <DialogFooter><Button variant="ghost" onClick={() => setCreateDialogOpen(false)}>Cancel</Button><Button onClick={handleCreatePeer} disabled={creating || !newPeer["allowed-address"]}>{creating ? "Creating..." : "Create"}</Button></DialogFooter>
-                </DialogContent>
-              </Dialog>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => setSortOrder(sortOrder === "desc" ? "asc" : "desc")}
+                title={sortOrder === "desc" ? "Newest first" : "Oldest first"}
+              >
+                <ArrowUpDown className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => fetchWireGuardData(false)}
+                disabled={refreshing}
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => fetchWireGuardData(true)}
+                disabled={refreshing}
+              >
+                Force Refresh
+              </Button>
+              <Button onClick={() => setCreateDialogOpen(true)} className="gap-2">
+                <Plus className="w-4 h-4" />
+                Add Peer
+              </Button>
             </div>
           </div>
 
-          {loading ? <div className="text-center py-12"><div className="animate-spin w-8 h-8 border-2 border-muted-foreground border-t-foreground rounded-full mx-auto" /></div> : filteredPeers.length === 0 ? <div className="text-center py-12 text-muted-foreground">{searchQuery || statusFilter !== "all" || interfaceFilter !== "all" ? "No peers match your filters" : "No peers found"}</div> : (
-            <div className="bg-card rounded-lg border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Interface</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Allowed Address</TableHead>
-                    <TableHead>Comment</TableHead>
-                    <TableHead>Traffic</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Created By</TableHead>
-                    <TableHead>Created At</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredPeers.map((peer) => (
-                    <TableRow key={peer[".id"]}>
-                      <TableCell className="font-medium">{peer.interface}</TableCell>
-                      <TableCell>{peer.name || peer.comment || "-"}</TableCell>
-                      <TableCell className="font-mono text-sm">{peer["allowed-address"]}</TableCell>
-                      <TableCell className="text-sm">{peer.comment || "-"}</TableCell>
-                      <TableCell className="text-sm"><span className="text-green-500">{formatBytes(peer.rx)}</span> / <span className="text-blue-500">{formatBytes(peer.tx)}</span></TableCell>
-                      <TableCell>{(() => { const dis = peer.disabled === true || String(peer.disabled) === "true"; return <Badge variant={dis ? "secondary" : "default"}>{dis ? "Disabled" : "Enabled"}</Badge>; })()}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {peerMetadata[peer["public-key"]]?.created_by_email || "-"}
+          {/* Table */}
+          {filteredPeers.length === 0 ? (
+            <div className="py-16 text-center text-muted-foreground">
+              {searchQuery || statusFilter !== "all"
+                ? "No peers match your filters"
+                : "No peers found. Add your first peer above."}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent border-border">
+                  <TableHead className="text-muted-foreground">Name</TableHead>
+                  <TableHead className="text-muted-foreground">Allowed Address</TableHead>
+                  <TableHead className="text-muted-foreground">Public IP</TableHead>
+                  <TableHead className="text-muted-foreground">Traffic</TableHead>
+                  <TableHead className="text-muted-foreground">Status</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredPeers.map((peer) => {
+                  const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
+                  return (
+                    <TableRow key={peer[".id"]} className="table-row-hover border-border">
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{peer.name || "-"}</span>
+                          <button
+                            onClick={() => {
+                              setEditingPeer(peer);
+                              setEditName(peer.name || "");
+                              setEditDialogOpen(true);
+                            }}
+                            className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                        </div>
                       </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {peerMetadata[peer["public-key"]]?.created_at
-                          ? new Date(peerMetadata[peer["public-key"]].created_at).toLocaleDateString("en-US", {
-                              year: "numeric",
-                              month: "short",
-                              day: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          : "-"}
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {peer["allowed-address"]}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {peer.comment || "-"}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        <span className="text-emerald-400">{formatBytes(peer.rx)}</span>
+                        <span className="text-muted-foreground"> / </span>
+                        <span className="text-blue-400">{formatBytes(peer.tx)}</span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className={isDisabled ? "badge-danger" : "badge-success"}
+                        >
+                          {isDisabled ? "Disabled" : "Enabled"}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => downloadConfig(peer)} title="Download .conf">DL</Button>
-                          <Button variant="ghost" size="sm" onClick={() => { setSelectedPeer(peer); setViewConfigOpen(true); }} title="View config">CFG</Button>
-                          <Button variant="ghost" size="sm" onClick={() => { const dis = peer.disabled === true || String(peer.disabled) === "true"; handleTogglePeer(peer[".id"], dis); }}>{(peer.disabled === true || String(peer.disabled) === "true") ? "EN" : "DIS"}</Button>
-                          <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeletePeer(peer[".id"])}>DEL</Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => downloadConfig(peer)}
+                            title="Download config"
+                          >
+                            <Download className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setSelectedPeer(peer);
+                              setViewConfigOpen(true);
+                            }}
+                            title="View config"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleTogglePeer(peer[".id"], isDisabled)}
+                            title={isDisabled ? "Enable" : "Disable"}
+                          >
+                            {isDisabled ? (
+                              <Power className="w-4 h-4 text-emerald-400" />
+                            ) : (
+                              <PowerOff className="w-4 h-4 text-amber-400" />
+                            )}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeletePeer(peer[".id"])}
+                            className="text-destructive hover:text-destructive"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  );
+                })}
+              </TableBody>
+            </Table>
           )}
         </div>
-      </main>
+      </PageContent>
 
-      <Dialog open={viewConfigOpen} onOpenChange={setViewConfigOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>Peer Configuration</DialogTitle><DialogDescription>{selectedPeer?.name || selectedPeer?.comment}</DialogDescription></DialogHeader>
+      {/* Create Peer Dialog */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Create Peer</DialogTitle>
+            <DialogDescription>Add a new WireGuard peer</DialogDescription>
+          </DialogHeader>
           <div className="space-y-4 py-4">
-            <div className="space-y-2"><Label>Public Key</Label><Input readOnly value={selectedPeer?.["public-key"] || ""} /></div>
-            <div className="space-y-2"><Label>Client Configuration</Label><pre className="bg-muted p-4 rounded-md text-sm overflow-x-auto whitespace-pre-wrap">{selectedPeer && generateConfig(selectedPeer)}</pre></div>
+            <div className="space-y-2">
+              <Label>Interface</Label>
+              <Select value={newPeer.interface} onValueChange={(v) => setNewPeer({ ...newPeer, interface: v })}>
+                <SelectTrigger className="bg-secondary border-border">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {interfaces.map((i) => (
+                    <SelectItem key={i[".id"]} value={i.name}>{i.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                placeholder="My Device"
+                value={newPeer.name}
+                onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
+                className="bg-secondary border-border"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Allowed Address</Label>
+              <Input
+                placeholder="10.10.200.5/32"
+                value={newPeer["allowed-address"]}
+                onChange={(e) => setNewPeer({ ...newPeer, "allowed-address": e.target.value })}
+                className="bg-secondary border-border font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Comment (Public IP)</Label>
+              <Input
+                placeholder="76.245.59.200"
+                value={newPeer.comment}
+                onChange={(e) => setNewPeer({ ...newPeer, comment: e.target.value })}
+                className="bg-secondary border-border font-mono"
+              />
+            </div>
           </div>
-          <DialogFooter><Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>Download .conf</Button><Button variant="ghost" onClick={() => setViewConfigOpen(false)}>Close</Button></DialogFooter>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreatePeer} disabled={creating || !newPeer["allowed-address"]}>
+              {creating ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+
+      {/* Edit Peer Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Edit Peer</DialogTitle>
+            <DialogDescription>Update peer name</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="bg-secondary border-border"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleEditPeer} disabled={updating}>
+              {updating ? "Saving..." : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* View Config Dialog */}
+      <Dialog open={viewConfigOpen} onOpenChange={setViewConfigOpen}>
+        <DialogContent className="bg-card border-border max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Peer Configuration</DialogTitle>
+            <DialogDescription>{selectedPeer?.name || selectedPeer?.comment}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Public Key</Label>
+              <Input
+                readOnly
+                value={selectedPeer?.["public-key"] || ""}
+                className="bg-secondary border-border font-mono text-sm"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Client Configuration</Label>
+              <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
+                {selectedPeer && generateConfig(selectedPeer)}
+              </pre>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
+              Close
+            </Button>
+            <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
+              <Download className="w-4 h-4 mr-2" />
+              Download .conf
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </DashboardLayout>
   );
 }
