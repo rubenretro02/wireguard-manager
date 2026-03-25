@@ -57,11 +57,9 @@ export default function DashboardPage() {
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState<WireGuardPeer | null>(null);
 
-  // Edit mode in view dialog
+  // Edit mode in view dialog - terminal style
   const [dialogEditMode, setDialogEditMode] = useState(false);
-  const [dialogEditName, setDialogEditName] = useState("");
-  const [dialogEditAllowedAddress, setDialogEditAllowedAddress] = useState("");
-  const [dialogEditComment, setDialogEditComment] = useState("");
+  const [dialogEditConfig, setDialogEditConfig] = useState("");
   const [dialogUpdating, setDialogUpdating] = useState(false);
 
   // Filters
@@ -143,12 +141,26 @@ export default function DashboardPage() {
 
       if (routersData && routersData.length > 0) {
         setRouters(routersData as RouterType[]);
-        setSelectedRouterId(routersData[0].id);
+        // Try to load last used router from localStorage
+        const lastRouterId = localStorage.getItem("wg-last-router");
+        const routerExists = routersData.some((r) => r.id === lastRouterId);
+        if (lastRouterId && routerExists) {
+          setSelectedRouterId(lastRouterId);
+        } else {
+          setSelectedRouterId(routersData[0].id);
+        }
       }
       setLoading(false);
     };
     checkAuth();
   }, [router, supabase]);
+
+  // Save selected router to localStorage
+  useEffect(() => {
+    if (selectedRouterId) {
+      localStorage.setItem("wg-last-router", selectedRouterId);
+    }
+  }, [selectedRouterId]);
 
   const fetchWireGuardData = useCallback(async (forceRefresh = false) => {
     if (!selectedRouterId) return;
@@ -329,26 +341,46 @@ export default function DashboardPage() {
     setUpdating(false);
   };
 
-  // Start edit mode in dialog
+  // Generate editable config string
+  const generateEditableConfig = (peer: WireGuardPeer) => {
+    return `Name: ${peer.name || ""}
+Address: ${peer["allowed-address"]?.split(",")[0]?.split("/")[0] || ""}
+PublicIP: ${peer.comment || ""}`;
+  };
+
+  // Start edit mode in dialog - terminal style
   const startDialogEdit = () => {
     if (!selectedPeer) return;
     setDialogEditMode(true);
-    setDialogEditName(selectedPeer.name || "");
-    setDialogEditAllowedAddress(selectedPeer["allowed-address"] || "");
-    setDialogEditComment(selectedPeer.comment || "");
+    setDialogEditConfig(generateEditableConfig(selectedPeer));
   };
 
   // Cancel edit mode in dialog
   const cancelDialogEdit = () => {
     setDialogEditMode(false);
-    setDialogEditName("");
-    setDialogEditAllowedAddress("");
-    setDialogEditComment("");
+    setDialogEditConfig("");
   };
 
-  // Save edit from dialog
+  // Parse config and save
   const saveDialogEdit = async () => {
     if (!selectedPeer) return;
+
+    // Parse the edited config
+    const lines = dialogEditConfig.split("\n");
+    let name = "";
+    let address = "";
+    let publicIp = "";
+
+    for (const line of lines) {
+      const [key, ...valueParts] = line.split(":");
+      const value = valueParts.join(":").trim();
+      const keyLower = key.toLowerCase().trim();
+
+      if (keyLower === "name") name = value;
+      else if (keyLower === "address") address = value.includes("/") ? value : `${value}/32`;
+      else if (keyLower === "publicip") publicIp = value;
+    }
+
     setDialogUpdating(true);
     try {
       const res = await fetch("/api/wireguard", {
@@ -359,9 +391,9 @@ export default function DashboardPage() {
           routerId: selectedRouterId,
           data: {
             id: selectedPeer[".id"],
-            name: dialogEditName,
-            "allowed-address": dialogEditAllowedAddress,
-            comment: dialogEditComment,
+            name: name,
+            "allowed-address": address,
+            comment: publicIp,
           }
         })
       });
@@ -371,9 +403,9 @@ export default function DashboardPage() {
         // Update selected peer with new values
         setSelectedPeer({
           ...selectedPeer,
-          name: dialogEditName,
-          "allowed-address": dialogEditAllowedAddress,
-          comment: dialogEditComment,
+          name: name,
+          "allowed-address": address,
+          comment: publicIp,
         });
         cancelDialogEdit();
         fetchWireGuardData();
@@ -836,75 +868,28 @@ PersistentKeepalive = 25`;
       }}>
         <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center justify-between">
-              <span>Peer Configuration</span>
-              {!dialogEditMode && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={startDialogEdit}
-                  title="Edit"
-                  className="h-8 w-8"
-                >
-                  <Pencil className="w-4 h-4" />
-                </Button>
-              )}
-            </DialogTitle>
+            <DialogTitle>Peer Configuration</DialogTitle>
             <DialogDescription>
-              {dialogEditMode ? (
-                <span className="text-amber-400">Editing mode - modify fields below</span>
-              ) : (
-                selectedPeer?.name || selectedPeer?.comment
-              )}
+              {selectedPeer?.name || selectedPeer?.comment}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-2 gap-4">
-              {/* Name Field - Editable */}
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Name</Label>
-                {dialogEditMode ? (
-                  <Input
-                    value={dialogEditName}
-                    onChange={(e) => setDialogEditName(e.target.value)}
-                    className="bg-secondary border-border font-mono text-sm h-8"
-                    placeholder="Peer name"
-                  />
-                ) : (
-                  <p className="font-mono text-sm">{selectedPeer?.name || "-"}</p>
-                )}
+                <p className="font-mono text-sm">{selectedPeer?.name || "-"}</p>
               </div>
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Interface</Label>
                 <p className="font-mono text-sm">{selectedPeer?.interface || "-"}</p>
               </div>
-              {/* Allowed Address - Editable */}
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Allowed Address</Label>
-                {dialogEditMode ? (
-                  <Input
-                    value={dialogEditAllowedAddress}
-                    onChange={(e) => setDialogEditAllowedAddress(e.target.value)}
-                    className="bg-secondary border-border font-mono text-sm h-8 text-cyan-400"
-                    placeholder="10.10.x.x/32"
-                  />
-                ) : (
-                  <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
-                )}
+                <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
               </div>
-              {/* Public IP (Comment) - Editable */}
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Public IP</Label>
-                {dialogEditMode ? (
-                  <Input
-                    value={dialogEditComment}
-                    onChange={(e) => setDialogEditComment(e.target.value)}
-                    className="bg-secondary border-border font-mono text-sm h-8 text-emerald-400"
-                    placeholder="76.245.59.xxx"
-                  />
-                ) : (
-                  <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
-                )}
+                <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
               </div>
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Status</Label>
@@ -929,35 +914,58 @@ PersistentKeepalive = 25`;
                 className="bg-secondary border-border font-mono text-xs"
               />
             </div>
+
+            {/* Edit Section - Terminal Style */}
             <div className="space-y-2">
-              <Label className="text-muted-foreground text-xs">Client Configuration</Label>
-              <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
-                {selectedPeer && generateConfig(selectedPeer)}
-              </pre>
+              <div className="flex items-center justify-between">
+                <Label className="text-muted-foreground text-xs">
+                  {dialogEditMode ? "Edit Tunnel" : "Client Configuration"}
+                </Label>
+                {!dialogEditMode && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={startDialogEdit}
+                    className="gap-2 h-7 text-xs"
+                  >
+                    <Pencil className="w-3 h-3" />
+                    Edit
+                  </Button>
+                )}
+              </div>
+
+              {dialogEditMode ? (
+                <div className="space-y-3">
+                  <textarea
+                    value={dialogEditConfig}
+                    onChange={(e) => setDialogEditConfig(e.target.value)}
+                    className="w-full h-24 bg-secondary p-3 rounded-lg text-sm font-mono border border-amber-500/50 focus:border-amber-500 focus:outline-none resize-none"
+                    placeholder={`Name: peer-name\nAddress: 10.10.x.x\nPublicIP: 76.245.59.xxx`}
+                  />
+                  <div className="flex gap-2 justify-end">
+                    <Button variant="outline" size="sm" onClick={cancelDialogEdit}>
+                      Cancel
+                    </Button>
+                    <Button size="sm" onClick={saveDialogEdit} disabled={dialogUpdating} className="gap-2">
+                      {dialogUpdating ? "Saving..." : "Save"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
+                  {selectedPeer && generateConfig(selectedPeer)}
+                </pre>
+              )}
             </div>
           </div>
           <DialogFooter>
-            {dialogEditMode ? (
-              <>
-                <Button variant="outline" onClick={cancelDialogEdit}>
-                  Cancel
-                </Button>
-                <Button onClick={saveDialogEdit} disabled={dialogUpdating} className="gap-2">
-                  <Check className="w-4 h-4" />
-                  {dialogUpdating ? "Saving..." : "Save Changes"}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
-                  Close
-                </Button>
-                <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
-                  <Download className="w-4 h-4 mr-2" />
-                  Download .conf
-                </Button>
-              </>
-            )}
+            <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
+              Close
+            </Button>
+            <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
+              <Download className="w-4 h-4 mr-2" />
+              Download .conf
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

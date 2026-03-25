@@ -115,7 +115,12 @@ export default function AdminPage() {
   const [loadingTraffic, setLoadingTraffic] = useState(false);
   const [creatingRulesFor, setCreatingRulesFor] = useState<number | null>(null);
   const [ipSearchQuery, setIpSearchQuery] = useState("");
-  const [peersByIp, setPeersByIp] = useState<Record<string, { count: number; names: string[] }>>({});
+  const [peersByIp, setPeersByIp] = useState<Record<string, { count: number; names: string[]; peers: Array<{ id: string; name: string; address: string }> }>>({});
+
+  // Peers detail modal
+  const [peersModalOpen, setPeersModalOpen] = useState(false);
+  const [selectedIpForPeers, setSelectedIpForPeers] = useState<PublicIP | null>(null);
+  const [selectedIpPeers, setSelectedIpPeers] = useState<Array<{ id: string; name: string; address: string }>>([]);
 
   // User Router Access states
   const [addAccessOpen, setAddAccessOpen] = useState(false);
@@ -191,17 +196,22 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.peers) {
-        const peerMap: Record<string, { count: number; names: string[] }> = {};
+        const peerMap: Record<string, { count: number; names: string[]; peers: Array<{ id: string; name: string; address: string }> }> = {};
         for (const peer of data.peers) {
           const addr = peer["allowed-address"]?.split("/")[0] || "";
           const parts = addr.split(".");
           if (parts.length >= 3) {
             const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
             if (!peerMap[subnet]) {
-              peerMap[subnet] = { count: 0, names: [] };
+              peerMap[subnet] = { count: 0, names: [], peers: [] };
             }
             peerMap[subnet].count++;
             const name = peer.name || peer.comment || `Peer ${peer[".id"]}`;
+            peerMap[subnet].peers.push({
+              id: peer[".id"],
+              name: name,
+              address: peer["allowed-address"] || ""
+            });
             if (peerMap[subnet].names.length < 3) {
               peerMap[subnet].names.push(name);
             }
@@ -1058,11 +1068,19 @@ export default function AdminPage() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              {peersInfo ? (
-                                <div className="text-xs">
+                              {peersInfo && peersInfo.count > 0 ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedIpForPeers(ip);
+                                    setSelectedIpPeers(peersInfo.peers);
+                                    setPeersModalOpen(true);
+                                  }}
+                                  className="text-xs text-left hover:bg-secondary/50 p-1 rounded transition-colors cursor-pointer"
+                                >
                                   <div className="flex items-center gap-1">
                                     <UserCheck className="w-3 h-3 text-emerald-400" />
-                                    <span className="text-emerald-400 font-medium">{peersInfo.count}</span>
+                                    <span className="text-emerald-400 font-medium underline underline-offset-2">{peersInfo.count}</span>
                                   </div>
                                   {peersInfo.names.length > 0 && (
                                     <div className="text-muted-foreground mt-0.5 max-w-[120px] truncate" title={peersInfo.names.join(", ")}>
@@ -1070,7 +1088,7 @@ export default function AdminPage() {
                                       {peersInfo.names.length > 2 && "..."}
                                     </div>
                                   )}
-                                </div>
+                                </button>
                               ) : (
                                 <span className="text-xs text-muted-foreground">0</span>
                               )}
@@ -1459,6 +1477,53 @@ export default function AdminPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditRouterOpen(false)}>Cancel</Button>
             <Button onClick={handleUpdateRouter}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Peers by IP Modal */}
+      <Dialog open={peersModalOpen} onOpenChange={setPeersModalOpen}>
+        <DialogContent className="bg-card border-border max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserCheck className="w-5 h-5 text-emerald-400" />
+              Peers using {selectedIpForPeers?.public_ip}
+            </DialogTitle>
+            <DialogDescription>
+              {selectedIpPeers.length} peer{selectedIpPeers.length !== 1 ? "s" : ""} on subnet {selectedIpForPeers?.internal_subnet}.0/24
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 max-h-[400px] overflow-y-auto">
+            {selectedIpPeers.length === 0 ? (
+              <p className="text-center text-muted-foreground py-8">No peers found</p>
+            ) : (
+              <div className="space-y-2">
+                {selectedIpPeers.map((peer) => (
+                  <div key={peer.id} className="flex items-center justify-between p-3 bg-secondary rounded-lg">
+                    <div>
+                      <div className="font-medium">{peer.name}</div>
+                      <div className="text-xs text-cyan-400 font-mono">{peer.address}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button variant="outline" onClick={() => setPeersModalOpen(false)}>
+              Close
+            </Button>
+            <Button
+              onClick={() => {
+                setPeersModalOpen(false);
+                // Redirect to dashboard with this IP pre-selected
+                router.push(`/dashboard?publicIp=${selectedIpForPeers?.id}`);
+              }}
+              className="gap-2"
+            >
+              <Plus className="w-4 h-4" />
+              Add Peer to this IP
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
