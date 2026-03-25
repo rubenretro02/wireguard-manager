@@ -3,7 +3,7 @@
 ## Completado Hoy ✅
 
 ### Nuevas Funcionalidades
-- [x] **IPs parcialmente configuradas**: Permitir importar IPs amarillas y crear reglas faltantes automáticamente (botón ⚡ en cada IP)
+- [x] **IPs parcialmente configuradas**: Permitir importar IPs amarillas y crear reglas faltantes automáticamente (botón ⚡ en cada IP) 
 - [x] **Search bar en Public IPs**: Filtrar IPs por número o dirección
 - [x] **Mapeo de peers por IP**: Mostrar cuántos peers usan cada IP y sus nombres (columna "Peers" con icono y conteo)
 - [x] **Edición inline en Peer Config Dialog**: Añadir botón de lápiz para editar campos inline (estilo terminal, sin popup)
