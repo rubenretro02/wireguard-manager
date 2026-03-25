@@ -1,5 +1,13 @@
 # WireGuard Manager - Estado Actual
 
+## Completado Hoy ✅
+
+### Nuevas Funcionalidades
+- [x] **IPs parcialmente configuradas**: Permitir importar IPs amarillas y crear reglas faltantes automáticamente (botón ⚡ en cada IP)
+- [x] **Search bar en Public IPs**: Filtrar IPs por número o dirección
+- [x] **Mapeo de peers por IP**: Mostrar cuántos peers usan cada IP y sus nombres (columna "Peers" con icono y conteo)
+- [x] **Edición inline en Peer Config Dialog**: Añadir botón de lápiz para editar campos inline (estilo terminal, sin popup)
+
 ## Completado ✅
 
 ### UI/UX
@@ -40,13 +48,6 @@
 1. Ir a Supabase Dashboard > SQL Editor
 2. Copiar contenido de `scripts/migration-v2.sql`
 3. Ejecutar
-
-### Configurar Repositorio Git
-Para subir a GitHub:
-```bash
-git remote add origin https://github.com/tu-usuario/wireguard-manager.git
-git push -u origin feature/nat-traffic-auto-rules
-```
 
 ## Funcionalidades Actuales
 

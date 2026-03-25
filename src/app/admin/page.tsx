@@ -29,7 +29,9 @@ import {
   CheckCircle,
   AlertCircle,
   Zap,
-  Activity
+  Activity,
+  Search,
+  UserCheck
 } from "lucide-react";
 import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter, WireGuardInterface } from "@/lib/types";
 
@@ -112,6 +114,8 @@ export default function AdminPage() {
   const [natTraffic, setNatTraffic] = useState<Record<number, NatTraffic>>({});
   const [loadingTraffic, setLoadingTraffic] = useState(false);
   const [creatingRulesFor, setCreatingRulesFor] = useState<number | null>(null);
+  const [ipSearchQuery, setIpSearchQuery] = useState("");
+  const [peersByIp, setPeersByIp] = useState<Record<string, { count: number; names: string[] }>>({});
 
   // User Router Access states
   const [addAccessOpen, setAddAccessOpen] = useState(false);
@@ -177,6 +181,39 @@ export default function AdminPage() {
     setLoadingTraffic(false);
   }, []);
 
+  const fetchPeersByIp = useCallback(async (routerId: string) => {
+    if (!routerId) return;
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getPeers", routerId }),
+      });
+      const data = await res.json();
+      if (data.peers) {
+        const peerMap: Record<string, { count: number; names: string[] }> = {};
+        for (const peer of data.peers) {
+          const addr = peer["allowed-address"]?.split("/")[0] || "";
+          const parts = addr.split(".");
+          if (parts.length >= 3) {
+            const subnet = `${parts[0]}.${parts[1]}.${parts[2]}`;
+            if (!peerMap[subnet]) {
+              peerMap[subnet] = { count: 0, names: [] };
+            }
+            peerMap[subnet].count++;
+            const name = peer.name || peer.comment || `Peer ${peer[".id"]}`;
+            if (peerMap[subnet].names.length < 3) {
+              peerMap[subnet].names.push(name);
+            }
+          }
+        }
+        setPeersByIp(peerMap);
+      }
+    } catch {
+      console.error("Failed to fetch peers");
+    }
+  }, []);
+
   useEffect(() => {
     const checkAuth = async () => {
       const { data: { user } } = await supabase.auth.getUser();
@@ -194,8 +231,20 @@ export default function AdminPage() {
     if (selectedRouterForIps) {
       fetchPublicIps(selectedRouterForIps);
       fetchNatTraffic(selectedRouterForIps);
+      fetchPeersByIp(selectedRouterForIps);
     }
-  }, [selectedRouterForIps, fetchPublicIps, fetchNatTraffic]);
+  }, [selectedRouterForIps, fetchPublicIps, fetchNatTraffic, fetchPeersByIp]);
+
+  // Filter public IPs based on search
+  const filteredPublicIps = publicIps.filter((ip) => {
+    if (!ipSearchQuery.trim()) return true;
+    const query = ipSearchQuery.toLowerCase().trim();
+    return (
+      String(ip.ip_number).includes(query) ||
+      ip.public_ip.toLowerCase().includes(query) ||
+      ip.internal_subnet.toLowerCase().includes(query)
+    );
+  });
 
   const handleAddRouter = async () => {
     setAdding(true);
@@ -742,8 +791,8 @@ export default function AdminPage() {
                   <CardTitle>Public IPs Configuration</CardTitle>
                   <CardDescription>Manage public IPs for each router. IPs must have WG internal IP + Public IP + NAT rule.</CardDescription>
                 </div>
-                <div className="flex items-center gap-3">
-                  <Select value={selectedRouterForIps} onValueChange={(v) => { setSelectedRouterForIps(v); setDetectedIps([]); setPartiallyConfiguredIps([]); }}>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <Select value={selectedRouterForIps} onValueChange={(v) => { setSelectedRouterForIps(v); setDetectedIps([]); setPartiallyConfiguredIps([]); setIpSearchQuery(""); }}>
                     <SelectTrigger className="w-[200px] bg-secondary border-border">
                       <Server className="w-4 h-4 mr-2" />
                       <SelectValue placeholder="Select router" />
@@ -865,42 +914,63 @@ export default function AdminPage() {
                 {/* Partially Configured IPs */}
                 {partiallyConfiguredIps.length > 0 && (
                   <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-                    <div className="flex items-center gap-2 mb-3">
-                      <AlertCircle className="w-5 h-5 text-amber-400" />
-                      <h4 className="text-sm font-medium text-amber-400">
-                        Partially Configured IPs ({partiallyConfiguredIps.length})
-                      </h4>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-5 h-5 text-amber-400" />
+                        <h4 className="text-sm font-medium text-amber-400">
+                          Partially Configured IPs ({partiallyConfiguredIps.length})
+                        </h4>
+                      </div>
                     </div>
                     <p className="text-xs text-muted-foreground mb-3">
                       These IPs are missing one or more conditions. Configure them in MikroTik first.
                     </p>
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
                       {partiallyConfiguredIps.map((ip) => (
-                        <div key={ip.ip_number} className="p-3 bg-secondary rounded-lg">
-                          <div className="font-mono text-amber-400 font-medium">{ip.public_ip || `*.${ip.ip_number}`}</div>
-                          <div className="text-xs text-muted-foreground">{ip.internal_subnet}.0/24</div>
-                          <div className="flex gap-1 mt-1">
-                            <Badge
-                              variant="outline"
-                              className={`text-[10px] py-0 ${ip.has_wg_ip ? "text-cyan-400 border-cyan-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
+                        <div key={ip.ip_number} className="p-3 bg-secondary rounded-lg flex items-center justify-between">
+                          <div>
+                            <div className="font-mono text-amber-400 font-medium">{ip.public_ip || `*.${ip.ip_number}`}</div>
+                            <div className="text-xs text-muted-foreground">{ip.internal_subnet}.0/24</div>
+                            <div className="flex gap-1 mt-1">
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] py-0 ${ip.has_wg_ip ? "text-cyan-400 border-cyan-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
+                              >
+                                {ip.has_wg_ip ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
+                                WG
+                              </Badge>
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] py-0 ${ip.has_ip_address ? "text-blue-400 border-blue-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
+                              >
+                                {ip.has_ip_address ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
+                                IP
+                              </Badge>
+                              <Badge
+                                variant="outline"
+                                className={`text-[10px] py-0 ${ip.has_nat_rule ? "text-amber-400 border-amber-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
+                              >
+                                {ip.has_nat_rule ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
+                                NAT
+                              </Badge>
+                            </div>
+                          </div>
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={async () => {
+                                // First save the IP to database
+                                await handleSaveDetectedIp(ip);
+                                // Then create missing rules
+                                await handleCreateMikroTikRules(ip.ip_number);
+                              }}
+                              disabled={creatingRulesFor === ip.ip_number}
+                              title="Import & Create Missing Rules"
+                              className="text-amber-400 hover:text-amber-300"
                             >
-                              {ip.has_wg_ip ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
-                              WG
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className={`text-[10px] py-0 ${ip.has_ip_address ? "text-blue-400 border-blue-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
-                            >
-                              {ip.has_ip_address ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
-                              IP
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className={`text-[10px] py-0 ${ip.has_nat_rule ? "text-amber-400 border-amber-400/30" : "text-muted-foreground border-muted-foreground/30"}`}
-                            >
-                              {ip.has_nat_rule ? <Check className="w-2 h-2 mr-0.5" /> : <X className="w-2 h-2 mr-0.5" />}
-                              NAT
-                            </Badge>
+                              <Zap className={`w-4 h-4 ${creatingRulesFor === ip.ip_number ? "animate-pulse" : ""}`} />
+                            </Button>
                           </div>
                         </div>
                       ))}
@@ -926,6 +996,22 @@ export default function AdminPage() {
                     <p className="text-sm text-muted-foreground mt-1">Click "Scan MikroTik" to detect and import IPs, or "Add IP" to add manually.</p>
                   </div>
                 ) : (
+                  <>
+                  {/* Search Bar */}
+                  <div className="mb-4 flex items-center gap-4">
+                    <div className="relative flex-1 max-w-sm">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input
+                        placeholder="Search IPs..."
+                        value={ipSearchQuery}
+                        onChange={(e) => setIpSearchQuery(e.target.value)}
+                        className="pl-9 bg-secondary border-border"
+                      />
+                    </div>
+                    <span className="text-sm text-muted-foreground">
+                      {filteredPublicIps.length} of {publicIps.length} IPs
+                    </span>
+                  </div>
                   <Table>
                     <TableHeader>
                       <TableRow className="border-border">
@@ -933,15 +1019,17 @@ export default function AdminPage() {
                         <TableHead>Public IP</TableHead>
                         <TableHead>Internal Subnet</TableHead>
                         <TableHead>Config</TableHead>
+                        <TableHead>Peers</TableHead>
                         <TableHead>NAT Traffic</TableHead>
                         <TableHead>Status</TableHead>
                         <TableHead className="text-right">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {publicIps.map((ip) => {
+                      {filteredPublicIps.map((ip) => {
                         const traffic = natTraffic[ip.ip_number];
                         const allRulesCreated = ip.wg_ip_created && ip.ip_address_created && ip.nat_rule_created;
+                        const peersInfo = peersByIp[ip.internal_subnet];
                         return (
                           <TableRow key={ip.id} className="border-border">
                             <TableCell className="font-mono text-muted-foreground">{ip.ip_number}</TableCell>
@@ -968,6 +1056,24 @@ export default function AdminPage() {
                                   NAT
                                 </Badge>
                               </div>
+                            </TableCell>
+                            <TableCell>
+                              {peersInfo ? (
+                                <div className="text-xs">
+                                  <div className="flex items-center gap-1">
+                                    <UserCheck className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-400 font-medium">{peersInfo.count}</span>
+                                  </div>
+                                  {peersInfo.names.length > 0 && (
+                                    <div className="text-muted-foreground mt-0.5 max-w-[120px] truncate" title={peersInfo.names.join(", ")}>
+                                      {peersInfo.names.slice(0, 2).join(", ")}
+                                      {peersInfo.names.length > 2 && "..."}
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">0</span>
+                              )}
                             </TableCell>
                             <TableCell>
                               {traffic ? (
@@ -1021,6 +1127,7 @@ export default function AdminPage() {
                       })}
                     </TableBody>
                   </Table>
+                  </>
                 )}
               </CardContent>
             </Card>

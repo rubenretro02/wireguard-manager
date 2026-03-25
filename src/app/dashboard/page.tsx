@@ -57,6 +57,13 @@ export default function DashboardPage() {
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
   const [selectedPeer, setSelectedPeer] = useState<WireGuardPeer | null>(null);
 
+  // Edit mode in view dialog
+  const [dialogEditMode, setDialogEditMode] = useState(false);
+  const [dialogEditName, setDialogEditName] = useState("");
+  const [dialogEditAllowedAddress, setDialogEditAllowedAddress] = useState("");
+  const [dialogEditComment, setDialogEditComment] = useState("");
+  const [dialogUpdating, setDialogUpdating] = useState(false);
+
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -320,6 +327,63 @@ export default function DashboardPage() {
       toast.error("Failed to update peer");
     }
     setUpdating(false);
+  };
+
+  // Start edit mode in dialog
+  const startDialogEdit = () => {
+    if (!selectedPeer) return;
+    setDialogEditMode(true);
+    setDialogEditName(selectedPeer.name || "");
+    setDialogEditAllowedAddress(selectedPeer["allowed-address"] || "");
+    setDialogEditComment(selectedPeer.comment || "");
+  };
+
+  // Cancel edit mode in dialog
+  const cancelDialogEdit = () => {
+    setDialogEditMode(false);
+    setDialogEditName("");
+    setDialogEditAllowedAddress("");
+    setDialogEditComment("");
+  };
+
+  // Save edit from dialog
+  const saveDialogEdit = async () => {
+    if (!selectedPeer) return;
+    setDialogUpdating(true);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "updatePeer",
+          routerId: selectedRouterId,
+          data: {
+            id: selectedPeer[".id"],
+            name: dialogEditName,
+            "allowed-address": dialogEditAllowedAddress,
+            comment: dialogEditComment,
+          }
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Peer updated");
+        // Update selected peer with new values
+        setSelectedPeer({
+          ...selectedPeer,
+          name: dialogEditName,
+          "allowed-address": dialogEditAllowedAddress,
+          comment: dialogEditComment,
+        });
+        cancelDialogEdit();
+        fetchWireGuardData();
+      } else {
+        toast.error(data.error || "Failed to update");
+      }
+    } catch {
+      toast.error("Failed to update peer");
+    }
+    setDialogUpdating(false);
   };
 
   const formatBytes = (bytes?: number | string) => {
@@ -766,27 +830,81 @@ PersistentKeepalive = 25`;
       </Dialog>
 
       {/* View Config Dialog */}
-      <Dialog open={viewConfigOpen} onOpenChange={setViewConfigOpen}>
+      <Dialog open={viewConfigOpen} onOpenChange={(open) => {
+        setViewConfigOpen(open);
+        if (!open) cancelDialogEdit();
+      }}>
         <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>Peer Configuration</span>
+              {!dialogEditMode && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={startDialogEdit}
+                  title="Edit"
+                  className="h-8 w-8"
+                >
+                  <Pencil className="w-4 h-4" />
+                </Button>
+              )}
             </DialogTitle>
-            <DialogDescription>{selectedPeer?.name || selectedPeer?.comment}</DialogDescription>
+            <DialogDescription>
+              {dialogEditMode ? (
+                <span className="text-amber-400">Editing mode - modify fields below</span>
+              ) : (
+                selectedPeer?.name || selectedPeer?.comment
+              )}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="grid grid-cols-2 gap-4">
+              {/* Name Field - Editable */}
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Name</Label>
+                {dialogEditMode ? (
+                  <Input
+                    value={dialogEditName}
+                    onChange={(e) => setDialogEditName(e.target.value)}
+                    className="bg-secondary border-border font-mono text-sm h-8"
+                    placeholder="Peer name"
+                  />
+                ) : (
+                  <p className="font-mono text-sm">{selectedPeer?.name || "-"}</p>
+                )}
+              </div>
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Interface</Label>
                 <p className="font-mono text-sm">{selectedPeer?.interface || "-"}</p>
               </div>
+              {/* Allowed Address - Editable */}
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Allowed Address</Label>
-                <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
+                {dialogEditMode ? (
+                  <Input
+                    value={dialogEditAllowedAddress}
+                    onChange={(e) => setDialogEditAllowedAddress(e.target.value)}
+                    className="bg-secondary border-border font-mono text-sm h-8 text-cyan-400"
+                    placeholder="10.10.x.x/32"
+                  />
+                ) : (
+                  <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
+                )}
               </div>
+              {/* Public IP (Comment) - Editable */}
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Public IP</Label>
-                <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
+                {dialogEditMode ? (
+                  <Input
+                    value={dialogEditComment}
+                    onChange={(e) => setDialogEditComment(e.target.value)}
+                    className="bg-secondary border-border font-mono text-sm h-8 text-emerald-400"
+                    placeholder="76.245.59.xxx"
+                  />
+                ) : (
+                  <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label className="text-muted-foreground text-xs">Status</Label>
@@ -819,13 +937,27 @@ PersistentKeepalive = 25`;
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
-              Close
-            </Button>
-            <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
-              <Download className="w-4 h-4 mr-2" />
-              Download .conf
-            </Button>
+            {dialogEditMode ? (
+              <>
+                <Button variant="outline" onClick={cancelDialogEdit}>
+                  Cancel
+                </Button>
+                <Button onClick={saveDialogEdit} disabled={dialogUpdating} className="gap-2">
+                  <Check className="w-4 h-4" />
+                  {dialogUpdating ? "Saving..." : "Save Changes"}
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
+                  Close
+                </Button>
+                <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
+                  <Download className="w-4 h-4 mr-2" />
+                  Download .conf
+                </Button>
+              </>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
