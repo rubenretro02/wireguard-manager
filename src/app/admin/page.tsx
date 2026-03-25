@@ -1397,6 +1397,54 @@ export default function AdminPage() {
 
               <div className="border-t border-border pt-4">
                 <h4 className="text-sm font-medium mb-4 flex items-center gap-2">
+                  <Server className="w-4 h-4" /> Connection Settings
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label>Connection Type</Label>
+                    <Select
+                      value={editingRouter.connection_type}
+                      onValueChange={(v: ConnectionType) => {
+                        const updates: Partial<Router> = { connection_type: v };
+                        if (v === "api") updates.api_port = 8728;
+                        else if (v === "api-ssl") updates.api_port = 8729;
+                        else if (v === "rest") updates.port = 443;
+                        else if (v === "rest-8443") updates.port = 8443;
+                        setEditingRouter({ ...editingRouter, ...updates });
+                      }}
+                    >
+                      <SelectTrigger className="bg-secondary border-border">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="api">API (Port 8728)</SelectItem>
+                        <SelectItem value="api-ssl">API-SSL (Port 8729)</SelectItem>
+                        <SelectItem value="rest">REST API (HTTPS 443)</SelectItem>
+                        <SelectItem value="rest-8443">REST API (HTTPS 8443)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{(editingRouter.connection_type === "api" || editingRouter.connection_type === "api-ssl") ? "API Port" : "HTTPS Port"}</Label>
+                    <Input
+                      type="number"
+                      value={(editingRouter.connection_type === "api" || editingRouter.connection_type === "api-ssl") ? editingRouter.api_port : editingRouter.port}
+                      onChange={(e) => {
+                        const port = parseInt(e.target.value) || 0;
+                        if (editingRouter.connection_type === "api" || editingRouter.connection_type === "api-ssl") {
+                          setEditingRouter({ ...editingRouter, api_port: port });
+                        } else {
+                          setEditingRouter({ ...editingRouter, port: port });
+                        }
+                      }}
+                      className="bg-secondary border-border font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-border pt-4">
+                <h4 className="text-sm font-medium mb-4 flex items-center gap-2">
                   <Network className="w-4 h-4" /> IP Configuration
                 </h4>
                 <div className="grid grid-cols-2 gap-4">
