@@ -341,11 +341,25 @@ export default function DashboardPage() {
     setUpdating(false);
   };
 
-  // Generate editable config string
+  // Generate editable config string - WireGuard style
   const generateEditableConfig = (peer: WireGuardPeer) => {
+    const iface = interfaces.find((i) => i.name === peer.interface);
+    const selectedRouter = routers.find((r) => r.id === selectedRouterId);
+    const endpointHost = peer.comment || selectedRouter?.host || "";
+    const listenPort = iface?.["listen-port"] || 13231;
+
     return `Name: ${peer.name || ""}
-Address: ${peer["allowed-address"]?.split(",")[0]?.split("/")[0] || ""}
-PublicIP: ${peer.comment || ""}`;
+
+[Interface]
+PrivateKey = ${peer["private-key"] || "[PRIVATE_KEY]"}
+Address = ${peer["allowed-address"]?.split(",")[0] || ""}
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
+AllowedIPs = 0.0.0.0/0
+Endpoint = ${endpointHost}:${listenPort}
+PersistentKeepalive = 25`;
   };
 
   // Start edit mode in dialog - terminal style
@@ -827,7 +841,7 @@ PersistentKeepalive = 25`;
                   ) : (
                     publicIps.map((ip) => (
                       <SelectItem key={ip.id} value={ip.id}>
-                        {ip.public_ip} ({ip.internal_subnet}.0/24)
+                        {ip.public_ip}
                       </SelectItem>
                     ))
                   )}
