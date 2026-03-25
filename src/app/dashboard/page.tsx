@@ -33,6 +33,7 @@ import {
   ArrowDownUp,
   ArrowUp
 } from "lucide-react";
+import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -61,6 +62,7 @@ export default function DashboardPage() {
   const [dialogEditMode, setDialogEditMode] = useState(false);
   const [dialogEditConfig, setDialogEditConfig] = useState("");
   const [dialogUpdating, setDialogUpdating] = useState(false);
+  const [dialogPublicKey, setDialogPublicKey] = useState("");
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -362,10 +364,25 @@ Endpoint = ${endpointHost}:${listenPort}
 PersistentKeepalive = 25`;
   };
 
+  // Generate new key pair
+  const handleGenerateKeys = () => {
+    const keys = generateKeyPair();
+    setDialogPublicKey(keys.publicKey);
+    if (dialogEditConfig) {
+      const newConfig = dialogEditConfig.replace(
+        /PrivateKey = .*/,
+        "PrivateKey = " + keys.privateKey
+      );
+      setDialogEditConfig(newConfig);
+    }
+    toast.success("New keys generated!");
+  };
+
   // Start edit mode in dialog - terminal style
   const startDialogEdit = () => {
     if (!selectedPeer) return;
     setDialogEditMode(true);
+    setDialogPublicKey(selectedPeer["public-key"] || "");
     setDialogEditConfig(generateEditableConfig(selectedPeer));
   };
 
@@ -373,7 +390,10 @@ PersistentKeepalive = 25`;
   const cancelDialogEdit = () => {
     setDialogEditMode(false);
     setDialogEditConfig("");
+    setDialogPublicKey("");
   };
+
+  // Parse config and save
 
   // Parse config and save
   const saveDialogEdit = async () => {
@@ -922,14 +942,27 @@ PersistentKeepalive = 25`;
             </div>
             <div className="space-y-2">
               <Label className="text-muted-foreground text-xs">Public Key</Label>
-              <Input
-                readOnly
-                value={selectedPeer?.["public-key"] || ""}
-                className="bg-secondary border-border font-mono text-xs"
-              />
+              <div className="flex gap-2">
+                <Input
+                  value={dialogEditMode ? dialogPublicKey : (selectedPeer?.["public-key"] || "")}
+                  onChange={(e) => setDialogPublicKey(e.target.value)}
+                  readOnly={!dialogEditMode}
+                  className="bg-secondary border-border font-mono text-xs flex-1"
+                />
+                {dialogEditMode && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={handleGenerateKeys}
+                    title="Generate new keys">
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
             </div>
-
             {/* Edit Section - Terminal Style */}
+            <div className="space-y-2">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-muted-foreground text-xs">
