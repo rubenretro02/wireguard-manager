@@ -1,20 +1,27 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
-export async function GET() {
+export async function GET(request: Request) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
-  const { data: routers, error } = await supabase
-    .from("routers")
-    .select("id, name, host, port, api_port, username, use_ssl, connection_type, created_at")
-    .order("created_at", { ascending: false });
+
+  const { searchParams } = new URL(request.url);
+  const routerId = searchParams.get("routerId");
+
+  let query = supabase.from("public_ips").select("*").order("ip_number", { ascending: true });
+
+  if (routerId) {
+    query = query.eq("router_id", routerId);
+  }
+
+  const { data: publicIps, error } = await query;
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ routers });
+  return NextResponse.json({ publicIps });
 }
 
 export async function POST(request: Request) {
@@ -27,30 +34,53 @@ export async function POST(request: Request) {
   if (profile?.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+
   const body = await request.json();
-  const { name, host, port, api_port, username, password, use_ssl, connection_type } = body;
-  if (!name || !host || !username || !password) {
+  const { router_id, ip_number } = body;
+
+  if (!router_id || ip_number === undefined) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
-  const { data: router, error } = await supabase
+
+  // Get router config to calculate IPs
+  const { data: router, error: routerError } = await supabase
     .from("routers")
-    .insert({
-      name,
-      host,
-      port: port || 443,
-      api_port: api_port || 8728,
-      username,
-      password,
-      use_ssl: use_ssl ?? false,
-      connection_type: connection_type || "api",
-      created_by: user.id,
-    })
-    .select("id, name, host, port, api_port, username, use_ssl, connection_type, created_at")
+    .select("public_ip_prefix, public_ip_mask, internal_prefix")
+    .eq("id", router_id)
     .single();
+
+  if (routerError || !router) {
+    return NextResponse.json({ error: "Router not found" }, { status: 404 });
+  }
+
+  if (!router.public_ip_prefix || !router.internal_prefix) {
+    return NextResponse.json({
+      error: "Router IP configuration not set. Please configure public_ip_prefix and internal_prefix first."
+    }, { status: 400 });
+  }
+
+  const publicIp = `${router.public_ip_prefix}.${ip_number}`;
+  const internalSubnet = `${router.internal_prefix}.${ip_number}`;
+
+  const { data: publicIpRecord, error } = await supabase
+    .from("public_ips")
+    .insert({
+      router_id,
+      ip_number,
+      public_ip: publicIp,
+      internal_subnet: internalSubnet,
+      enabled: true,
+    })
+    .select()
+    .single();
+
   if (error) {
+    if (error.code === "23505") {
+      return NextResponse.json({ error: "This IP number already exists for this router" }, { status: 400 });
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ router });
+  return NextResponse.json({ publicIp: publicIpRecord, success: true });
 }
 
 export async function PATCH(request: Request) {
@@ -63,33 +93,33 @@ export async function PATCH(request: Request) {
   if (profile?.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+
   const body = await request.json();
   const { id, ...updates } = body;
+
   if (!id) {
-    return NextResponse.json({ error: "Router ID required" }, { status: 400 });
+    return NextResponse.json({ error: "Public IP ID required" }, { status: 400 });
   }
-  // Only allow certain fields to be updated
-  const allowedFields = [
-    "name", "host", "port", "api_port", "username", "password",
-    "use_ssl", "connection_type", "public_ip_prefix", "public_ip_mask",
-    "public_ip_network", "internal_prefix", "out_interface", "wg_interface"
-  ];
+
+  const allowedFields = ["enabled", "nat_rule_created", "ip_address_created", "wg_ip_created"];
   const filteredUpdates: Record<string, unknown> = {};
   for (const key of allowedFields) {
     if (key in updates) {
       filteredUpdates[key] = updates[key];
     }
   }
-  const { data: router, error } = await supabase
-    .from("routers")
+
+  const { data: publicIp, error } = await supabase
+    .from("public_ips")
     .update(filteredUpdates)
     .eq("id", id)
     .select()
     .single();
+
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
-  return NextResponse.json({ router, success: true });
+  return NextResponse.json({ publicIp, success: true });
 }
 
 export async function DELETE(request: Request) {
@@ -102,12 +132,15 @@ export async function DELETE(request: Request) {
   if (profile?.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
+
   const { searchParams } = new URL(request.url);
   const id = searchParams.get("id");
+
   if (!id) {
-    return NextResponse.json({ error: "Router ID required" }, { status: 400 });
+    return NextResponse.json({ error: "Public IP ID required" }, { status: 400 });
   }
-  const { error } = await supabase.from("routers").delete().eq("id", id);
+
+  const { error } = await supabase.from("public_ips").delete().eq("id", id);
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
