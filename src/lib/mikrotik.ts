@@ -21,7 +21,7 @@ class MikroTikRestClient {
   private authHeader: string;
 
   constructor(config: { host: string; port: number; username: string; password: string; useSsl: boolean }) {
-    const protocol = config.useSsl ? "https" : "http";
+    const protocol = "https"; // Always use HTTPS for REST API
     this.baseUrl = `${protocol}://${config.host}:${config.port}/rest`;
     this.authHeader = `Basic ${Buffer.from(`${config.username}:${config.password}`).toString("base64")}`;
   }
@@ -31,24 +31,37 @@ class MikroTikRestClient {
     path: string,
     body?: Record<string, unknown>
   ): Promise<T> {
-    const url = `${this.baseUrl}${path}`;
-    const options: RequestInit = {
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: this.authHeader,
-      },
-    };
-    if (body && (method === "POST" || method === "PUT" || method === "PATCH")) {
-      options.body = JSON.stringify(body);
+    // Allow self-signed certificates for MikroTik
+    const originalTlsReject = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+    try {
+      const url = `${this.baseUrl}${path}`;
+      const options: RequestInit = {
+        method,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: this.authHeader,
+        },
+      };
+      if (body && (method === "POST" || method === "PUT" || method === "PATCH")) {
+        options.body = JSON.stringify(body);
+      }
+      const response = await fetch(url, options);
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`MikroTik REST API error: ${response.status} - ${errorText}`);
+      }
+      const text = await response.text();
+      return text ? JSON.parse(text) : ({} as T);
+    } finally {
+      // Restore original setting
+      if (originalTlsReject !== undefined) {
+        process.env.NODE_TLS_REJECT_UNAUTHORIZED = originalTlsReject;
+      } else {
+        delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+      }
     }
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`MikroTik REST API error: ${response.status} - ${errorText}`);
-    }
-    const text = await response.text();
-    return text ? JSON.parse(text) : ({} as T);
   }
 
   async getWireGuardInterfaces(): Promise<WireGuardInterface[]> {
