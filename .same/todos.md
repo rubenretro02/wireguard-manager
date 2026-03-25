@@ -64,4 +64,4 @@
 ## Notas
 - El error de Supabase es esperado si faltan variables de entorno
 - Para ver el nuevo diseño, hay que deployar con las credenciales correctas
-- Import es SOLO LECTURA del MikroTik
+- Import es SOLO LECTURA del MikroTik.
