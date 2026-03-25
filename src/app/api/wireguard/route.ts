@@ -277,16 +277,45 @@ export async function POST(request: Request) {
         const srcAddress = `${internalPrefix}.${ip_number}.0/24`;
         const toAddress = `${publicIpPrefix}.${ip_number}`;
         try {
+          // First, find if there's a masquerade rule to place before it
+          // Masquerade rules capture all traffic, so our specific rules must be before them
+          let placeBefore: string | undefined;
+          try {
+            const existingNatRules = await client.executeCommand("/ip/firewall/nat/print");
+            if (Array.isArray(existingNatRules)) {
+              // Find the first masquerade rule on srcnat chain
+              const masqueradeRule = existingNatRules.find((rule) => {
+                const ruleChain = String(rule.chain || "");
+                const ruleAction = String(rule.action || "");
+                return ruleChain === "srcnat" && ruleAction === "masquerade";
+              });
+              if (masqueradeRule) {
+                placeBefore = String(masqueradeRule[".id"] || masqueradeRule.id || "");
+                console.log(`[WireGuard API] Found masquerade rule ${placeBefore}, will place new rule before it`);
+              }
+            }
+          } catch (findErr) {
+            console.log(`[WireGuard API] Could not find masquerade rule, will add to end:`, findErr);
+          }
+
           console.log(`[WireGuard API] Creating NAT rule: ${srcAddress} -> ${toAddress}`);
-          await client.executeCommand("/ip/firewall/nat/add", {
+          const natParams: Record<string, unknown> = {
             chain: "srcnat",
             action: "src-nat",
             "src-address": srcAddress,
             "out-interface": outInterface,
             "to-addresses": toAddress,
-          });
+            comment: `IP ${ip_number}`,
+          };
+
+          // Add place-before if we found a masquerade rule
+          if (placeBefore) {
+            natParams["place-before"] = placeBefore;
+          }
+
+          await client.executeCommand("/ip/firewall/nat/add", natParams);
           results.nat_rule_created = true;
-          console.log(`[WireGuard API] NAT rule created successfully`);
+          console.log(`[WireGuard API] NAT rule created successfully with comment 'IP ${ip_number}'${placeBefore ? ` before rule ${placeBefore}` : ""}`);
         } catch (natErr) {
           const errMsg = natErr instanceof Error ? natErr.message : "Unknown error";
           if (errMsg.includes("already have") || errMsg.includes("exists")) {

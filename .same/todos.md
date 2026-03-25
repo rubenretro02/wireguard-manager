@@ -1,72 +1,38 @@
-# WireGuard Manager - Estado Actual
+# WireGuard Manager - TODOs
 
-## Completado Hoy ✅
+## Problemas identificados por el usuario
 
-### Nuevas Funcionalidades
-- [x] **IPs parcialmente configuradas**: Permitir importar IPs amarillas y crear reglas faltantes automáticamente (botón ⚡ en cada IP) 
-- [x] **Search bar en Public IPs**: Filtrar IPs por número o dirección
-- [x] **Mapeo de peers por IP**: Mostrar cuántos peers usan cada IP y sus nombres (columna "Peers" con icono y conteo)
-- [x] **Edición inline en Peer Config Dialog**: Añadir botón de lápiz para editar campos inline (estilo terminal, sin popup)
+### 1. ✅ Las reglas NAT no tienen comentario con el número de IP
+- **Ubicación**: `src/app/api/wireguard/route.ts` línea 281-287
+- **Problema**: Al crear reglas NAT con `createMikroTikRules`, no se incluye el campo `comment`
+- **Solución aplicada**: Se agregó `comment: \`IP ${ip_number}\`` al crear la regla NAT
 
-## Completado ✅
+### 2. ✅ Las reglas NAT no muestran tráfico (parcialmente resuelto)
+- **Causa identificada**: Las reglas nuevas se creaban al final de la lista NAT, pero las reglas de masquerade existentes capturaban el tráfico antes
+- **Solución aplicada**:
+  - Ahora el sistema detecta automáticamente si existe una regla masquerade
+  - Las nuevas reglas se crean ANTES de la regla masquerade usando `place-before`
+  - Esto asegura que las reglas específicas se procesen antes que las genéricas
 
-### UI/UX
-- [x] Nuevo diseño dark mode moderno (estilo Vercel/Linear)
-- [x] Sidebar con navegación
-- [x] Stats cards (Total peers, Active, Disabled, Subnets)
-- [x] Tabla moderna con iconos
-- [x] Edición inline en la tabla (sin dialog)
-- [x] Mostrar tráfico rx/tx con iconos de flechas
-- [x] Force Refresh button
-- [x] Botón para invertir orden
+## Tareas
 
-### Backend - WireGuard
-- [x] Función clearClientCacheForRouter para limpiar caché
-- [x] API updatePeer para editar nombre
-- [x] Detección de IPs con 3 condiciones (WG IP + Public IP + NAT)
-- [x] Guardado de IPs importadas en Supabase
+- [x] Agregar comentario a las reglas NAT al crearlas (`comment: \`IP ${ip_number}\``)
+- [x] Detectar reglas masquerade existentes
+- [x] Crear reglas NAT en la posición correcta (antes de masquerade)
+- [ ] **(Opcional)** Agregar funcionalidad para reorganizar reglas NAT existentes
 
-### Backend - NAT Traffic & Auto-Create
-- [x] **getNatRuleTraffic**: Obtener bytes/packets de reglas NAT
-- [x] **createMikroTikRules**: Crear automáticamente:
-  - IP en WireGuard interface (10.10.x.1/24)
-  - IP en out-interface (76.245.59.x/25)
-  - Regla NAT (srcnat 10.10.x.0/24 → 76.245.59.x)
-- [x] Botón ⚡ para crear reglas faltantes
-- [x] Columna NAT Traffic con bytes y packets
+## Notas importantes
 
-### Base de Datos
-- [x] Script SQL de migración listo (scripts/migration-v2.sql)
-- [x] Nuevos campos en `routers`
-- [x] Tabla `public_ips`
-- [x] Tabla `user_routers`
+### ¿Por qué las reglas NAT no tenían tráfico?
+En MikroTik, las reglas de firewall/NAT se procesan en orden. Si tienes:
+1. Regla masquerade (genérica) en posición 0
+2. Tu regla src-nat específica en posición 1
 
-## Pendiente - IMPORTANTE ⚠️
+La regla masquerade captura TODO el tráfico antes de que llegue a tu regla específica.
 
-### Ejecutar Migración SQL
-**DEBES ejecutar el SQL en Supabase manualmente:**
-1. Ir a Supabase Dashboard > SQL Editor
-2. Copiar contenido de `scripts/migration-v2.sql`
-3. Ejecutar
+**Solución**: Las nuevas reglas ahora se crean ANTES de cualquier regla masquerade existente.
 
-## Funcionalidades Actuales
-
-### Dashboard
-- Ver todos los peers de WireGuard
-- Editar peers inline (nombre, IP, comment)
-- Ver tráfico por peer (rx/tx)
-- Crear peers seleccionando IP pública
-- Habilitar/Deshabilitar/Eliminar peers
-
-### Admin Panel > Public IPs
-- Escanear MikroTik para detectar IPs configuradas
-- Ver cuáles IPs tienen las 3 condiciones
-- Guardar IPs detectadas en Supabase
-- Ver tráfico NAT por IP (bytes/packets)
-- Crear reglas faltantes con botón ⚡
-- Agregar IPs manualmente
-
-### Admin Panel > Routers
-- Configurar prefijos IP
-- Seleccionar interfaces (WG, ether2)
-- Test de conexión
+### Para reglas NAT existentes que no tienen tráfico
+Si ya tienes reglas NAT creadas que no muestran tráfico, debes:
+1. En Winbox o terminal de MikroTik, mover las reglas src-nat ANTES de la regla masquerade
+2. O eliminar las reglas y crearlas de nuevo con el sistema (ahora se crearán en la posición correcta)
