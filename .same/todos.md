@@ -52,4 +52,4 @@
 
 ## Notas
 - El error de Supabase es esperado (faltan variables de entorno en este workspace)
-- Para ver el nuevo diseño, hay que deployar con las credenciales correctas.
+- Para ver el nuevo diseño, hay que deployar con las credenciales correctas...
