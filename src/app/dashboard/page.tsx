@@ -30,7 +30,7 @@ import {
   ArrowUpDown,
   Eye
 } from "lucide-react";
-import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer } from "@/lib/types";
+import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP } from "@/lib/types";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -40,13 +40,16 @@ export default function DashboardPage() {
   const [selectedRouterId, setSelectedRouterId] = useState<string>("");
   const [interfaces, setInterfaces] = useState<WireGuardInterface[]>([]);
   const [peers, setPeers] = useState<WireGuardPeer[]>([]);
+  const [publicIps, setPublicIps] = useState<PublicIP[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Create peer dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [useSimplifiedMode, setUseSimplifiedMode] = useState(true);
   const [newPeer, setNewPeer] = useState({ interface: "", name: "", "allowed-address": "", comment: "" });
+  const [selectedPublicIpId, setSelectedPublicIpId] = useState<string>("");
 
   // View config dialog
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
@@ -174,15 +177,65 @@ export default function DashboardPage() {
     setRefreshing(false);
   }, [selectedRouterId, newPeer.interface]);
 
+  const fetchPublicIps = useCallback(async () => {
+    if (!selectedRouterId) return;
+    try {
+      const res = await fetch(`/api/public-ips?routerId=${selectedRouterId}`);
+      const data = await res.json();
+      if (data.publicIps) {
+        setPublicIps(data.publicIps.filter((ip: PublicIP) => ip.enabled));
+      }
+    } catch {
+      console.error("Failed to fetch public IPs");
+    }
+  }, [selectedRouterId]);
+
   useEffect(() => {
     if (selectedRouterId) {
       fetchWireGuardData();
+      fetchPublicIps();
     }
-  }, [selectedRouterId, fetchWireGuardData]);
+  }, [selectedRouterId, fetchWireGuardData, fetchPublicIps]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  const handleCreatePeerSimplified = async () => {
+    if (!selectedPublicIpId || !newPeer.interface || !newPeer.name) {
+      toast.error("Please fill all required fields");
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "createPeerSimplified",
+          routerId: selectedRouterId,
+          data: {
+            publicIpId: selectedPublicIpId,
+            interface: newPeer.interface,
+            name: newPeer.name,
+          }
+        })
+      });
+      const data = await res.json();
+      if (data.peer) {
+        toast.success(`Peer created! IP: ${data.assignedIp}`);
+        setCreateDialogOpen(false);
+        setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
+        setSelectedPublicIpId("");
+        fetchWireGuardData();
+      } else {
+        toast.error(data.error || "Failed to create peer");
+      }
+    } catch {
+      toast.error("Failed to create peer");
+    }
+    setCreating(false);
   };
 
   const handleCreatePeer = async () => {
@@ -559,41 +612,92 @@ PersistentKeepalive = 25`;
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Name</Label>
-              <Input
-                placeholder="My Device"
-                value={newPeer.name}
-                onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
-                className="bg-secondary border-border"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Allowed Address</Label>
-              <Input
-                placeholder="10.10.200.5/32"
-                value={newPeer["allowed-address"]}
-                onChange={(e) => setNewPeer({ ...newPeer, "allowed-address": e.target.value })}
-                className="bg-secondary border-border font-mono"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Comment (Public IP)</Label>
-              <Input
-                placeholder="76.245.59.200"
-                value={newPeer.comment}
-                onChange={(e) => setNewPeer({ ...newPeer, comment: e.target.value })}
-                className="bg-secondary border-border font-mono"
-              />
+            {useSimplifiedMode ? (
+              <>
+                <div className="space-y-2">
+                  <Label>Public IP</Label>
+                  <Select value={selectedPublicIpId} onValueChange={setSelectedPublicIpId}>
+                    <SelectTrigger className="bg-secondary border-border">
+                      <SelectValue placeholder="Select public IP" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {publicIps.map((ip) => (
+                        <SelectItem key={ip.id} value={ip.id}>
+                          {ip.public_ip} ({ip.internal_subnet}.0/24)
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input
+                    placeholder="My Device"
+                    value={newPeer.name}
+                    onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
+                    className="bg-secondary border-border"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input
+                    placeholder="My Device"
+                    value={newPeer.name}
+                    onChange={(e) => setNewPeer({ ...newPeer, name: e.target.value })}
+                    className="bg-secondary border-border"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Allowed Address</Label>
+                  <Input
+                    placeholder="10.10.200.5/32"
+                    value={newPeer["allowed-address"]}
+                    onChange={(e) => setNewPeer({ ...newPeer, "allowed-address": e.target.value })}
+                    className="bg-secondary border-border font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Comment (Public IP)</Label>
+                  <Input
+                    placeholder="76.245.59.200"
+                    value={newPeer.comment}
+                    onChange={(e) => setNewPeer({ ...newPeer, comment: e.target.value })}
+                    className="bg-secondary border-border font-mono"
+                  />
+                </div>
+              </>
+            )}
+            <div className="flex items-center gap-2 pt-2">
+              <Label>
+                <input
+                  type="checkbox"
+                  checked={useSimplifiedMode}
+                  onChange={() => setUseSimplifiedMode((v) => !v)}
+                  className="mr-2"
+                />
+                Simplified mode
+              </Label>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={handleCreatePeer} disabled={creating || !newPeer["allowed-address"]}>
-              {creating ? "Creating..." : "Create"}
-            </Button>
+            {useSimplifiedMode ? (
+              <Button
+                onClick={handleCreatePeerSimplified}
+                disabled={creating || !selectedPublicIpId || !newPeer.interface || !newPeer.name}
+              >
+                {creating ? "Creating..." : "Create"}
+              </Button>
+            ) : (
+              <Button onClick={handleCreatePeer} disabled={creating || !newPeer["allowed-address"]}>
+                {creating ? "Creating..." : "Create"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

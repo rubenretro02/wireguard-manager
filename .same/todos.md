@@ -17,39 +17,51 @@
 - [x] API updatePeer para editar nombre
 - [x] Mejor logging para debugging
 
-## Pendiente 📋
+### Base de Datos (Migration V2)
+- [x] Ejecutar SQL de migración en Supabase
+- [x] Nuevos campos en `routers`: public_ip_prefix, public_ip_mask, etc.
+- [x] Tabla `public_ips` creada con RLS
+- [x] Tabla `user_routers` creada con RLS
+- [x] Actualizar types.ts con nuevos tipos
 
-### Prioridad Alta
-- [ ] Agregar campos de configuración IP al router (Admin Panel):
+## En Progreso 🚧
+
+### Admin Panel - Configuración de Router
+- [ ] UI para editar campos de configuración IP:
   - public_ip_prefix (ej: 76.245.59)
   - public_ip_mask (ej: /25)
+  - public_ip_network (ej: 76.245.59.128)
   - internal_prefix (ej: 10.10)
   - out_interface (ej: ether2)
   - wg_interface (ej: wg0)
 
-- [ ] Crear tabla `public_ips` en Supabase
-- [ ] Crear tabla `user_routers` para control de acceso
+### Admin Panel - Gestión de IPs Públicas
+- [ ] Nuevo tab "IPs" en Admin Panel
+- [ ] UI para agregar IPs (solo escribir número ej: 200)
+- [ ] Crear automáticamente en MikroTik:
+  - IP en ether2 (76.245.59.200/25)
+  - Regla NAT (10.10.200.0/24 → 76.245.59.200)
+  - IP en WireGuard interface (10.10.200.1/24)
 
-- [ ] Auto-import desde MikroTik (solo lectura):
-  - Detectar NAT rules existentes
-  - Detectar IPs públicas
-  - Mapear configuración
+### Admin Panel - Control de Acceso
+- [ ] Nuevo tab "Access" en Admin Panel
+- [ ] Asignar routers a usuarios
 
-### Prioridad Media
-- [ ] Simplificar creación de peer:
-  - Dropdown de IPs públicas (solo las configuradas por admin)
-  - Auto-asignar IP interna disponible
+## Pendiente 📋
 
-- [ ] Admin Panel:
-  - Agregar/gestionar IPs públicas
-  - Control de acceso por usuario/router
+### Crear Peer Simplificado
+- [ ] Usuario solo selecciona:
+  - Interface (dropdown)
+  - Nombre (input)
+  - IP Pública (dropdown - solo IPs configuradas por admin)
+- [ ] Sistema automáticamente asigna IP interna disponible
 
-### Prioridad Baja
-- [ ] Crear reglas automáticamente al agregar IP pública:
-  - IP en ether2
-  - NAT rule
-  - IP en WireGuard interface
+### Auto-Import desde MikroTik
+- [ ] Leer reglas NAT existentes (SOLO LECTURA)
+- [ ] Detectar IPs y subnets configurados
+- [ ] Importar a Supabase
 
 ## Notas
-- El error de Supabase es esperado (faltan variables de entorno en este workspace)
-- Para ver el nuevo diseño, hay que deployar con las credenciales correctas.
+- El error de Supabase es esperado si faltan variables de entorno
+- Para ver el nuevo diseño, hay que deployar con las credenciales correctas
+- Import es SOLO LECTURA del MikroTik

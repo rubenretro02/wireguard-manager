@@ -71,6 +71,80 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: `Failed to create peer: ${createErrMsg}` }, { status: 500 });
         }
       }
+      case "createPeerSimplified": {
+        // Simplified peer creation: user selects public IP, system auto-assigns internal IP
+        const { publicIpId, interface: wgInterface, name } = data;
+
+        if (!publicIpId || !wgInterface || !name) {
+          return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+        }
+
+        // Get the public IP record
+        const { data: publicIp, error: publicIpError } = await supabase
+          .from("public_ips")
+          .select("*")
+          .eq("id", publicIpId)
+          .single();
+
+        if (publicIpError || !publicIp) {
+          return NextResponse.json({ error: "Public IP not found" }, { status: 404 });
+        }
+
+        // Get all existing peers to find used IPs in this subnet
+        const existingPeers = await client.getWireGuardPeers();
+        const subnetPrefix = `${publicIp.internal_subnet}.`;
+
+        // Find used IPs in this subnet (last octet)
+        const usedIps = new Set<number>();
+        for (const peer of existingPeers) {
+          const addr = peer["allowed-address"]?.split("/")[0];
+          if (addr && addr.startsWith(subnetPrefix)) {
+            const lastOctet = parseInt(addr.split(".")[3], 10);
+            if (!isNaN(lastOctet)) {
+              usedIps.add(lastOctet);
+            }
+          }
+        }
+
+        // Find next available IP (starting from 2, as 1 is usually the gateway)
+        let nextIp = 2;
+        while (usedIps.has(nextIp) && nextIp < 255) {
+          nextIp++;
+        }
+
+        if (nextIp >= 255) {
+          return NextResponse.json({ error: "No available IPs in this subnet" }, { status: 400 });
+        }
+
+        const allowedAddress = `${publicIp.internal_subnet}.${nextIp}/32`;
+        const comment = publicIp.public_ip; // Store public IP in comment
+
+        console.log("[WireGuard API] Creating simplified peer:", {
+          interface: wgInterface,
+          name,
+          allowedAddress,
+          comment
+        });
+
+        try {
+          const peer = await client.createWireGuardPeer({
+            interface: wgInterface,
+            name,
+            "allowed-address": allowedAddress,
+            comment,
+          });
+          console.log("[WireGuard API] Simplified peer created successfully:", peer[".id"]);
+          return NextResponse.json({
+            peer,
+            assignedIp: allowedAddress,
+            publicIp: publicIp.public_ip
+          });
+        } catch (createErr) {
+          const createErrMsg = createErr instanceof Error ? createErr.message : "Unknown error";
+          console.error("[WireGuard API] Failed to create simplified peer:", createErrMsg);
+          return NextResponse.json({ error: `Failed to create peer: ${createErrMsg}` }, { status: 500 });
+        }
+      }
       case "updatePeer": {
         console.log("[WireGuard API] Updating peer:", data.id);
         try {

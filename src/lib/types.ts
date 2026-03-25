@@ -24,6 +24,34 @@ export interface Router {
   connection_type: ConnectionType;
   created_by: string | null;
   created_at: string;
+  // IP Configuration fields
+  public_ip_prefix: string | null;
+  public_ip_mask: string | null;
+  public_ip_network: string | null;
+  internal_prefix: string | null;
+  out_interface: string | null;
+  wg_interface: string | null;
+}
+
+export interface PublicIP {
+  id: string;
+  router_id: string;
+  ip_number: number;
+  public_ip: string;
+  internal_subnet: string;
+  enabled: boolean;
+  nat_rule_created: boolean;
+  ip_address_created: boolean;
+  wg_ip_created: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UserRouter {
+  id: string;
+  user_id: string;
+  router_id: string;
+  created_at: string;
 }
 
 export interface WireGuardInterface {
