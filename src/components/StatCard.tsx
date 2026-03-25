@@ -8,16 +8,34 @@ interface StatCardProps {
   value: string | number;
   subtitle?: string;
   icon: LucideIcon;
+  iconColor?: "primary" | "emerald" | "red" | "cyan";
   trend?: {
     value: number;
     isPositive: boolean;
   };
   className?: string;
+  onClick?: () => void;
+  active?: boolean;
 }
 
-export function StatCard({ title, value, subtitle, icon: Icon, trend, className }: StatCardProps) {
+const iconColors = {
+  primary: "bg-primary/10 text-primary group-hover:bg-primary/20",
+  emerald: "bg-emerald-500/10 text-emerald-400 group-hover:bg-emerald-500/20",
+  red: "bg-red-500/10 text-red-400 group-hover:bg-red-500/20",
+  cyan: "bg-cyan-500/10 text-cyan-400 group-hover:bg-cyan-500/20",
+};
+
+export function StatCard({ title, value, subtitle, icon: Icon, iconColor = "primary", trend, className, onClick, active }: StatCardProps) {
   return (
-    <div className={cn("stat-card group", className)}>
+    <div
+      className={cn(
+        "stat-card group",
+        onClick && "cursor-pointer hover:border-primary/50",
+        active && "border-primary ring-1 ring-primary/20",
+        className
+      )}
+      onClick={onClick}
+    >
       <div className="flex items-start justify-between">
         <div className="space-y-2">
           <p className="text-sm text-muted-foreground">{title}</p>
@@ -37,8 +55,8 @@ export function StatCard({ title, value, subtitle, icon: Icon, trend, className 
             </div>
           )}
         </div>
-        <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center group-hover:bg-primary/20 transition-colors">
-          <Icon className="w-6 h-6 text-primary" />
+        <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center transition-colors", iconColors[iconColor])}>
+          <Icon className="w-6 h-6" />
         </div>
       </div>
     </div>

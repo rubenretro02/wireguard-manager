@@ -63,6 +63,8 @@ export default function DashboardPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingPeer, setEditingPeer] = useState<WireGuardPeer | null>(null);
   const [editName, setEditName] = useState("");
+  const [editAllowedAddress, setEditAllowedAddress] = useState("");
+  const [editComment, setEditComment] = useState("");
   const [updating, setUpdating] = useState(false);
 
   // Stats
@@ -302,13 +304,19 @@ export default function DashboardPage() {
         body: JSON.stringify({
           action: "updatePeer",
           routerId: selectedRouterId,
-          data: { id: editingPeer[".id"], name: editName }
+          data: {
+            id: editingPeer[".id"],
+            name: editName,
+            "allowed-address": editAllowedAddress,
+            comment: editComment,
+          }
         })
       });
       const data = await res.json();
       if (data.success) {
         toast.success("Peer updated");
         setEditDialogOpen(false);
+        setViewConfigOpen(false);
         fetchWireGuardData();
       } else {
         toast.error(data.error || "Failed to update");
@@ -317,6 +325,14 @@ export default function DashboardPage() {
       toast.error("Failed to update peer");
     }
     setUpdating(false);
+  };
+
+  const openEditPeerDialog = (peer: WireGuardPeer) => {
+    setEditingPeer(peer);
+    setEditName(peer.name || "");
+    setEditAllowedAddress(peer["allowed-address"] || "");
+    setEditComment(peer.comment || "");
+    setEditDialogOpen(true);
   };
 
   const formatBytes = (bytes?: number) => {
@@ -398,22 +414,32 @@ PersistentKeepalive = 25`;
             title="Total Peers"
             value={stats.total}
             icon={Users}
+            iconColor="primary"
+            onClick={() => setStatusFilter("all")}
+            active={statusFilter === "all"}
           />
           <StatCard
             title="Active"
             value={stats.active}
             subtitle={`${stats.total > 0 ? ((stats.active / stats.total) * 100).toFixed(1) : 0}% of total`}
             icon={Activity}
+            iconColor="emerald"
+            onClick={() => setStatusFilter("enabled")}
+            active={statusFilter === "enabled"}
           />
           <StatCard
             title="Disabled"
             value={stats.disabled}
             icon={PowerOff}
+            iconColor="red"
+            onClick={() => setStatusFilter("disabled")}
+            active={statusFilter === "disabled"}
           />
           <StatCard
             title="Subnets"
             value={stats.uniqueSubnets}
             icon={Globe}
+            iconColor="cyan"
           />
         </div>
 
@@ -508,11 +534,7 @@ PersistentKeepalive = 25`;
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{peer.name || "-"}</span>
                           <button
-                            onClick={() => {
-                              setEditingPeer(peer);
-                              setEditName(peer.name || "");
-                              setEditDialogOpen(true);
-                            }}
+                            onClick={() => openEditPeerDialog(peer)}
                             className="p-1 rounded hover:bg-secondary text-muted-foreground hover:text-foreground transition-colors"
                           >
                             <Pencil className="w-3 h-3" />
@@ -669,10 +691,10 @@ PersistentKeepalive = 25`;
 
       {/* Edit Peer Dialog */}
       <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
-        <DialogContent className="bg-card border-border">
+        <DialogContent className="bg-card border-border max-w-lg">
           <DialogHeader>
             <DialogTitle>Edit Peer</DialogTitle>
-            <DialogDescription>Update peer name</DialogDescription>
+            <DialogDescription>Update peer configuration</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
@@ -681,15 +703,44 @@ PersistentKeepalive = 25`;
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 className="bg-secondary border-border"
+                placeholder="My Device"
               />
             </div>
+            <div className="space-y-2">
+              <Label>Allowed Address</Label>
+              <Input
+                value={editAllowedAddress}
+                onChange={(e) => setEditAllowedAddress(e.target.value)}
+                className="bg-secondary border-border font-mono"
+                placeholder="10.10.200.5/32"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Public IP (Comment)</Label>
+              <Input
+                value={editComment}
+                onChange={(e) => setEditComment(e.target.value)}
+                className="bg-secondary border-border font-mono"
+                placeholder="76.245.59.200"
+              />
+            </div>
+            {editingPeer && (
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">Public Key (read-only)</Label>
+                <Input
+                  readOnly
+                  value={editingPeer["public-key"] || ""}
+                  className="bg-secondary/50 border-border font-mono text-xs text-muted-foreground"
+                />
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditDialogOpen(false)}>
               Cancel
             </Button>
             <Button onClick={handleEditPeer} disabled={updating}>
-              {updating ? "Saving..." : "Save"}
+              {updating ? "Saving..." : "Save Changes"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -699,20 +750,51 @@ PersistentKeepalive = 25`;
       <Dialog open={viewConfigOpen} onOpenChange={setViewConfigOpen}>
         <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Peer Configuration</DialogTitle>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Peer Configuration</span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={() => selectedPeer && openEditPeerDialog(selectedPeer)}
+              >
+                <Pencil className="w-3 h-3" />
+                Edit
+              </Button>
+            </DialogTitle>
             <DialogDescription>{selectedPeer?.name || selectedPeer?.comment}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Interface</Label>
+                <p className="font-mono text-sm">{selectedPeer?.interface || "-"}</p>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Allowed Address</Label>
+                <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Public IP</Label>
+                <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Status</Label>
+                <Badge variant="outline" className={selectedPeer?.disabled ? "text-red-400" : "text-emerald-400"}>
+                  {selectedPeer?.disabled ? "Disabled" : "Enabled"}
+                </Badge>
+              </div>
+            </div>
             <div className="space-y-2">
-              <Label>Public Key</Label>
+              <Label className="text-muted-foreground text-xs">Public Key</Label>
               <Input
                 readOnly
                 value={selectedPeer?.["public-key"] || ""}
-                className="bg-secondary border-border font-mono text-sm"
+                className="bg-secondary border-border font-mono text-xs"
               />
             </div>
             <div className="space-y-2">
-              <Label>Client Configuration</Label>
+              <Label className="text-muted-foreground text-xs">Client Configuration</Label>
               <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
                 {selectedPeer && generateConfig(selectedPeer)}
               </pre>

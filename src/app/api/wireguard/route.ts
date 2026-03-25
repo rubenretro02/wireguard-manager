@@ -257,7 +257,12 @@ export async function POST(request: Request) {
       case "updatePeer": {
         console.log("[WireGuard API] Updating peer:", data.id);
         try {
-          await client.updateWireGuardPeer(data.id, { name: data.name });
+          const updateData: Record<string, unknown> = {};
+          if (data.name !== undefined) updateData.name = data.name;
+          if (data["allowed-address"] !== undefined) updateData["allowed-address"] = data["allowed-address"];
+          if (data.comment !== undefined) updateData.comment = data.comment;
+
+          await client.updateWireGuardPeer(data.id, updateData);
           console.log("[WireGuard API] Peer updated successfully");
           return NextResponse.json({ success: true });
         } catch (updateErr) {

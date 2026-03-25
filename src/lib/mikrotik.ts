@@ -246,12 +246,13 @@ class MikroTikClassicClient {
     };
   }
 
-  async updateWireGuardPeer(id: string, data: Partial<WireGuardPeer>): Promise<void> {
+  async updateWireGuardPeer(id: string, data: Partial<WireGuardPeer> & { name?: string }): Promise<void> {
     const api = await this.ensureConnected();
     const updateData: Record<string, unknown> = {};
     if (data.disabled !== undefined) updateData.disabled = data.disabled ? "yes" : "no";
     if (data.comment !== undefined) updateData.comment = data.comment;
     if (data["allowed-address"] !== undefined) updateData["allowed-address"] = data["allowed-address"];
+    if (data.name !== undefined) updateData.name = data.name;
     await api.menu("/interface/wireguard/peers").where({ ".id": id }).update(updateData);
   }
 
