@@ -137,6 +137,18 @@ USING (user_id = auth.uid());
 - Cada router puede tener diferentes prefijos
 - Sin modo demo, requiere router real
 
+## ⚠️ Vercel - Importante
+Vercel Hobby (gratis) NO despliega commits de colaboradores externos.
+Los commits de "Same" no se despliegan automáticamente.
+
+**Solución:** Después de que Same haga commits, crear un PR y hacer merge desde GitHub con MI cuenta. El merge commit será mío y Vercel lo desplegará.
+
+Alternativa: Configurar los commits para usar mi nombre:
+```bash
+git config user.name "rubenretro02"
+git config user.email "mi-email@ejemplo.com"
+```
+
 ## Próximos pasos
 1. Clonar repo y rama redesign-ui
 2. Verificar integraciones (GitHub + Supabase)
