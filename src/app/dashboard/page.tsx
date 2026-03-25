@@ -953,7 +953,7 @@ PersistentKeepalive = 25`;
                   <textarea
                     value={dialogEditConfig}
                     onChange={(e) => setDialogEditConfig(e.target.value)}
-                    className="w-full h-24 bg-secondary p-3 rounded-lg text-sm font-mono border border-amber-500/50 focus:border-amber-500 focus:outline-none resize-none"
+                    className="w-full h-72 bg-secondary p-3 rounded-lg text-sm font-mono border border-amber-500/50 focus:border-amber-500 focus:outline-none resize-none"
                     placeholder={`Name: peer-name\nAddress: 10.10.x.x\nPublicIP: 76.245.59.xxx`}
                   />
                   <div className="flex gap-2 justify-end">
