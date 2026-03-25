@@ -31,16 +31,26 @@ export async function POST(request: Request) {
   }
 
   const connectionType: ConnectionType = router.connection_type || "api";
-  console.log(`[WireGuard API] Connecting to ${router.host}:${connectionType === "api" ? router.api_port : router.port} using ${connectionType}`);
+
+  // Determine actual connection type and ports based on connection_type
+  const isApiConnection = connectionType === "api" || connectionType === "api-ssl";
+  const useApiSsl = connectionType === "api-ssl";
+  const apiPort = connectionType === "api-ssl" ? (router.api_port || 8729) : (router.api_port || 8728);
+  const restPort = connectionType === "rest-8443" ? (router.port || 8443) : (router.port || 443);
+
+  // Map new connection types to base types for MikroTikClient
+  const baseConnectionType = isApiConnection ? "api" : "rest";
+
+  console.log(`[WireGuard API] Connecting to ${router.host}:${isApiConnection ? apiPort : restPort} using ${connectionType} (base: ${baseConnectionType})`);
 
   const client = new MikroTikClient({
     host: router.host,
-    port: router.port || 443,
-    apiPort: router.api_port || 8728,
+    port: restPort,
+    apiPort: apiPort,
     username: router.username,
     password: router.password,
-    useSsl: router.use_ssl ?? false,
-    connectionType: connectionType,
+    useSsl: useApiSsl,
+    connectionType: baseConnectionType as "api" | "rest",
   });
 
   try {
@@ -617,13 +627,29 @@ export async function POST(request: Request) {
       }
       case "testConnection": {
         console.log(`[WireGuard API] Testing connection to ${router.host}...`);
+        // Always clear cache before testing to ensure fresh connection
+        await clearClientCacheForRouter(router.host, apiPort, router.username);
+
+        // Create a new client after clearing cache
+        const freshClient = new MikroTikClient({
+          host: router.host,
+          port: restPort,
+          apiPort: apiPort,
+          username: router.username,
+          password: router.password,
+          useSsl: useApiSsl,
+          connectionType: baseConnectionType as "api" | "rest",
+        });
+
         try {
-          const connected = await client.testConnection();
+          const connected = await freshClient.testConnection();
           console.log(`[WireGuard API] Connection test result: ${connected}`);
           return NextResponse.json({ connected });
         } catch (testErr) {
           const testErrMsg = testErr instanceof Error ? testErr.message : "Unknown error";
           console.error(`[WireGuard API] Connection test failed:`, testErrMsg);
+          // Clear cache again on failure
+          await clearClientCacheForRouter(router.host, apiPort, router.username);
           return NextResponse.json({ connected: false, error: testErrMsg });
         }
       }

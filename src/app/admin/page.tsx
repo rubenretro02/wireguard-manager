@@ -685,15 +685,25 @@ export default function AdminPage() {
                       </div>
                       <div className="space-y-2">
                         <Label>Connection Type</Label>
-                        <Select value={newRouter.connection_type} onValueChange={(v: ConnectionType) => setNewRouter({ ...newRouter, connection_type: v })}>
+                        <Select value={newRouter.connection_type} onValueChange={(v: ConnectionType) => {
+                          const updates: Partial<typeof newRouter> = { connection_type: v };
+                          // Set default ports based on connection type
+                          if (v === "api") updates.api_port = "8728";
+                          else if (v === "api-ssl") updates.api_port = "8729";
+                          else if (v === "rest") updates.port = "443";
+                          else if (v === "rest-8443") updates.port = "8443";
+                          setNewRouter({ ...newRouter, ...updates });
+                        }}>
                           <SelectTrigger className="bg-secondary border-border"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="api">API (Port 8728)</SelectItem>
+                            <SelectItem value="api-ssl">API-SSL (Port 8729)</SelectItem>
                             <SelectItem value="rest">REST API (HTTPS 443)</SelectItem>
+                            <SelectItem value="rest-8443">REST API (HTTPS 8443)</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
-                      {newRouter.connection_type === "api" ? (
+                      {(newRouter.connection_type === "api" || newRouter.connection_type === "api-ssl") ? (
                         <div className="space-y-2">
                           <Label>API Port</Label>
                           <Input type="number" value={newRouter.api_port} onChange={(e) => setNewRouter({ ...newRouter, api_port: e.target.value })} className="bg-secondary border-border" />
@@ -742,8 +752,11 @@ export default function AdminPage() {
                           <TableCell className="font-medium">{r.name}</TableCell>
                           <TableCell className="font-mono text-sm text-muted-foreground">{r.host}</TableCell>
                           <TableCell>
-                            <Badge variant={r.connection_type === "api" ? "default" : "secondary"}>
-                              {r.connection_type === "api" ? `API:${r.api_port || 8728}` : `REST:${r.port || 443}`}
+                            <Badge variant={(r.connection_type === "api" || r.connection_type === "api-ssl") ? "default" : "secondary"}>
+                              {r.connection_type === "api" ? `API:${r.api_port || 8728}` :
+                               r.connection_type === "api-ssl" ? `API-SSL:${r.api_port || 8729}` :
+                               r.connection_type === "rest-8443" ? `REST:${r.port || 8443}` :
+                               `REST:${r.port || 443}`}
                             </Badge>
                           </TableCell>
                           <TableCell>

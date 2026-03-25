@@ -10,7 +10,7 @@ export interface Profile {
   created_at: string;
 }
 
-export type ConnectionType = "rest" | "api";
+export type ConnectionType = "rest" | "rest-8443" | "api" | "api-ssl";
 
 export interface Router {
   id: string;
