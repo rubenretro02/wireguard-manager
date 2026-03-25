@@ -10,6 +10,8 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
 import { StatCard } from "@/components/StatCard";
@@ -31,7 +33,8 @@ import {
   Check,
   X,
   ArrowDownUp,
-  ArrowUp
+  ArrowUp,
+  ChevronsUpDown
 } from "lucide-react";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP } from "@/lib/types";
@@ -53,6 +56,7 @@ export default function DashboardPage() {
   const [creating, setCreating] = useState(false);
   const [newPeer, setNewPeer] = useState({ interface: "", name: "", "allowed-address": "", comment: "" });
   const [selectedPublicIpId, setSelectedPublicIpId] = useState<string>("");
+  const [ipComboboxOpen, setIpComboboxOpen] = useState(false);
 
   // View config dialog
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
@@ -851,22 +855,49 @@ PersistentKeepalive = 25`;
             </div>
             <div className="space-y-2">
               <Label>Public IP</Label>
-              <Select value={selectedPublicIpId} onValueChange={setSelectedPublicIpId}>
-                <SelectTrigger className="bg-secondary border-border">
-                  <SelectValue placeholder="Select public IP" />
-                </SelectTrigger>
-                <SelectContent>
-                  {publicIps.length === 0 ? (
-                    <SelectItem value="_none" disabled>No public IPs configured</SelectItem>
-                  ) : (
-                    publicIps.map((ip) => (
-                      <SelectItem key={ip.id} value={ip.id}>
-                        {ip.public_ip}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+              <Popover open={ipComboboxOpen} onOpenChange={setIpComboboxOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={ipComboboxOpen}
+                    className="w-full justify-between bg-secondary border-border font-mono"
+                  >
+                    {selectedPublicIpId
+                      ? publicIps.find((ip) => ip.id === selectedPublicIpId)?.public_ip || "Select public IP"
+                      : "Select public IP"}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[300px] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Type IP to search..." className="font-mono" />
+                    <CommandList>
+                      <CommandEmpty>No IP found.</CommandEmpty>
+                      <CommandGroup>
+                        {publicIps.map((ip) => (
+                          <CommandItem
+                            key={ip.id}
+                            value={ip.public_ip}
+                            onSelect={() => {
+                              setSelectedPublicIpId(ip.id);
+                              setIpComboboxOpen(false);
+                            }}
+                            className="font-mono"
+                          >
+                            <Check
+                              className={`mr-2 h-4 w-4 ${
+                                selectedPublicIpId === ip.id ? "opacity-100" : "opacity-0"
+                              }`}
+                            />
+                            {ip.public_ip}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               {publicIps.length === 0 && (
                 <p className="text-xs text-amber-400">Configure public IPs in Admin Panel first</p>
               )}
