@@ -40,11 +40,13 @@ export interface PublicIP {
   public_ip: string;
   internal_subnet: string;
   enabled: boolean;
+  restricted: boolean;
   nat_rule_created: boolean;
   ip_address_created: boolean;
   wg_ip_created: boolean;
   created_at: string;
   updated_at: string;
+  created_by: string | null;
 }
 
 export interface UserRouter {

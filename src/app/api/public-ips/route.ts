@@ -62,6 +62,9 @@ export async function POST(request: Request) {
   const publicIp = `${router.public_ip_prefix}.${ip_number}`;
   const internalSubnet = `${router.internal_prefix}.${ip_number}`;
 
+  // Get user email for created_by
+  const { data: userProfile } = await supabase.from("profiles").select("email").eq("id", user.id).single();
+
   const { data: publicIpRecord, error } = await supabase
     .from("public_ips")
     .insert({
@@ -70,6 +73,8 @@ export async function POST(request: Request) {
       public_ip: publicIp,
       internal_subnet: internalSubnet,
       enabled: true,
+      restricted: false,
+      created_by: userProfile?.email || user.id,
     })
     .select()
     .single();
@@ -101,7 +106,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Public IP ID required" }, { status: 400 });
   }
 
-  const allowedFields = ["enabled", "nat_rule_created", "ip_address_created", "wg_ip_created"];
+  const allowedFields = ["enabled", "restricted", "nat_rule_created", "ip_address_created", "wg_ip_created"];
   const filteredUpdates: Record<string, unknown> = {};
   for (const key of allowedFields) {
     if (key in updates) {
