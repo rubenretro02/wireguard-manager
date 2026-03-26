@@ -1,38 +1,57 @@
-# WireGuard Manager - TODOs
+# WireGuard Manager - Tareas Completadas
 
-## Problemas identificados por el usuario
+## Nuevas Funcionalidades Implementadas
 
-### 1. ✅ Las reglas NAT no tienen comentario con el número de IP
-- **Ubicación**: `src/app/api/wireguard/route.ts` línea 281-287
-- **Problema**: Al crear reglas NAT con `createMikroTikRules`, no se incluye el campo `comment`
-- **Solución aplicada**: Se agregó `comment: \`IP ${ip_number}\`` al crear la regla NAT
+### 1. Restricción de IPs (IP Restriction) ✅
+- [x] Agregar funcionalidad para marcar IPs como restringidas
+- [x] Las IPs restringidas NO aparecen para usuarios normales al crear peers
+- [x] Solo admins pueden ver y usar IPs restringidas
+- [x] UI para toggle de restricción en panel admin (botón Lock/LockOpen)
 
-### 2. ✅ Las reglas NAT no muestran tráfico (parcialmente resuelto)
-- **Causa identificada**: Las reglas nuevas se creaban al final de la lista NAT, pero las reglas de masquerade existentes capturaban el tráfico antes
-- **Solución aplicada**:
-  - Ahora el sistema detecta automáticamente si existe una regla masquerade
-  - Las nuevas reglas se crean ANTES de la regla masquerade usando `place-before`
-  - Esto asegura que las reglas específicas se procesen antes que las genéricas
+### 2. Columnas Created At y Created By ✅
+- [x] Agregar columna `created_at` en tabla de public_ips en UI
+- [x] Agregar columna `created_by` en tabla de public_ips en UI
+- [x] Formatear fechas correctamente (formato español)
 
-## Tareas
+## Archivos Modificados
 
-- [x] Agregar comentario a las reglas NAT al crearlas (`comment: \`IP ${ip_number}\``)
-- [x] Detectar reglas masquerade existentes
-- [x] Crear reglas NAT en la posición correcta (antes de masquerade)
-- [ ] **(Opcional)** Agregar funcionalidad para reorganizar reglas NAT existentes
+1. `src/app/admin/page.tsx` - Panel de administración (reconstruido completamente)
+   - Agregada columna "Restricted" con toggle
+   - Agregada columna "Created At" con fecha formateada
+   - Agregada columna "Created By" con email del creador
+   - Función `handleToggleRestriction` para cambiar estado de restricción
 
-## Notas importantes
+2. `src/app/dashboard/page.tsx` - Filtrar IPs restringidas
+   - Modificada función `fetchPublicIps` para filtrar IPs restringidas si el usuario no es admin
 
-### ¿Por qué las reglas NAT no tenían tráfico?
-En MikroTik, las reglas de firewall/NAT se procesan en orden. Si tienes:
-1. Regla masquerade (genérica) en posición 0
-2. Tu regla src-nat específica en posición 1
+3. `src/app/api/public-ips/route.ts` - Ya tenía soporte para `restricted` y `created_by`
 
-La regla masquerade captura TODO el tráfico antes de que llegue a tu regla específica.
+4. `scripts/migration-v3-restricted-ips.sql` - Ya existía la migración
 
-**Solución**: Las nuevas reglas ahora se crean ANTES de cualquier regla masquerade existente.
+## Cómo Funciona
 
-### Para reglas NAT existentes que no tienen tráfico
-Si ya tienes reglas NAT creadas que no muestran tráfico, debes:
-1. En Winbox o terminal de MikroTik, mover las reglas src-nat ANTES de la regla masquerade
-2. O eliminar las reglas y crearlas de nuevo con el sistema (ahora se crearán en la posición correcta)
+### Restricción de IPs:
+1. En el panel admin, ir a la pestaña "Public IPs"
+2. Cada IP tiene un botón de restricción (columna "Restricted")
+3. Al hacer clic, se alterna entre restringido y no restringido
+4. Las IPs restringidas muestran un icono de candado cerrado (Lock) en amarillo
+5. Las IPs no restringidas muestran un candado abierto (LockOpen)
+
+### Para Usuarios Normales:
+- Cuando un usuario normal (no admin) va a crear un peer
+- La lista de IPs públicas NO incluye las IPs marcadas como restringidas
+- Esto permite reservar ciertas IPs para uso exclusivo del admin
+
+### Columnas Nuevas:
+- **Created At**: Muestra la fecha y hora de creación en formato español
+- **Created By**: Muestra el email del usuario que creó el registro de IP
+
+## Nota sobre la Migración SQL
+
+El archivo `scripts/migration-v3-restricted-ips.sql` ya contiene:
+```sql
+ALTER TABLE public_ips ADD COLUMN IF NOT EXISTS restricted BOOLEAN DEFAULT false;
+ALTER TABLE public_ips ADD COLUMN IF NOT EXISTS created_by TEXT;
+```
+
+Asegúrate de ejecutar esta migración en Supabase si no lo has hecho.

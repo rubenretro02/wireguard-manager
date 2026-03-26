@@ -211,19 +211,26 @@ export default function DashboardPage() {
       const res = await fetch(`/api/public-ips?routerId=${selectedRouterId}`);
       const data = await res.json();
       if (data.publicIps) {
-        setPublicIps(data.publicIps.filter((ip: PublicIP) => ip.enabled));
+        // Filter: only enabled IPs, and if user is not admin, exclude restricted IPs
+        const isAdmin = profile?.role === "admin";
+        setPublicIps(data.publicIps.filter((ip: PublicIP) => {
+          if (!ip.enabled) return false;
+          // If user is not admin, exclude restricted IPs
+          if (!isAdmin && ip.restricted) return false;
+          return true;
+        }));
       }
     } catch {
       console.error("Failed to fetch public IPs");
     }
-  }, [selectedRouterId]);
+  }, [selectedRouterId, profile?.role]);
 
   useEffect(() => {
-    if (selectedRouterId) {
+    if (selectedRouterId && profile) {
       fetchWireGuardData();
       fetchPublicIps();
     }
-  }, [selectedRouterId, fetchWireGuardData, fetchPublicIps]);
+  }, [selectedRouterId, fetchWireGuardData, fetchPublicIps, profile]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
