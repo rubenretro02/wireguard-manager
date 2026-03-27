@@ -103,16 +103,26 @@ export default function DashboardPage() {
   const canAutoExpire = isAdmin || capabilities.can_auto_expire;
   const canSeeAllPeers = isAdmin || capabilities.can_see_all_peers;
 
-  // Stats
+  // Get visible peers for this user (for stats calculation)
+  const visiblePeers = useMemo(() => {
+    if (canSeeAllPeers || !profile) return peers;
+    return peers.filter((peer) => {
+      const meta = peerMetadata[peer["public-key"]];
+      if (!meta) return false;
+      return meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
+    });
+  }, [peers, canSeeAllPeers, profile, peerMetadata]);
+
+  // Stats - only show stats for peers the user can see
   const stats = useMemo(() => {
-    const total = peers.length;
-    const active = peers.filter(p => {
+    const total = visiblePeers.length;
+    const active = visiblePeers.filter(p => {
       const isDisabled = p.disabled === true || String(p.disabled) === "true";
       return !isDisabled;
     }).length;
     const disabled = total - active;
     const uniqueSubnets = new Set(
-      peers.map(p => {
+      visiblePeers.map(p => {
         const addr = p["allowed-address"]?.split(",")[0]?.split("/")[0] || "";
         const parts = addr.split(".");
         return parts.length >= 3 ? `${parts[0]}.${parts[1]}.${parts[2]}` : "";
@@ -120,7 +130,7 @@ export default function DashboardPage() {
     ).size;
 
     return { total, active, disabled, uniqueSubnets };
-  }, [peers]);
+  }, [visiblePeers]);
 
   // Filter peers based on user permissions
   const filteredPeers = useMemo(() => {

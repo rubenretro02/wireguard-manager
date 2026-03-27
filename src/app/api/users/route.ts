@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
@@ -27,7 +28,60 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
   }
 
-  // Create user using Supabase Auth
+  // Try to use admin client if service role is available
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+  if (serviceRoleKey && supabaseUrl) {
+    // Use admin API - this won't auto-login
+    const adminClient = createAdminClient(supabaseUrl, serviceRoleKey, {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false
+      }
+    });
+
+    const { data: authData, error: authError } = await adminClient.auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+      user_metadata: {
+        username: username || email.split("@")[0],
+      },
+    });
+
+    if (authError) {
+      return NextResponse.json({ error: authError.message }, { status: 400 });
+    }
+
+    if (!authData.user) {
+      return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
+    }
+
+    // Update the user's profile
+    const { error: profileError } = await adminClient
+      .from("profiles")
+      .update({
+        role: role || "user",
+        username: username || email.split("@")[0],
+        capabilities: {}
+      })
+      .eq("id", authData.user.id);
+
+    if (profileError) {
+      console.error("Failed to update profile:", profileError);
+    }
+
+    return NextResponse.json({
+      success: true,
+      user: {
+        id: authData.user.id,
+        email: authData.user.email
+      }
+    });
+  }
+
+  // Fallback: Use regular signUp (will cause auto-login issue)
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email,
     password,
@@ -63,7 +117,8 @@ export async function POST(request: Request) {
     user: {
       id: authData.user.id,
       email: authData.user.email
-    }
+    },
+    warning: "User created but you may need to re-login as admin (service role not configured)"
   });
 }
 

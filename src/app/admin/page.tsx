@@ -589,19 +589,26 @@ export default function AdminPage() {
     if (!editingUser) return;
     setSavingCapabilities(true);
     try {
+      // Ensure all capability values are explicit booleans
+      const capabilitiesToSave = {
+        can_auto_expire: editingCapabilities.can_auto_expire === true,
+        can_see_all_peers: editingCapabilities.can_see_all_peers === true,
+        can_use_restricted_ips: editingCapabilities.can_use_restricted_ips === true,
+      };
+
       const { error } = await supabase
         .from("profiles")
-        .update({ capabilities: editingCapabilities })
+        .update({ capabilities: capabilitiesToSave })
         .eq("id", editingUser.id);
 
       if (error) {
-        toast.error("Failed to update capabilities");
+        toast.error("Failed to update capabilities: " + error.message);
       } else {
-        toast.success("Capabilities updated");
+        toast.success("Capabilities updated successfully");
         setEditCapabilitiesOpen(false);
         fetchUsers();
       }
-    } catch {
+    } catch (err) {
       toast.error("Failed to update capabilities");
     }
     setSavingCapabilities(false);
