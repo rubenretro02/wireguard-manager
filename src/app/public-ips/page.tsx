@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -28,7 +29,12 @@ interface PeerInfo {
   id: string;
   name: string;
   address: string;
+  publicKey?: string;
+  interface?: string;
   disabled?: boolean;
+  rx?: number;
+  tx?: number;
+  comment?: string;
 }
 
 export default function PublicIpsPage() {
@@ -47,6 +53,10 @@ export default function PublicIpsPage() {
   const [peersModalOpen, setPeersModalOpen] = useState(false);
   const [selectedIp, setSelectedIp] = useState<PublicIP | null>(null);
   const [selectedIpPeers, setSelectedIpPeers] = useState<PeerInfo[]>([]);
+
+  // Single peer detail dialog
+  const [peerDetailOpen, setPeerDetailOpen] = useState(false);
+  const [selectedPeerDetail, setSelectedPeerDetail] = useState<PeerInfo | null>(null);
 
   // User capabilities
   const capabilities: UserCapabilities = profile?.capabilities || {};
@@ -155,7 +165,12 @@ export default function PublicIpsPage() {
               id: peer[".id"],
               name: peer.name || "Unnamed",
               address: peer["allowed-address"] || "",
-              disabled: peer.disabled === true || String(peer.disabled) === "true"
+              publicKey: peer["public-key"],
+              interface: peer.interface,
+              disabled: peer.disabled === true || String(peer.disabled) === "true",
+              rx: peer.rx,
+              tx: peer.tx,
+              comment: peer.comment
             });
           }
         }
@@ -184,6 +199,56 @@ export default function PublicIpsPage() {
     setSelectedIp(ip);
     setSelectedIpPeers(peersInfo?.peers || []);
     setPeersModalOpen(true);
+  };
+
+  // Toggle peer enabled/disabled
+  const handleTogglePeer = async (peer: PeerInfo) => {
+    const action = peer.disabled ? "enablePeer" : "disablePeer";
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, routerId: selectedRouterId, data: { id: peer.id } })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(peer.disabled ? "Peer enabled" : "Peer disabled");
+        fetchPeerCounts();
+        // Update local state
+        setSelectedIpPeers(prev => prev.map(p =>
+          p.id === peer.id ? { ...p, disabled: !p.disabled } : p
+        ));
+      } else {
+        toast.error(data.error || "Failed");
+      }
+    } catch {
+      toast.error("Failed to toggle peer");
+    }
+  };
+
+  // Delete peer
+  const handleDeletePeer = async (peer: PeerInfo) => {
+    if (!confirm("Delete this peer?")) return;
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deletePeer", routerId: selectedRouterId, data: { id: peer.id } })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Peer deleted");
+        fetchPeerCounts();
+        setSelectedIpPeers(prev => prev.filter(p => p.id !== peer.id));
+        if (peerDetailOpen && selectedPeerDetail?.id === peer.id) {
+          setPeerDetailOpen(false);
+        }
+      } else {
+        toast.error(data.error || "Failed to delete");
+      }
+    } catch {
+      toast.error("Failed to delete peer");
+    }
   };
 
   // Filter IPs by search
@@ -317,13 +382,13 @@ export default function PublicIpsPage() {
         </div>
       </PageContent>
 
-      {/* Peers Modal */}
+      {/* Peers Modal - Interactive */}
       <Dialog open={peersModalOpen} onOpenChange={setPeersModalOpen}>
         <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
             <DialogTitle>Peers using {selectedIp?.public_ip}</DialogTitle>
             <DialogDescription>
-              {selectedIpPeers.length} peer(s) configured with this public IP
+              {selectedIpPeers.length} peer(s) configured with this public IP. Click on a peer to view details.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
@@ -334,18 +399,51 @@ export default function PublicIpsPage() {
                 {selectedIpPeers.map((peer) => (
                   <div
                     key={peer.id}
-                    className="flex items-center justify-between p-4 bg-secondary rounded-lg"
+                    className="flex items-center justify-between p-4 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors"
                   >
-                    <div>
-                      <p className="font-medium">{peer.name}</p>
-                      <p className="text-sm text-muted-foreground font-mono">{peer.address}</p>
-                    </div>
-                    <Badge
-                      variant="outline"
-                      className={peer.disabled ? "text-red-400" : "text-emerald-400"}
+                    <button
+                      type="button"
+                      className="flex-1 text-left"
+                      onClick={() => {
+                        setSelectedPeerDetail(peer);
+                        setPeerDetailOpen(true);
+                      }}
                     >
-                      {peer.disabled ? "Disabled" : "Enabled"}
-                    </Badge>
+                      <p className="font-medium hover:text-primary transition-colors">{peer.name}</p>
+                      <p className="text-sm text-muted-foreground font-mono">{peer.address}</p>
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSelectedPeerDetail(peer);
+                          setPeerDetailOpen(true);
+                        }}
+                        className="gap-1"
+                        title="View details"
+                      >
+                        <Eye className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleTogglePeer(peer)}
+                        className={peer.disabled ? "gap-1 text-emerald-400 hover:text-emerald-300" : "gap-1 text-amber-400 hover:text-amber-300"}
+                        title={peer.disabled ? "Enable peer" : "Disable peer"}
+                      >
+                        {peer.disabled ? <Power className="w-4 h-4" /> : <PowerOff className="w-4 h-4" />}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleDeletePeer(peer)}
+                        className="gap-1 text-red-400 hover:text-red-300"
+                        title="Delete peer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -353,6 +451,95 @@ export default function PublicIpsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPeersModalOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Peer Detail Dialog */}
+      <Dialog open={peerDetailOpen} onOpenChange={setPeerDetailOpen}>
+        <DialogContent className="bg-card border-border max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{selectedPeerDetail?.name || "Peer Details"}</DialogTitle>
+            <DialogDescription>
+              {selectedPeerDetail?.comment || selectedPeerDetail?.address}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedPeerDetail && (
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Name</Label>
+                  <p className="font-mono text-sm">{selectedPeerDetail.name || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Interface</Label>
+                  <p className="font-mono text-sm">{selectedPeerDetail.interface || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Allowed Address</Label>
+                  <p className="font-mono text-sm text-cyan-400">{selectedPeerDetail.address || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Public IP</Label>
+                  <p className="font-mono text-sm text-emerald-400">{selectedPeerDetail.comment || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Status</Label>
+                  <Badge variant="outline" className={selectedPeerDetail.disabled ? "text-red-400" : "text-emerald-400"}>
+                    {selectedPeerDetail.disabled ? "Disabled" : "Enabled"}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Configuration</Label>
+                <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
+{`[Interface]
+PrivateKey = [CLIENT_PRIVATE_KEY]
+Address = ${selectedPeerDetail.address?.split("/")[0]}/32
+DNS = 8.8.8.8
+
+[Peer]
+PublicKey = [SERVER_PUBLIC_KEY]
+AllowedIPs = 0.0.0.0/0
+Endpoint = ${selectedPeerDetail.comment || "server"}:13231
+PersistentKeepalive = 25`}
+                </pre>
+              </div>
+
+              <div className="flex gap-2 pt-4 border-t border-border">
+                <Button
+                  variant="outline"
+                  onClick={() => handleTogglePeer(selectedPeerDetail)}
+                  className="gap-2"
+                >
+                  {selectedPeerDetail.disabled ? (
+                    <>
+                      <Power className="w-4 h-4 text-emerald-400" />
+                      Enable
+                    </>
+                  ) : (
+                    <>
+                      <PowerOff className="w-4 h-4 text-amber-400" />
+                      Disable
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleDeletePeer(selectedPeerDetail)}
+                  className="gap-2 ml-auto"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPeerDetailOpen(false)}>
+              Close
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
