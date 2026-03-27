@@ -2,6 +2,13 @@ import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
+// Default capabilities for new users
+const DEFAULT_CAPABILITIES = {
+  can_auto_expire: false,
+  can_see_all_peers: false,
+  can_use_restricted_ips: false,
+};
+
 export async function POST(request: Request) {
   const supabase = await createClient();
 
@@ -22,18 +29,24 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { email, password, username, role } = body;
+  const { email, password, username, role, capabilities } = body;
 
   if (!email || !password) {
     return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
   }
+
+  // Merge provided capabilities with defaults
+  const userCapabilities = {
+    ...DEFAULT_CAPABILITIES,
+    ...(capabilities || {}),
+  };
 
   // Try to use admin client if service role is available
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 
   if (serviceRoleKey && supabaseUrl) {
-    // Use admin API - this won't auto-login
+    // Use admin API - this won't auto-login the admin
     const adminClient = createAdminClient(supabaseUrl, serviceRoleKey, {
       auth: {
         autoRefreshToken: false,
@@ -58,13 +71,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
     }
 
-    // Update the user's profile
+    // Update the user's profile with role and capabilities
     const { error: profileError } = await adminClient
       .from("profiles")
       .update({
         role: role || "user",
         username: username || email.split("@")[0],
-        capabilities: {}
+        capabilities: userCapabilities
       })
       .eq("id", authData.user.id);
 
@@ -81,45 +94,11 @@ export async function POST(request: Request) {
     });
   }
 
-  // Fallback: Use regular signUp (will cause auto-login issue)
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email,
-    password,
-    options: {
-      data: {
-        username: username || email.split("@")[0],
-      },
-    },
-  });
-
-  if (authError) {
-    return NextResponse.json({ error: authError.message }, { status: 400 });
-  }
-
-  if (!authData.user) {
-    return NextResponse.json({ error: "Failed to create user" }, { status: 500 });
-  }
-
-  // Update the user's role if specified
-  if (role && role !== "user") {
-    const { error: roleError } = await supabase
-      .from("profiles")
-      .update({ role, username: username || email.split("@")[0] })
-      .eq("id", authData.user.id);
-
-    if (roleError) {
-      console.error("Failed to update role:", roleError);
-    }
-  }
-
+  // Service role not configured - return error instead of causing auto-login
   return NextResponse.json({
-    success: true,
-    user: {
-      id: authData.user.id,
-      email: authData.user.email
-    },
-    warning: "User created but you may need to re-login as admin (service role not configured)"
-  });
+    error: "Server configuration error: SUPABASE_SERVICE_ROLE_KEY is required to create users without auto-login. Please configure the service role key in your environment variables.",
+    code: "SERVICE_ROLE_REQUIRED"
+  }, { status: 500 });
 }
 
 export async function DELETE(request: Request) {

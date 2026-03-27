@@ -501,9 +501,19 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (data.error) {
-        toast.error(data.error);
+        if (data.code === "SERVICE_ROLE_REQUIRED") {
+          toast.error("Server config error: Service role key required", {
+            description: "Contact your administrator to configure SUPABASE_SERVICE_ROLE_KEY",
+            duration: 8000
+          });
+        } else {
+          toast.error(data.error);
+        }
       } else {
-        toast.success("User created");
+        toast.success("User created successfully");
+        if (data.warning) {
+          toast.warning(data.warning, { duration: 5000 });
+        }
         setAddUserOpen(false);
         setNewUser({ email: "", password: "", username: "", role: "user" });
         fetchUsers();
@@ -584,7 +594,7 @@ export default function AdminPage() {
     setEditCapabilitiesOpen(true);
   };
 
-  // Save user capabilities
+  // Save user capabilities using dedicated API endpoint
   const handleSaveCapabilities = async () => {
     if (!editingUser) return;
     setSavingCapabilities(true);
@@ -596,13 +606,19 @@ export default function AdminPage() {
         can_use_restricted_ips: editingCapabilities.can_use_restricted_ips === true,
       };
 
-      const { error } = await supabase
-        .from("profiles")
-        .update({ capabilities: capabilitiesToSave })
-        .eq("id", editingUser.id);
+      const res = await fetch("/api/users/capabilities", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: editingUser.id,
+          capabilities: capabilitiesToSave
+        })
+      });
 
-      if (error) {
-        toast.error("Failed to update capabilities: " + error.message);
+      const data = await res.json();
+
+      if (data.error) {
+        toast.error("Failed to update capabilities: " + data.error);
       } else {
         toast.success("Capabilities updated successfully");
         setEditCapabilitiesOpen(false);

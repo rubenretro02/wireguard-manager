@@ -663,7 +663,10 @@ PersistentKeepalive = 25`;
               <h2 className="text-lg font-semibold">
                 Peers
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  ({filteredPeers.length}{!canSeeAllPeers && ` of ${peers.length}`})
+                  {canSeeAllPeers
+                    ? `(${filteredPeers.length})`
+                    : `(${filteredPeers.length})`
+                  }
                 </span>
               </h2>
               {!canSeeAllPeers && (

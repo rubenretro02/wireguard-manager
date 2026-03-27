@@ -1,37 +1,40 @@
-# WireGuard Manager - Nuevas Funcionalidades
+# WireGuard Manager - Tasks
 
-## Tareas Pendientes
+## Completed ✅
 
-### 1. Columnas Created At/By en Dashboard para Peers
-- [ ] Agregar columnas Created At y Created By en tabla de peers
-- [ ] Guardar metadata de peers en base de datos
+- [x] Fix privacy issue: Remove total peer count shown to users who can't see all peers
+- [x] Fix capabilities update: Create dedicated API endpoint with service role support
+- [x] Fix auto-login on user creation: Return error if service role not configured instead of auto-logging in
+- [x] Create migration script v5 for RLS policy fixes
+- [x] Update README with configuration instructions
 
-### 2. Sistema de Auto-Disable/Enable por Tiempo
-- [ ] Agregar campo expires_at en peer_metadata
-- [ ] Crear sistema de expiración por horas o días
-- [ ] Capability para habilitar esta función por usuario
+## Requirements for Full Functionality
 
-### 3. Sistema de Capabilities por Usuario
-- [ ] Agregar campo capabilities en profiles (JSON)
-- [ ] Capabilities: can_auto_expire, can_see_all_peers
-- [ ] UI en admin para gestionar capabilities
+1. **SUPABASE_SERVICE_ROLE_KEY** must be set in environment variables for:
+   - Creating users without auto-login
+   - Updating user capabilities
 
-### 4. Modal Interactivo de Peers desde IP
-- [ ] Hacer peers clickeables en el modal
-- [ ] Agregar botones: Enable/Disable, Edit, Delete
-- [ ] Dialog para editar peer
+2. **Run Migration V5** in Supabase SQL Editor:
+   - `scripts/migration-v5-fix-capabilities-rls.sql`
 
-### 5. Filtro de Peers por Creador
-- [ ] Usuarios solo ven sus peers
-- [ ] Capability para ver todos los peers
-- [ ] Admins ven todos
+## Changes Made (March 27, 2026)
 
-### 6. Bug Fix: Usuario no puede crear peer
-- [ ] Arreglar problema de IPs públicas vacías para usuarios
+### Dashboard (`src/app/dashboard/page.tsx`)
+- Removed "of X" from peer count for non-admin users to prevent information leakage
 
-## Progreso
-- [ ] Crear migración SQL
-- [ ] Actualizar tipos TypeScript
-- [ ] Modificar APIs
-- [ ] Modificar Dashboard
-- [ ] Modificar Admin Panel
+### Admin API (`src/app/api/users/route.ts`)
+- Now returns clear error if service role key not configured
+- Better error handling for user creation
+
+### New Capabilities API (`src/app/api/users/capabilities/route.ts`)
+- New dedicated endpoint for updating user capabilities
+- Uses service role client to bypass RLS
+- Validates capabilities before saving
+
+### Admin Page (`src/app/admin/page.tsx`)
+- Uses new capabilities API endpoint
+- Better error messages for service role issues
+
+### Documentation
+- Updated README with complete setup instructions
+- Added troubleshooting section
