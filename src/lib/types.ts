@@ -3,7 +3,8 @@ export type UserRole = "admin" | "user";
 export interface UserCapabilities {
   can_auto_expire?: boolean;
   can_see_all_peers?: boolean;
-  can_use_restricted_ips?: boolean;
+  can_use_restricted_ips?: boolean;    // Can CREATE peers with restricted IPs
+  can_see_restricted_peers?: boolean;  // Can SEE peers that use restricted IPs
 }
 
 export interface Profile {

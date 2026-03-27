@@ -25,12 +25,17 @@ CREATE POLICY "Admins can update all profiles"
   );
 
 -- Ensure capabilities column has proper default
-ALTER TABLE profiles ALTER COLUMN capabilities SET DEFAULT '{"can_auto_expire": false, "can_see_all_peers": false, "can_use_restricted_ips": false}'::jsonb;
+ALTER TABLE profiles ALTER COLUMN capabilities SET DEFAULT '{"can_auto_expire": false, "can_see_all_peers": false, "can_use_restricted_ips": false, "can_see_restricted_peers": false}'::jsonb;
 
 -- Update any NULL or empty capabilities to defaults
 UPDATE profiles
-SET capabilities = '{"can_auto_expire": false, "can_see_all_peers": false, "can_use_restricted_ips": false}'::jsonb
+SET capabilities = '{"can_auto_expire": false, "can_see_all_peers": false, "can_use_restricted_ips": false, "can_see_restricted_peers": false}'::jsonb
 WHERE capabilities IS NULL;
+
+-- Add new capability to existing users who don't have it
+UPDATE profiles
+SET capabilities = capabilities || '{"can_see_restricted_peers": false}'::jsonb
+WHERE capabilities IS NOT NULL AND NOT capabilities ? 'can_see_restricted_peers';
 
 -- Make sure admins have full capabilities
 UPDATE profiles

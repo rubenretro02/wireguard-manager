@@ -103,7 +103,8 @@ export default function DashboardPage() {
   const isAdmin = profile?.role === "admin";
   const canAutoExpire = isAdmin || capabilities.can_auto_expire;
   const canSeeAllPeers = isAdmin || capabilities.can_see_all_peers;
-  const canUseRestrictedIps = isAdmin || capabilities.can_use_restricted_ips;
+  const canUseRestrictedIps = isAdmin || capabilities.can_use_restricted_ips;     // For CREATING peers
+  const canSeeRestrictedPeers = isAdmin || capabilities.can_see_restricted_peers; // For VIEWING peers
 
   // Get restricted IPs for filtering
   const restrictedIps = useMemo(() => {
@@ -123,8 +124,8 @@ export default function DashboardPage() {
       });
     }
 
-    // Also filter by restricted IPs
-    if (!canUseRestrictedIps) {
+    // Filter by restricted IPs visibility (separate from creation capability)
+    if (!canSeeRestrictedPeers) {
       visible = visible.filter((peer) => {
         const peerIp = peer.comment || "";
         return !restrictedIps.has(peerIp);
@@ -132,7 +133,7 @@ export default function DashboardPage() {
     }
 
     return visible;
-  }, [peers, canSeeAllPeers, profile, peerMetadata, canUseRestrictedIps, restrictedIps]);
+  }, [peers, canSeeAllPeers, profile, peerMetadata, canSeeRestrictedPeers, restrictedIps]);
 
   // Stats - only show stats for peers the user can see
   const stats = useMemo(() => {
@@ -168,8 +169,8 @@ export default function DashboardPage() {
       });
     }
 
-    // Filter out peers with restricted IPs if user can't use them
-    if (!canUseRestrictedIps) {
+    // Filter out peers with restricted IPs if user can't SEE them
+    if (!canSeeRestrictedPeers) {
       filtered = filtered.filter((peer) => {
         const peerIp = peer.comment || "";
         // If peer's public IP (in comment) is restricted, hide it
@@ -208,7 +209,7 @@ export default function DashboardPage() {
     });
 
     return sorted;
-  }, [peers, searchQuery, statusFilter, sortOrder, canSeeAllPeers, profile, peerMetadata, canUseRestrictedIps, restrictedIps]);
+  }, [peers, searchQuery, statusFilter, sortOrder, canSeeAllPeers, profile, peerMetadata, canSeeRestrictedPeers, restrictedIps]);
 
   useEffect(() => {
     const checkAuth = async () => {

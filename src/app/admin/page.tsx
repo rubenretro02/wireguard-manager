@@ -589,7 +589,8 @@ export default function AdminPage() {
     setEditingCapabilities(user.capabilities || {
       can_auto_expire: false,
       can_see_all_peers: false,
-      can_use_restricted_ips: false
+      can_use_restricted_ips: false,
+      can_see_restricted_peers: false
     });
     setEditCapabilitiesOpen(true);
   };
@@ -604,6 +605,7 @@ export default function AdminPage() {
         can_auto_expire: editingCapabilities.can_auto_expire === true,
         can_see_all_peers: editingCapabilities.can_see_all_peers === true,
         can_use_restricted_ips: editingCapabilities.can_use_restricted_ips === true,
+        can_see_restricted_peers: editingCapabilities.can_see_restricted_peers === true,
       };
 
       const res = await fetch("/api/users/capabilities", {
@@ -1060,10 +1062,16 @@ export default function AdminPage() {
                               {caps.can_use_restricted_ips && (
                                 <Badge variant="outline" className="text-xs px-1 text-emerald-400 border-emerald-400">
                                   <Lock className="w-3 h-3 mr-1" />
-                                  IPs
+                                  UseIP
                                 </Badge>
                               )}
-                              {!caps.can_auto_expire && !caps.can_see_all_peers && !caps.can_use_restricted_ips && (
+                              {caps.can_see_restricted_peers && (
+                                <Badge variant="outline" className="text-xs px-1 text-purple-400 border-purple-400">
+                                  <Eye className="w-3 h-3 mr-1" />
+                                  SeeIP
+                                </Badge>
+                              )}
+                              {!caps.can_auto_expire && !caps.can_see_all_peers && !caps.can_use_restricted_ips && !caps.can_see_restricted_peers && (
                                 <span className="text-muted-foreground text-xs">None</span>
                               )}
                             </div>
@@ -1461,7 +1469,7 @@ export default function AdminPage() {
                   <div>
                     <p className="font-medium">Use Restricted IPs</p>
                     <p className="text-sm text-muted-foreground">
-                      Can use IPs marked as restricted
+                      Can CREATE peers with restricted IPs
                     </p>
                   </div>
                 </div>
@@ -1475,6 +1483,34 @@ export default function AdminPage() {
                   className={editingCapabilities.can_use_restricted_ips ? "text-emerald-400" : "text-muted-foreground"}
                 >
                   {editingCapabilities.can_use_restricted_ips ? (
+                    <ToggleRight className="w-8 h-8" />
+                  ) : (
+                    <ToggleLeft className="w-8 h-8" />
+                  )}
+                </Button>
+              </div>
+
+              {/* Can See Restricted Peers */}
+              <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Eye className="w-5 h-5 text-amber-400" />
+                  <div>
+                    <p className="font-medium">See Restricted Peers</p>
+                    <p className="text-sm text-muted-foreground">
+                      Can SEE peers that use restricted IPs
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingCapabilities({
+                    ...editingCapabilities,
+                    can_see_restricted_peers: !editingCapabilities.can_see_restricted_peers
+                  })}
+                  className={editingCapabilities.can_see_restricted_peers ? "text-emerald-400" : "text-muted-foreground"}
+                >
+                  {editingCapabilities.can_see_restricted_peers ? (
                     <ToggleRight className="w-8 h-8" />
                   ) : (
                     <ToggleLeft className="w-8 h-8" />

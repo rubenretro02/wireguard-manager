@@ -34,6 +34,7 @@ export async function PATCH(request: Request) {
     can_auto_expire: capabilities?.can_auto_expire === true,
     can_see_all_peers: capabilities?.can_see_all_peers === true,
     can_use_restricted_ips: capabilities?.can_use_restricted_ips === true,
+    can_see_restricted_peers: capabilities?.can_see_restricted_peers === true,
   };
 
   // Try to use admin client if service role is available (bypasses RLS)

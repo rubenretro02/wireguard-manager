@@ -24,6 +24,7 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
+  { name: "Public IPs", href: "/public-ips", icon: Globe, adminOnly: false },
   { name: "Admin Panel", href: "/admin", icon: Server, adminOnly: true },
 ];
 
