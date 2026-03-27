@@ -56,6 +56,7 @@ export default function DashboardPage() {
   const [peers, setPeers] = useState<PeerWithMetadata[]>([]);
   const [peerMetadata, setPeerMetadata] = useState<Record<string, PeerMetadata>>({});
   const [publicIps, setPublicIps] = useState<PublicIP[]>([]);
+  const [allPublicIps, setAllPublicIps] = useState<PublicIP[]>([]); // All IPs including restricted
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -102,16 +103,36 @@ export default function DashboardPage() {
   const isAdmin = profile?.role === "admin";
   const canAutoExpire = isAdmin || capabilities.can_auto_expire;
   const canSeeAllPeers = isAdmin || capabilities.can_see_all_peers;
+  const canUseRestrictedIps = isAdmin || capabilities.can_use_restricted_ips;
+
+  // Get restricted IPs for filtering
+  const restrictedIps = useMemo(() => {
+    return new Set(allPublicIps.filter(ip => ip.restricted).map(ip => ip.public_ip));
+  }, [allPublicIps]);
 
   // Get visible peers for this user (for stats calculation)
+  // This uses the same filtering logic as filteredPeers but without search/status filters
   const visiblePeers = useMemo(() => {
-    if (canSeeAllPeers || !profile) return peers;
-    return peers.filter((peer) => {
-      const meta = peerMetadata[peer["public-key"]];
-      if (!meta) return false;
-      return meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
-    });
-  }, [peers, canSeeAllPeers, profile, peerMetadata]);
+    let visible = peers;
+
+    if (!canSeeAllPeers && profile) {
+      visible = visible.filter((peer) => {
+        const meta = peerMetadata[peer["public-key"]];
+        if (!meta) return false;
+        return meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
+      });
+    }
+
+    // Also filter by restricted IPs
+    if (!canUseRestrictedIps) {
+      visible = visible.filter((peer) => {
+        const peerIp = peer.comment || "";
+        return !restrictedIps.has(peerIp);
+      });
+    }
+
+    return visible;
+  }, [peers, canSeeAllPeers, profile, peerMetadata, canUseRestrictedIps, restrictedIps]);
 
   // Stats - only show stats for peers the user can see
   const stats = useMemo(() => {
@@ -147,6 +168,15 @@ export default function DashboardPage() {
       });
     }
 
+    // Filter out peers with restricted IPs if user can't use them
+    if (!canUseRestrictedIps) {
+      filtered = filtered.filter((peer) => {
+        const peerIp = peer.comment || "";
+        // If peer's public IP (in comment) is restricted, hide it
+        return !restrictedIps.has(peerIp);
+      });
+    }
+
     // Apply status filter
     filtered = filtered.filter((peer) => {
       const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
@@ -178,7 +208,7 @@ export default function DashboardPage() {
     });
 
     return sorted;
-  }, [peers, searchQuery, statusFilter, sortOrder, canSeeAllPeers, profile, peerMetadata]);
+  }, [peers, searchQuery, statusFilter, sortOrder, canSeeAllPeers, profile, peerMetadata, canUseRestrictedIps, restrictedIps]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -306,6 +336,9 @@ export default function DashboardPage() {
       const res = await fetch(`/api/public-ips?routerId=${selectedRouterId}`);
       const data = await res.json();
       if (data.publicIps) {
+        // Store all IPs for filtering peers visibility
+        setAllPublicIps(data.publicIps);
+
         // Filter: only enabled IPs, and if user is not admin and doesn't have capability, exclude restricted IPs
         const canUseRestricted = isAdmin || capabilities.can_use_restricted_ips;
         setPublicIps(data.publicIps.filter((ip: PublicIP) => {
@@ -1024,7 +1057,7 @@ PersistentKeepalive = 25`;
                 <PopoverContent className="w-[300px] p-0" align="start">
                   <Command>
                     <CommandInput placeholder="Type IP to search..." className="font-mono" />
-                    <CommandList>
+                    <CommandList className="max-h-[250px] overflow-y-auto">
                       <CommandEmpty>No IP found.</CommandEmpty>
                       <CommandGroup>
                         {publicIps.map((ip) => (
@@ -1035,7 +1068,7 @@ PersistentKeepalive = 25`;
                               setSelectedPublicIpId(ip.id);
                               setIpComboboxOpen(false);
                             }}
-                            className="font-mono"
+                            className="font-mono cursor-pointer"
                           >
                             <Check
                               className={`mr-2 h-4 w-4 ${
