@@ -109,3 +109,66 @@ export interface WireGuardPeer {
   disabled: boolean;
   comment?: string;
 }
+
+export interface RouterClient {
+  id: string;
+  name: string;
+  host: string;
+  api_port: number;
+  username: string;
+  password: string;
+  use_ssl: boolean;
+  // Estado
+  is_online: boolean;
+  last_seen: string | null;
+  last_error: string | null;
+  // Info del router
+  router_model: string | null;
+  router_os_version: string | null;
+  uptime: string | null;
+  cpu_load: number | null;
+  memory_used: number | null;
+  memory_total: number | null;
+  // VPN Status
+  vpn_configured: boolean;
+  vpn_interface_name: string | null;
+  vpn_connected: boolean;
+  vpn_last_handshake: string | null;
+  // Configuración VPN (peer info)
+  vpn_private_key: string | null;
+  vpn_address: string | null;
+  vpn_peer_public_key: string | null;
+  vpn_endpoint_ip: string | null;
+  vpn_endpoint_port: number | null;
+  vpn_dns1: string | null;
+  vpn_dns2: string | null;
+  vpn_mtu: number;
+  // Metadata
+  notes: string | null;
+  tags: string[] | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RouterClientLog {
+  id: string;
+  router_client_id: string;
+  action: string;
+  status: "success" | "error" | "pending";
+  details: string | null;
+  executed_by: string | null;
+  created_at: string;
+}
+
+export interface VpnPeerConfig {
+  privateKey: string;
+  address: string;
+  peerPublicKey: string;
+  endpointIP: string;
+  endpointPort: number;
+  dns1: string;
+  dns2: string;
+  mtu: number;
+  keepalive: number;
+}

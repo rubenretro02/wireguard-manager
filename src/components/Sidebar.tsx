@@ -9,6 +9,7 @@ import {
   Settings,
   Shield,
   Server,
+  Router,
   LogOut,
   ChevronLeft,
   ChevronRight
@@ -25,6 +26,7 @@ interface SidebarProps {
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
   { name: "Public IPs", href: "/public-ips", icon: Globe, adminOnly: false },
+  { name: "Router Clients", href: "/router-clients", icon: Router, adminOnly: false },
   { name: "Admin Panel", href: "/admin", icon: Server, adminOnly: true },
 ];
 
@@ -69,7 +71,6 @@ export function Sidebar({ userRole = "user", userEmail, onLogout }: SidebarProps
         {filteredNav.map((item) => {
           const isActive = pathname === item.href ||
             (item.href !== "/dashboard" && pathname.startsWith(item.href));
-
           return (
             <Link
               key={item.name}
