@@ -86,6 +86,12 @@ export default function DashboardPage() {
   const [managingPeer, setManagingPeer] = useState<PeerWithMetadata | null>(null);
   const [peerAction, setPeerAction] = useState<"edit" | "view" | null>(null);
 
+  // Renew peer dialog (for expired peers)
+  const [renewDialogOpen, setRenewDialogOpen] = useState(false);
+  const [renewingPeer, setRenewingPeer] = useState<PeerWithMetadata | null>(null);
+  const [renewHours, setRenewHours] = useState<number>(24);
+  const [renewing, setRenewing] = useState(false);
+
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -331,6 +337,57 @@ export default function DashboardPage() {
     setRefreshing(false);
   }, [selectedRouterId, newPeer.interface, fetchPeerMetadata]);
 
+  // Auto-disable expired peers
+  const autoDisableExpiredPeers = useCallback(async () => {
+    if (!selectedRouterId || Object.keys(peerMetadata).length === 0) return;
+
+    const now = new Date();
+    const expiredPeers: PeerWithMetadata[] = [];
+
+    for (const peer of peers) {
+      const meta = peerMetadata[peer["public-key"]];
+      if (!meta?.expires_at || !meta.auto_disable_enabled) continue;
+
+      const expiresAt = new Date(meta.expires_at);
+      const isExpired = expiresAt < now;
+      const isEnabled = !(peer.disabled === true || String(peer.disabled) === "true");
+
+      // If peer is expired and still enabled, add to list to disable
+      if (isExpired && isEnabled) {
+        expiredPeers.push(peer);
+      }
+    }
+
+    // Disable all expired peers
+    for (const peer of expiredPeers) {
+      try {
+        const res = await fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "disablePeer", routerId: selectedRouterId, data: { id: peer[".id"] } })
+        });
+        const data = await res.json();
+        if (data.success) {
+          toast.info(`Peer "${peer.name || 'Unnamed'}" auto-disabled (expired)`);
+        }
+      } catch (err) {
+        console.error("Failed to auto-disable peer:", err);
+      }
+    }
+
+    // Refresh data if any peers were disabled
+    if (expiredPeers.length > 0) {
+      fetchWireGuardData();
+    }
+  }, [selectedRouterId, peers, peerMetadata, fetchWireGuardData]);
+
+  // Run auto-disable check when peers and metadata are loaded
+  useEffect(() => {
+    if (peers.length > 0 && Object.keys(peerMetadata).length > 0) {
+      autoDisableExpiredPeers();
+    }
+  }, [peers.length, Object.keys(peerMetadata).length]); // Only run when counts change, not on every render
+
   const fetchPublicIps = useCallback(async () => {
     if (!selectedRouterId) return;
     try {
@@ -466,6 +523,31 @@ export default function DashboardPage() {
   };
 
   const handleTogglePeer = async (id: string, disabled: boolean) => {
+    // Find the peer
+    const peer = peers.find(p => p[".id"] === id);
+    if (!peer) {
+      toast.error("Peer not found");
+      return;
+    }
+
+    // If trying to enable a disabled peer, check if it's expired
+    if (disabled) {
+      const meta = peerMetadata[peer["public-key"]];
+      if (meta?.expires_at) {
+        const expiresAt = new Date(meta.expires_at);
+        const isExpired = expiresAt < new Date();
+
+        if (isExpired) {
+          // Open renewal dialog instead of enabling directly
+          setRenewingPeer(peer);
+          setRenewHours(meta.expiration_hours || 24);
+          setRenewDialogOpen(true);
+          return;
+        }
+      }
+    }
+
+    // Normal toggle
     const action = disabled ? "enablePeer" : "disablePeer";
     const res = await fetch("/api/wireguard", {
       method: "POST",
@@ -479,6 +561,59 @@ export default function DashboardPage() {
     } else {
       toast.error(data.error || "Failed");
     }
+  };
+
+  // Handle renewing an expired peer
+  const handleRenewPeer = async () => {
+    if (!renewingPeer || !selectedRouterId) return;
+
+    setRenewing(true);
+    try {
+      // First, enable the peer
+      const enableRes = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "enablePeer", routerId: selectedRouterId, data: { id: renewingPeer[".id"] } })
+      });
+      const enableData = await enableRes.json();
+
+      if (!enableData.success) {
+        toast.error(enableData.error || "Failed to enable peer");
+        setRenewing(false);
+        return;
+      }
+
+      // Calculate new expiration date
+      const newExpiresAt = new Date();
+      newExpiresAt.setHours(newExpiresAt.getHours() + renewHours);
+
+      // Update metadata with new expiration
+      const { error } = await supabase
+        .from("peer_metadata")
+        .update({
+          expires_at: newExpiresAt.toISOString(),
+          expiration_hours: renewHours,
+          auto_disable_enabled: true
+        })
+        .eq("router_id", selectedRouterId)
+        .eq("peer_public_key", renewingPeer["public-key"]);
+
+      if (error) {
+        console.error("Failed to update metadata:", error);
+        toast.warning("Peer enabled but failed to update expiration");
+      } else {
+        toast.success(`Peer renewed for ${renewHours} hours`);
+      }
+
+      setRenewDialogOpen(false);
+      setRenewingPeer(null);
+      fetchWireGuardData();
+      fetchPeerMetadata();
+    } catch (err) {
+      console.error("Failed to renew peer:", err);
+      toast.error("Failed to renew peer");
+    }
+    setRenewing(false);
   };
 
   // Start inline editing
@@ -1276,6 +1411,89 @@ PersistentKeepalive = 25`;
           <DialogFooter>
             <Button variant="outline" onClick={() => setPeerManageOpen(false)}>
               Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Renew Peer Dialog */}
+      <Dialog open={renewDialogOpen} onOpenChange={setRenewDialogOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Timer className="w-5 h-5 text-amber-400" />
+              Renew Expired Peer
+            </DialogTitle>
+            <DialogDescription>
+              This peer has expired. Choose how long to renew it for.
+            </DialogDescription>
+          </DialogHeader>
+          {renewingPeer && (
+            <div className="space-y-4 py-4">
+              <div className="p-4 bg-secondary rounded-lg space-y-2">
+                <p className="font-medium">{renewingPeer.name || "Unnamed Peer"}</p>
+                <p className="text-sm text-muted-foreground font-mono">{renewingPeer["allowed-address"]}</p>
+                <p className="text-sm text-muted-foreground">
+                  Public IP: <span className="text-emerald-400">{renewingPeer.comment || "-"}</span>
+                </p>
+                {peerMetadata[renewingPeer["public-key"]]?.expires_at && (
+                  <p className="text-sm text-red-400">
+                    Expired: {formatDate(peerMetadata[renewingPeer["public-key"]]?.expires_at)}
+                  </p>
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label>Renewal Duration</Label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[24, 48, 72, 168].map((hours) => (
+                    <Button
+                      key={hours}
+                      variant={renewHours === hours ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => setRenewHours(hours)}
+                      className="w-full"
+                    >
+                      {hours < 24 ? `${hours}h` : `${hours / 24}d`}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <Label className="text-sm">Custom:</Label>
+                  <Input
+                    type="number"
+                    value={renewHours}
+                    onChange={(e) => setRenewHours(parseInt(e.target.value) || 24)}
+                    className="w-24 bg-secondary"
+                    min={1}
+                  />
+                  <span className="text-sm text-muted-foreground">hours</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+                <p className="text-sm text-amber-400">
+                  The peer will be enabled and set to expire in {renewHours} hours ({Math.floor(renewHours / 24)} days {renewHours % 24} hours).
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenewDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleRenewPeer} disabled={renewing} className="gap-2">
+              {renewing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Renewing...
+                </>
+              ) : (
+                <>
+                  <Power className="w-4 h-4" />
+                  Renew & Enable
+                </>
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>
