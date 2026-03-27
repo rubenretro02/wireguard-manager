@@ -24,11 +24,7 @@ interface SidebarProps {
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, adminOnly: false },
-  { name: "Peers", href: "/dashboard/peers", icon: Users, adminOnly: false },
-  { name: "Public IPs", href: "/dashboard/ips", icon: Globe, adminOnly: true },
-  { name: "Routers", href: "/admin", icon: Server, adminOnly: true },
-  { name: "Users", href: "/admin?tab=users", icon: Shield, adminOnly: true },
-  { name: "Settings", href: "/dashboard/settings", icon: Settings, adminOnly: false },
+  { name: "Admin Panel", href: "/admin", icon: Server, adminOnly: true },
 ];
 
 export function Sidebar({ userRole = "user", userEmail, onLogout }: SidebarProps) {

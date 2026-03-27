@@ -130,8 +130,10 @@ export default function DashboardPage() {
     if (!canSeeAllPeers && profile) {
       filtered = filtered.filter((peer) => {
         const meta = peerMetadata[peer["public-key"]];
-        // Show peer if created by this user OR if no metadata (legacy peers)
-        return !meta || meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
+        // Only show peer if created by this user (has matching metadata)
+        // Peers without metadata (legacy) are NOT shown to regular users
+        if (!meta) return false;
+        return meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
       });
     }
 
