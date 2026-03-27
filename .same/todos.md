@@ -1,57 +1,37 @@
-# WireGuard Manager - Tareas Completadas
+# WireGuard Manager - Nuevas Funcionalidades
 
-## Nuevas Funcionalidades Implementadas
+## Tareas Pendientes
 
-### 1. Restricción de IPs (IP Restriction) ✅
-- [x] Agregar funcionalidad para marcar IPs como restringidas
-- [x] Las IPs restringidas NO aparecen para usuarios normales al crear peers
-- [x] Solo admins pueden ver y usar IPs restringidas
-- [x] UI para toggle de restricción en panel admin (botón Lock/LockOpen)
+### 1. Columnas Created At/By en Dashboard para Peers
+- [ ] Agregar columnas Created At y Created By en tabla de peers
+- [ ] Guardar metadata de peers en base de datos
 
-### 2. Columnas Created At y Created By ✅
-- [x] Agregar columna `created_at` en tabla de public_ips en UI
-- [x] Agregar columna `created_by` en tabla de public_ips en UI
-- [x] Formatear fechas correctamente (formato español)
+### 2. Sistema de Auto-Disable/Enable por Tiempo
+- [ ] Agregar campo expires_at en peer_metadata
+- [ ] Crear sistema de expiración por horas o días
+- [ ] Capability para habilitar esta función por usuario
 
-## Archivos Modificados
+### 3. Sistema de Capabilities por Usuario
+- [ ] Agregar campo capabilities en profiles (JSON)
+- [ ] Capabilities: can_auto_expire, can_see_all_peers
+- [ ] UI en admin para gestionar capabilities
 
-1. `src/app/admin/page.tsx` - Panel de administración (reconstruido completamente)
-   - Agregada columna "Restricted" con toggle
-   - Agregada columna "Created At" con fecha formateada
-   - Agregada columna "Created By" con email del creador
-   - Función `handleToggleRestriction` para cambiar estado de restricción
+### 4. Modal Interactivo de Peers desde IP
+- [ ] Hacer peers clickeables en el modal
+- [ ] Agregar botones: Enable/Disable, Edit, Delete
+- [ ] Dialog para editar peer
 
-2. `src/app/dashboard/page.tsx` - Filtrar IPs restringidas
-   - Modificada función `fetchPublicIps` para filtrar IPs restringidas si el usuario no es admin
+### 5. Filtro de Peers por Creador
+- [ ] Usuarios solo ven sus peers
+- [ ] Capability para ver todos los peers
+- [ ] Admins ven todos
 
-3. `src/app/api/public-ips/route.ts` - Ya tenía soporte para `restricted` y `created_by`
+### 6. Bug Fix: Usuario no puede crear peer
+- [ ] Arreglar problema de IPs públicas vacías para usuarios
 
-4. `scripts/migration-v3-restricted-ips.sql` - Ya existía la migración
-
-## Cómo Funciona
-
-### Restricción de IPs:
-1. En el panel admin, ir a la pestaña "Public IPs"
-2. Cada IP tiene un botón de restricción (columna "Restricted")
-3. Al hacer clic, se alterna entre restringido y no restringido
-4. Las IPs restringidas muestran un icono de candado cerrado (Lock) en amarillo
-5. Las IPs no restringidas muestran un candado abierto (LockOpen)
-
-### Para Usuarios Normales:
-- Cuando un usuario normal (no admin) va a crear un peer
-- La lista de IPs públicas NO incluye las IPs marcadas como restringidas
-- Esto permite reservar ciertas IPs para uso exclusivo del admin
-
-### Columnas Nuevas:
-- **Created At**: Muestra la fecha y hora de creación en formato español
-- **Created By**: Muestra el email del usuario que creó el registro de IP
-
-## Nota sobre la Migración SQL
-
-El archivo `scripts/migration-v3-restricted-ips.sql` ya contiene:
-```sql
-ALTER TABLE public_ips ADD COLUMN IF NOT EXISTS restricted BOOLEAN DEFAULT false;
-ALTER TABLE public_ips ADD COLUMN IF NOT EXISTS created_by TEXT;
-```
-
-Asegúrate de ejecutar esta migración en Supabase si no lo has hecho.
+## Progreso
+- [ ] Crear migración SQL
+- [ ] Actualizar tipos TypeScript
+- [ ] Modificar APIs
+- [ ] Modificar Dashboard
+- [ ] Modificar Admin Panel

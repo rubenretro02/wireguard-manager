@@ -38,9 +38,14 @@ import {
   Clock,
   User,
   Pencil,
-  Eye
+  Eye,
+  Power,
+  PowerOff,
+  Timer,
+  ToggleLeft,
+  ToggleRight
 } from "lucide-react";
-import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter, WireGuardInterface } from "@/lib/types";
+import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter, WireGuardInterface, UserCapabilities } from "@/lib/types";
 
 interface UserRouterWithRelations extends UserRouter {
   profiles: { id: string; email: string; username: string | null } | null;
@@ -133,6 +138,12 @@ export default function AdminPage() {
   const [addAccessOpen, setAddAccessOpen] = useState(false);
   const [newAccess, setNewAccess] = useState({ user_id: "", router_id: "" });
   const [addingAccess, setAddingAccess] = useState(false);
+
+  // User Capabilities states
+  const [editCapabilitiesOpen, setEditCapabilitiesOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<Profile | null>(null);
+  const [editingCapabilities, setEditingCapabilities] = useState<UserCapabilities>({});
+  const [savingCapabilities, setSavingCapabilities] = useState(false);
 
   // Fetch routers
   const fetchRouters = useCallback(async () => {
@@ -552,6 +563,40 @@ export default function AdminPage() {
     }
   };
 
+  // Open edit capabilities dialog
+  const openEditCapabilities = (user: Profile) => {
+    setEditingUser(user);
+    setEditingCapabilities(user.capabilities || {
+      can_auto_expire: false,
+      can_see_all_peers: false,
+      can_use_restricted_ips: false
+    });
+    setEditCapabilitiesOpen(true);
+  };
+
+  // Save user capabilities
+  const handleSaveCapabilities = async () => {
+    if (!editingUser) return;
+    setSavingCapabilities(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ capabilities: editingCapabilities })
+        .eq("id", editingUser.id);
+
+      if (error) {
+        toast.error("Failed to update capabilities");
+      } else {
+        toast.success("Capabilities updated");
+        setEditCapabilitiesOpen(false);
+        fetchUsers();
+      }
+    } catch {
+      toast.error("Failed to update capabilities");
+    }
+    setSavingCapabilities(false);
+  };
+
   // View peers for IP
   const handleViewPeers = (ip: PublicIP) => {
     const peersInfo = peersByIp[ip.public_ip];
@@ -945,36 +990,81 @@ export default function AdminPage() {
                     <TableHead>Email</TableHead>
                     <TableHead>Username</TableHead>
                     <TableHead>Role</TableHead>
+                    <TableHead>Capabilities</TableHead>
                     <TableHead>Created</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {users.map((u) => (
-                    <TableRow key={u.id} className="border-border">
-                      <TableCell className="font-medium">{u.email}</TableCell>
-                      <TableCell>{u.username || "-"}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={u.role === "admin" ? "text-emerald-400" : ""}>
-                          {u.role}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {formatDate(u.created_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeleteUser(u.id)}
-                          className="text-destructive"
-                          disabled={u.id === profile?.id}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                  {users.map((u) => {
+                    const caps = u.capabilities || {};
+                    return (
+                      <TableRow key={u.id} className="border-border">
+                        <TableCell className="font-medium">{u.email}</TableCell>
+                        <TableCell>{u.username || "-"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={u.role === "admin" ? "text-emerald-400" : ""}>
+                            {u.role}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {u.role === "admin" ? (
+                            <span className="text-muted-foreground text-xs">All access</span>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {caps.can_auto_expire && (
+                                <Badge variant="outline" className="text-xs px-1 text-amber-400 border-amber-400">
+                                  <Timer className="w-3 h-3 mr-1" />
+                                  Expire
+                                </Badge>
+                              )}
+                              {caps.can_see_all_peers && (
+                                <Badge variant="outline" className="text-xs px-1 text-cyan-400 border-cyan-400">
+                                  <Eye className="w-3 h-3 mr-1" />
+                                  All
+                                </Badge>
+                              )}
+                              {caps.can_use_restricted_ips && (
+                                <Badge variant="outline" className="text-xs px-1 text-emerald-400 border-emerald-400">
+                                  <Lock className="w-3 h-3 mr-1" />
+                                  IPs
+                                </Badge>
+                              )}
+                              {!caps.can_auto_expire && !caps.can_see_all_peers && !caps.can_use_restricted_ips && (
+                                <span className="text-muted-foreground text-xs">None</span>
+                              )}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDate(u.created_at)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex justify-end gap-1">
+                            {u.role !== "admin" && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openEditCapabilities(u)}
+                                title="Edit capabilities"
+                              >
+                                <Settings className="w-4 h-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleDeleteUser(u.id)}
+                              className="text-destructive"
+                              disabled={u.id === profile?.id}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -1264,25 +1354,206 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Peers Modal */}
-      <Dialog open={peersModalOpen} onOpenChange={setPeersModalOpen}>
+      {/* Edit Capabilities Dialog */}
+      <Dialog open={editCapabilitiesOpen} onOpenChange={setEditCapabilitiesOpen}>
         <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Edit User Capabilities</DialogTitle>
+            <DialogDescription>
+              Configure permissions for {editingUser?.email}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-4">
+              {/* Can Auto Expire */}
+              <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Timer className="w-5 h-5 text-amber-400" />
+                  <div>
+                    <p className="font-medium">Auto-Expire Peers</p>
+                    <p className="text-sm text-muted-foreground">
+                      Can set expiration time when creating peers
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingCapabilities({
+                    ...editingCapabilities,
+                    can_auto_expire: !editingCapabilities.can_auto_expire
+                  })}
+                  className={editingCapabilities.can_auto_expire ? "text-emerald-400" : "text-muted-foreground"}
+                >
+                  {editingCapabilities.can_auto_expire ? (
+                    <ToggleRight className="w-8 h-8" />
+                  ) : (
+                    <ToggleLeft className="w-8 h-8" />
+                  )}
+                </Button>
+              </div>
+
+              {/* Can See All Peers */}
+              <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Eye className="w-5 h-5 text-cyan-400" />
+                  <div>
+                    <p className="font-medium">See All Peers</p>
+                    <p className="text-sm text-muted-foreground">
+                      Can view all peers, not just their own
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingCapabilities({
+                    ...editingCapabilities,
+                    can_see_all_peers: !editingCapabilities.can_see_all_peers
+                  })}
+                  className={editingCapabilities.can_see_all_peers ? "text-emerald-400" : "text-muted-foreground"}
+                >
+                  {editingCapabilities.can_see_all_peers ? (
+                    <ToggleRight className="w-8 h-8" />
+                  ) : (
+                    <ToggleLeft className="w-8 h-8" />
+                  )}
+                </Button>
+              </div>
+
+              {/* Can Use Restricted IPs */}
+              <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
+                <div className="flex items-center gap-3">
+                  <Lock className="w-5 h-5 text-emerald-400" />
+                  <div>
+                    <p className="font-medium">Use Restricted IPs</p>
+                    <p className="text-sm text-muted-foreground">
+                      Can use IPs marked as restricted
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditingCapabilities({
+                    ...editingCapabilities,
+                    can_use_restricted_ips: !editingCapabilities.can_use_restricted_ips
+                  })}
+                  className={editingCapabilities.can_use_restricted_ips ? "text-emerald-400" : "text-muted-foreground"}
+                >
+                  {editingCapabilities.can_use_restricted_ips ? (
+                    <ToggleRight className="w-8 h-8" />
+                  ) : (
+                    <ToggleLeft className="w-8 h-8" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditCapabilitiesOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveCapabilities} disabled={savingCapabilities}>
+              {savingCapabilities ? "Saving..." : "Save Capabilities"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Peers Modal - Interactive */}
+      <Dialog open={peersModalOpen} onOpenChange={setPeersModalOpen}>
+        <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
             <DialogTitle>Peers using {selectedIpForPeers?.public_ip}</DialogTitle>
             <DialogDescription>
-              {selectedIpPeers.length} peer(s) configured with this public IP
+              {selectedIpPeers.length} peer(s) configured with this public IP. Click on a peer to manage it.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
             {selectedIpPeers.length === 0 ? (
               <p className="text-muted-foreground text-center py-4">No peers found</p>
             ) : (
-              <div className="space-y-2 max-h-[300px] overflow-y-auto">
+              <div className="space-y-2 max-h-[400px] overflow-y-auto">
                 {selectedIpPeers.map((peer) => (
-                  <div key={peer.id} className="flex items-center justify-between p-3 bg-secondary rounded-lg">
-                    <div>
+                  <div
+                    key={peer.id}
+                    className="flex items-center justify-between p-4 bg-secondary rounded-lg hover:bg-secondary/80 transition-colors"
+                  >
+                    <div className="flex-1">
                       <p className="font-medium">{peer.name}</p>
                       <p className="text-sm text-muted-foreground font-mono">{peer.address}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={async () => {
+                          const action = "enablePeer";
+                          const res = await fetch("/api/wireguard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action, routerId: selectedRouterForIps, data: { id: peer.id } })
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            toast.success("Peer enabled");
+                            fetchPeerCounts();
+                          } else {
+                            toast.error(data.error || "Failed");
+                          }
+                        }}
+                        className="gap-1 text-emerald-400 hover:text-emerald-300"
+                        title="Enable peer"
+                      >
+                        <Power className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={async () => {
+                          const action = "disablePeer";
+                          const res = await fetch("/api/wireguard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action, routerId: selectedRouterForIps, data: { id: peer.id } })
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            toast.success("Peer disabled");
+                            fetchPeerCounts();
+                          } else {
+                            toast.error(data.error || "Failed");
+                          }
+                        }}
+                        className="gap-1 text-amber-400 hover:text-amber-300"
+                        title="Disable peer"
+                      >
+                        <PowerOff className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={async () => {
+                          if (!confirm("Delete this peer?")) return;
+                          const res = await fetch("/api/wireguard", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ action: "deletePeer", routerId: selectedRouterForIps, data: { id: peer.id } })
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            toast.success("Peer deleted");
+                            fetchPeerCounts();
+                            // Update local state
+                            setSelectedIpPeers(prev => prev.filter(p => p.id !== peer.id));
+                          } else {
+                            toast.error(data.error || "Failed to delete");
+                          }
+                        }}
+                        className="gap-1 text-red-400 hover:text-red-300"
+                        title="Delete peer"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
                     </div>
                   </div>
                 ))}

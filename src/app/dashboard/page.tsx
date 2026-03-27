@@ -32,12 +32,19 @@ import {
   Eye,
   Check,
   X,
-  ArrowDownUp,
   ArrowUp,
-  ChevronsUpDown
+  ChevronsUpDown,
+  Clock,
+  User,
+  Calendar,
+  Timer
 } from "lucide-react";
 import { generateKeyPair } from "@/lib/wireguard-keys";
-import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP } from "@/lib/types";
+import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities } from "@/lib/types";
+
+interface PeerWithMetadata extends WireGuardPeer {
+  metadata?: PeerMetadata;
+}
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -46,7 +53,8 @@ export default function DashboardPage() {
   const [routers, setRouters] = useState<RouterType[]>([]);
   const [selectedRouterId, setSelectedRouterId] = useState<string>("");
   const [interfaces, setInterfaces] = useState<WireGuardInterface[]>([]);
-  const [peers, setPeers] = useState<WireGuardPeer[]>([]);
+  const [peers, setPeers] = useState<PeerWithMetadata[]>([]);
+  const [peerMetadata, setPeerMetadata] = useState<Record<string, PeerMetadata>>({});
   const [publicIps, setPublicIps] = useState<PublicIP[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,27 +66,42 @@ export default function DashboardPage() {
   const [selectedPublicIpId, setSelectedPublicIpId] = useState<string>("");
   const [ipComboboxOpen, setIpComboboxOpen] = useState(false);
 
+  // Expiration settings for new peer
+  const [enableExpiration, setEnableExpiration] = useState(false);
+  const [expirationHours, setExpirationHours] = useState<number>(24);
+
   // View config dialog
   const [viewConfigOpen, setViewConfigOpen] = useState(false);
-  const [selectedPeer, setSelectedPeer] = useState<WireGuardPeer | null>(null);
+  const [selectedPeer, setSelectedPeer] = useState<PeerWithMetadata | null>(null);
 
-  // Edit mode in view dialog - terminal style
+  // Edit mode in view dialog
   const [dialogEditMode, setDialogEditMode] = useState(false);
   const [dialogEditConfig, setDialogEditConfig] = useState("");
   const [dialogUpdating, setDialogUpdating] = useState(false);
   const [dialogPublicKey, setDialogPublicKey] = useState("");
+
+  // Peer management dialog (from admin IP modal)
+  const [peerManageOpen, setPeerManageOpen] = useState(false);
+  const [managingPeer, setManagingPeer] = useState<PeerWithMetadata | null>(null);
+  const [peerAction, setPeerAction] = useState<"edit" | "view" | null>(null);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
 
-  // Inline Edit - no dialog, edit directly in row
+  // Inline Edit
   const [editingPeerId, setEditingPeerId] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editAllowedAddress, setEditAllowedAddress] = useState("");
   const [editComment, setEditComment] = useState("");
   const [updating, setUpdating] = useState(false);
+
+  // User capabilities
+  const capabilities: UserCapabilities = profile?.capabilities || {};
+  const isAdmin = profile?.role === "admin";
+  const canAutoExpire = isAdmin || capabilities.can_auto_expire;
+  const canSeeAllPeers = isAdmin || capabilities.can_see_all_peers;
 
   // Stats
   const stats = useMemo(() => {
@@ -99,26 +122,43 @@ export default function DashboardPage() {
     return { total, active, disabled, uniqueSubnets };
   }, [peers]);
 
-  // Filter and sort peers
+  // Filter peers based on user permissions
   const filteredPeers = useMemo(() => {
-    const filtered = peers.filter((peer) => {
+    let filtered = peers;
+
+    // Filter by creator if user can't see all peers
+    if (!canSeeAllPeers && profile) {
+      filtered = filtered.filter((peer) => {
+        const meta = peerMetadata[peer["public-key"]];
+        // Show peer if created by this user OR if no metadata (legacy peers)
+        return !meta || meta.created_by_user_id === profile.id || meta.created_by_email === profile.email;
+      });
+    }
+
+    // Apply status filter
+    filtered = filtered.filter((peer) => {
       const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
       if (statusFilter === "enabled" && isDisabled) return false;
       if (statusFilter === "disabled" && !isDisabled) return false;
-
-      if (!searchQuery.trim()) return true;
-      const query = searchQuery.toLowerCase().trim();
-      const name = String(peer.name || "");
-      const comment = String(peer.comment || "");
-      const allowedAddress = String(peer["allowed-address"] || "");
-      return (
-        name.toLowerCase().includes(query) ||
-        comment.toLowerCase().includes(query) ||
-        allowedAddress.toLowerCase().includes(query)
-      );
+      return true;
     });
 
-    // Sort by ID (assuming higher ID = newer)
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      filtered = filtered.filter((peer) => {
+        const name = String(peer.name || "");
+        const comment = String(peer.comment || "");
+        const allowedAddress = String(peer["allowed-address"] || "");
+        return (
+          name.toLowerCase().includes(query) ||
+          comment.toLowerCase().includes(query) ||
+          allowedAddress.toLowerCase().includes(query)
+        );
+      });
+    }
+
+    // Sort by ID
     const sorted = [...filtered].sort((a, b) => {
       const idA = a[".id"] || "";
       const idB = b[".id"] || "";
@@ -126,7 +166,7 @@ export default function DashboardPage() {
     });
 
     return sorted;
-  }, [peers, searchQuery, statusFilter, sortOrder]);
+  }, [peers, searchQuery, statusFilter, sortOrder, canSeeAllPeers, profile, peerMetadata]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -141,19 +181,38 @@ export default function DashboardPage() {
 
       if (profileData) setProfile(profileData as Profile);
 
-      const { data: routersData } = await supabase
-        .from("routers")
-        .select("id, name, host, port, api_port, username, use_ssl, created_at");
+      // Get routers - for admin get all, for user get assigned routers
+      if (profileData?.role === "admin") {
+        const { data: routersData } = await supabase
+          .from("routers")
+          .select("id, name, host, port, api_port, username, use_ssl, created_at");
 
-      if (routersData && routersData.length > 0) {
-        setRouters(routersData as RouterType[]);
-        // Try to load last used router from localStorage
-        const lastRouterId = localStorage.getItem("wg-last-router");
-        const routerExists = routersData.some((r) => r.id === lastRouterId);
-        if (lastRouterId && routerExists) {
-          setSelectedRouterId(lastRouterId);
-        } else {
-          setSelectedRouterId(routersData[0].id);
+        if (routersData && routersData.length > 0) {
+          setRouters(routersData as RouterType[]);
+          const lastRouterId = localStorage.getItem("wg-last-router");
+          const routerExists = routersData.some((r) => r.id === lastRouterId);
+          setSelectedRouterId(lastRouterId && routerExists ? lastRouterId : routersData[0].id);
+        }
+      } else {
+        // For regular users, get routers they have access to
+        const { data: userRouterIds } = await supabase
+          .from("user_routers")
+          .select("router_id")
+          .eq("user_id", user.id);
+
+        if (userRouterIds && userRouterIds.length > 0) {
+          const routerIds = userRouterIds.map(ur => ur.router_id);
+          const { data: routersData } = await supabase
+            .from("routers")
+            .select("id, name, host, port, api_port, username, use_ssl, created_at")
+            .in("id", routerIds);
+
+          if (routersData && routersData.length > 0) {
+            setRouters(routersData as RouterType[]);
+            const lastRouterId = localStorage.getItem("wg-last-router");
+            const routerExists = routersData.some((r) => r.id === lastRouterId);
+            setSelectedRouterId(lastRouterId && routerExists ? lastRouterId : routersData[0].id);
+          }
         }
       }
       setLoading(false);
@@ -167,6 +226,27 @@ export default function DashboardPage() {
       localStorage.setItem("wg-last-router", selectedRouterId);
     }
   }, [selectedRouterId]);
+
+  // Fetch peer metadata from database
+  const fetchPeerMetadata = useCallback(async () => {
+    if (!selectedRouterId) return;
+    try {
+      const { data } = await supabase
+        .from("peer_metadata")
+        .select("*")
+        .eq("router_id", selectedRouterId);
+
+      if (data) {
+        const metadataMap: Record<string, PeerMetadata> = {};
+        for (const meta of data) {
+          metadataMap[meta.peer_public_key] = meta as PeerMetadata;
+        }
+        setPeerMetadata(metadataMap);
+      }
+    } catch (err) {
+      console.error("Failed to fetch peer metadata:", err);
+    }
+  }, [selectedRouterId, supabase]);
 
   const fetchWireGuardData = useCallback(async (forceRefresh = false) => {
     if (!selectedRouterId) return;
@@ -199,11 +279,14 @@ export default function DashboardPage() {
           toast.success(`Loaded ${peerData.peers.length} peers`);
         }
       }
+
+      // Also fetch metadata
+      await fetchPeerMetadata();
     } catch {
       toast.error("Failed to fetch data");
     }
     setRefreshing(false);
-  }, [selectedRouterId, newPeer.interface]);
+  }, [selectedRouterId, newPeer.interface, fetchPeerMetadata]);
 
   const fetchPublicIps = useCallback(async () => {
     if (!selectedRouterId) return;
@@ -211,19 +294,19 @@ export default function DashboardPage() {
       const res = await fetch(`/api/public-ips?routerId=${selectedRouterId}`);
       const data = await res.json();
       if (data.publicIps) {
-        // Filter: only enabled IPs, and if user is not admin, exclude restricted IPs
-        const isAdmin = profile?.role === "admin";
+        // Filter: only enabled IPs, and if user is not admin and doesn't have capability, exclude restricted IPs
+        const canUseRestricted = isAdmin || capabilities.can_use_restricted_ips;
         setPublicIps(data.publicIps.filter((ip: PublicIP) => {
           if (!ip.enabled) return false;
-          // If user is not admin, exclude restricted IPs
-          if (!isAdmin && ip.restricted) return false;
+          // If user can't use restricted IPs, exclude them
+          if (!canUseRestricted && ip.restricted) return false;
           return true;
         }));
       }
     } catch {
       console.error("Failed to fetch public IPs");
     }
-  }, [selectedRouterId, profile?.role]);
+  }, [selectedRouterId, isAdmin, capabilities.can_use_restricted_ips]);
 
   useEffect(() => {
     if (selectedRouterId && profile) {
@@ -235,6 +318,32 @@ export default function DashboardPage() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
+  };
+
+  // Save peer metadata to database
+  const savePeerMetadata = async (peer: WireGuardPeer, expiresAt?: Date) => {
+    if (!profile || !selectedRouterId) return;
+
+    try {
+      const metadata = {
+        router_id: selectedRouterId,
+        peer_public_key: peer["public-key"],
+        peer_name: peer.name || null,
+        peer_interface: peer.interface || null,
+        allowed_address: peer["allowed-address"] || null,
+        created_by_email: profile.email,
+        created_by_user_id: profile.id,
+        expires_at: expiresAt?.toISOString() || null,
+        auto_disable_enabled: !!expiresAt,
+        expiration_hours: expiresAt ? expirationHours : null,
+      };
+
+      await supabase
+        .from("peer_metadata")
+        .upsert(metadata, { onConflict: "router_id,peer_public_key" });
+    } catch (err) {
+      console.error("Failed to save peer metadata:", err);
+    }
   };
 
   const handleCreatePeerSimplified = async () => {
@@ -259,10 +368,22 @@ export default function DashboardPage() {
       });
       const data = await res.json();
       if (data.peer) {
-        toast.success(`Peer created! IP: ${data.assignedIp}`);
+        // Calculate expiration if enabled
+        let expiresAt: Date | undefined;
+        if (enableExpiration && canAutoExpire && expirationHours > 0) {
+          expiresAt = new Date();
+          expiresAt.setHours(expiresAt.getHours() + expirationHours);
+        }
+
+        // Save metadata
+        await savePeerMetadata(data.peer, expiresAt);
+
+        toast.success(`Peer created! IP: ${data.assignedIp}${expiresAt ? ` (expires in ${expirationHours}h)` : ""}`);
         setCreateDialogOpen(false);
         setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
         setSelectedPublicIpId("");
+        setEnableExpiration(false);
+        setExpirationHours(24);
         fetchWireGuardData();
       } else {
         toast.error(data.error || "Failed to create peer");
@@ -273,7 +394,7 @@ export default function DashboardPage() {
     setCreating(false);
   };
 
-  const handleDeletePeer = async (id: string) => {
+  const handleDeletePeer = async (id: string, publicKey?: string) => {
     if (!confirm("Delete this peer?")) return;
     const res = await fetch("/api/wireguard", {
       method: "POST",
@@ -282,8 +403,17 @@ export default function DashboardPage() {
     });
     const data = await res.json();
     if (data.success) {
+      // Also delete metadata if exists
+      if (publicKey) {
+        await supabase
+          .from("peer_metadata")
+          .delete()
+          .eq("router_id", selectedRouterId)
+          .eq("peer_public_key", publicKey);
+      }
       toast.success("Peer deleted");
       fetchWireGuardData();
+      setPeerManageOpen(false);
     } else {
       toast.error(data.error || "Failed to delete");
     }
@@ -354,122 +484,54 @@ export default function DashboardPage() {
     setUpdating(false);
   };
 
-  // Generate editable config string - WireGuard style
-  const generateEditableConfig = (peer: WireGuardPeer) => {
-    const iface = interfaces.find((i) => i.name === peer.interface);
-    const selectedRouter = routers.find((r) => r.id === selectedRouterId);
-    const endpointHost = peer.comment || selectedRouter?.host || "";
-    const listenPort = iface?.["listen-port"] || 13231;
-
-    return `Name: ${peer.name || ""}
-
-[Interface]
-PrivateKey = ${peer["private-key"] || "[PRIVATE_KEY]"}
-Address = ${peer["allowed-address"]?.split(",")[0] || ""}
-DNS = 8.8.8.8
-
-[Peer]
-PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
-AllowedIPs = 0.0.0.0/0
-Endpoint = ${endpointHost}:${listenPort}
-PersistentKeepalive = 25`;
+  // Open peer management dialog
+  const openPeerManagement = (peer: PeerWithMetadata, action: "edit" | "view") => {
+    setManagingPeer(peer);
+    setPeerAction(action);
+    setPeerManageOpen(true);
   };
 
-  // Generate new key pair
-  const handleGenerateKeys = () => {
-    const keys = generateKeyPair();
-    setDialogPublicKey(keys.publicKey);
-    if (dialogEditConfig) {
-      const newConfig = dialogEditConfig.replace(
-        /PrivateKey = .*/,
-        "PrivateKey = " + keys.privateKey
-      );
-      setDialogEditConfig(newConfig);
-    }
-    toast.success("New keys generated!");
-  };
-
-  // Start edit mode in dialog - terminal style
-  const startDialogEdit = () => {
-    if (!selectedPeer) return;
-    setDialogEditMode(true);
-    setDialogPublicKey(selectedPeer["public-key"] || "");
-    setDialogEditConfig(generateEditableConfig(selectedPeer));
-  };
-
-  // Cancel edit mode in dialog
-  const cancelDialogEdit = () => {
-    setDialogEditMode(false);
-    setDialogEditConfig("");
-    setDialogPublicKey("");
-  };
-
-  // Parse config and save
-
-  // Parse config and save
-  const saveDialogEdit = async () => {
-    if (!selectedPeer) return;
-
-    // Parse the edited config
-    const lines = dialogEditConfig.split("\n");
-    let name = "";
-    let address = "";
-    let publicIp = "";
-
-    for (const line of lines) {
-      const [key, ...valueParts] = line.split(":");
-      const value = valueParts.join(":").trim();
-      const keyLower = key.toLowerCase().trim();
-
-      if (keyLower === "name") name = value;
-      else if (keyLower === "address") address = value.includes("/") ? value : `${value}/32`;
-      else if (keyLower === "publicip") publicIp = value;
-    }
-
-    setDialogUpdating(true);
+  // Format date helper
+  const formatDate = (dateString: string | null | undefined) => {
+    if (!dateString) return "-";
     try {
-      const res = await fetch("/api/wireguard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "updatePeer",
-          routerId: selectedRouterId,
-          data: {
-            id: selectedPeer[".id"],
-            name: name,
-            "allowed-address": address,
-            comment: publicIp,
-          }
-        })
+      const date = new Date(dateString);
+      return date.toLocaleDateString("es-ES", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit"
       });
-      const data = await res.json();
-      if (data.success) {
-        toast.success("Peer updated");
-        // Update selected peer with new values
-        setSelectedPeer({
-          ...selectedPeer,
-          name: name,
-          "allowed-address": address,
-          comment: publicIp,
-        });
-        cancelDialogEdit();
-        fetchWireGuardData();
-      } else {
-        toast.error(data.error || "Failed to update");
-      }
     } catch {
-      toast.error("Failed to update peer");
+      return "-";
     }
-    setDialogUpdating(false);
   };
 
-  const formatBytes = (bytes?: number | string) => {
-    // Handle string values that might come from MikroTik
-    const numBytes = typeof bytes === 'string' ? parseInt(bytes, 10) : bytes;
-    if (!numBytes || isNaN(numBytes) || numBytes === 0) return "0 B";
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(numBytes) / Math.log(1024));
-    return `${(numBytes / 1024 ** i).toFixed(2)} ${sizes[i]}`;
+  // Check if peer is expired
+  const isPeerExpired = (peer: PeerWithMetadata) => {
+    const meta = peerMetadata[peer["public-key"]];
+    if (!meta?.expires_at) return false;
+    return new Date(meta.expires_at) < new Date();
+  };
+
+  // Get time remaining for peer
+  const getTimeRemaining = (peer: PeerWithMetadata) => {
+    const meta = peerMetadata[peer["public-key"]];
+    if (!meta?.expires_at) return null;
+    const expiresAt = new Date(meta.expires_at);
+    const now = new Date();
+    const diff = expiresAt.getTime() - now.getTime();
+    if (diff <= 0) return "Expired";
+
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+
+    if (hours > 24) {
+      const days = Math.floor(hours / 24);
+      return `${days}d ${hours % 24}h`;
+    }
+    return `${hours}h ${minutes}m`;
   };
 
   const generateConfig = (peer: WireGuardPeer) => {
@@ -504,6 +566,14 @@ PersistentKeepalive = 25`;
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const formatBytes = (bytes?: number | string) => {
+    const numBytes = typeof bytes === 'string' ? parseInt(bytes, 10) : bytes;
+    if (!numBytes || isNaN(numBytes) || numBytes === 0) return "0 B";
+    const sizes = ["B", "KB", "MB", "GB", "TB"];
+    const i = Math.floor(Math.log(numBytes) / Math.log(1024));
+    return `${(numBytes / 1024 ** i).toFixed(2)} ${sizes[i]}`;
   };
 
   if (loading) {
@@ -581,9 +651,15 @@ PersistentKeepalive = 25`;
               <h2 className="text-lg font-semibold">
                 Peers
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  ({filteredPeers.length})
+                  ({filteredPeers.length}{!canSeeAllPeers && ` of ${peers.length}`})
                 </span>
               </h2>
+              {!canSeeAllPeers && (
+                <Badge variant="outline" className="text-xs">
+                  <User className="w-3 h-3 mr-1" />
+                  My Peers
+                </Badge>
+              )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative">
@@ -650,12 +726,27 @@ PersistentKeepalive = 25`;
                   <TableHead className="text-muted-foreground">Interface</TableHead>
                   <TableHead className="text-muted-foreground">Allowed Address</TableHead>
                   <TableHead className="text-muted-foreground">Public IP</TableHead>
+                  <TableHead className="text-muted-foreground">Traffic</TableHead>
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
-                      <ArrowDownUp className="w-3 h-3" />
-                      Traffic
+                      <Clock className="w-3 h-3" />
+                      Created
                     </div>
                   </TableHead>
+                  <TableHead className="text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <User className="w-3 h-3" />
+                      Created By
+                    </div>
+                  </TableHead>
+                  {canAutoExpire && (
+                    <TableHead className="text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Timer className="w-3 h-3" />
+                        Expires
+                      </div>
+                    </TableHead>
+                  )}
                   <TableHead className="text-muted-foreground">Status</TableHead>
                   <TableHead className="text-muted-foreground text-right">Actions</TableHead>
                 </TableRow>
@@ -664,10 +755,16 @@ PersistentKeepalive = 25`;
                 {filteredPeers.map((peer) => {
                   const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
                   const isEditing = editingPeerId === peer[".id"];
+                  const meta = peerMetadata[peer["public-key"]];
+                  const expired = isPeerExpired(peer);
+                  const timeRemaining = getTimeRemaining(peer);
 
                   return (
-                    <TableRow key={peer[".id"]} className="table-row-hover border-border">
-                      {/* Name Column - Inline Edit */}
+                    <TableRow
+                      key={peer[".id"]}
+                      className={`table-row-hover border-border ${expired ? "opacity-60" : ""}`}
+                    >
+                      {/* Name Column */}
                       <TableCell>
                         {isEditing ? (
                           <Input
@@ -678,9 +775,12 @@ PersistentKeepalive = 25`;
                             autoFocus
                           />
                         ) : (
-                          <div className="flex items-center gap-2">
-                            <span className="font-medium">{peer.name || "-"}</span>
-                          </div>
+                          <button
+                            onClick={() => openPeerManagement(peer, "view")}
+                            className="font-medium hover:text-primary transition-colors text-left"
+                          >
+                            {peer.name || "-"}
+                          </button>
                         )}
                       </TableCell>
 
@@ -691,7 +791,7 @@ PersistentKeepalive = 25`;
                         </Badge>
                       </TableCell>
 
-                      {/* Allowed Address Column - Inline Edit */}
+                      {/* Allowed Address Column */}
                       <TableCell>
                         {isEditing ? (
                           <Input
@@ -707,7 +807,7 @@ PersistentKeepalive = 25`;
                         )}
                       </TableCell>
 
-                      {/* Public IP Column - Inline Edit */}
+                      {/* Public IP Column */}
                       <TableCell>
                         {isEditing ? (
                           <Input
@@ -736,6 +836,39 @@ PersistentKeepalive = 25`;
                           </div>
                         </div>
                       </TableCell>
+
+                      {/* Created At Column */}
+                      <TableCell className="text-sm text-muted-foreground">
+                        {formatDate(meta?.created_at)}
+                      </TableCell>
+
+                      {/* Created By Column */}
+                      <TableCell className="text-sm">
+                        {meta?.created_by_email ? (
+                          <span className="truncate max-w-[100px] block" title={meta.created_by_email}>
+                            {meta.created_by_email.split("@")[0]}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
+                      </TableCell>
+
+                      {/* Expires Column */}
+                      {canAutoExpire && (
+                        <TableCell className="text-sm">
+                          {timeRemaining ? (
+                            <Badge
+                              variant="outline"
+                              className={expired ? "text-red-400 border-red-400" : "text-amber-400 border-amber-400"}
+                            >
+                              <Timer className="w-3 h-3 mr-1" />
+                              {timeRemaining}
+                            </Badge>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </TableCell>
+                      )}
 
                       {/* Status Column */}
                       <TableCell>
@@ -793,10 +926,7 @@ PersistentKeepalive = 25`;
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => {
-                                  setSelectedPeer(peer);
-                                  setViewConfigOpen(true);
-                                }}
+                                onClick={() => openPeerManagement(peer, "view")}
                                 title="View config"
                               >
                                 <Eye className="w-4 h-4" />
@@ -816,7 +946,7 @@ PersistentKeepalive = 25`;
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                onClick={() => handleDeletePeer(peer[".id"])}
+                                onClick={() => handleDeletePeer(peer[".id"], peer["public-key"])}
                                 className="text-destructive hover:text-destructive"
                                 title="Delete"
                               >
@@ -906,7 +1036,11 @@ PersistentKeepalive = 25`;
                 </PopoverContent>
               </Popover>
               {publicIps.length === 0 && (
-                <p className="text-xs text-amber-400">Configure public IPs in Admin Panel first</p>
+                <p className="text-xs text-amber-400">
+                  {routers.length === 0
+                    ? "No routers available. Contact admin for access."
+                    : "No public IPs available for this router."}
+                </p>
               )}
             </div>
             <div className="space-y-2">
@@ -918,6 +1052,63 @@ PersistentKeepalive = 25`;
                 className="bg-secondary border-border"
               />
             </div>
+
+            {/* Expiration Settings */}
+            {canAutoExpire && (
+              <div className="space-y-3 pt-2 border-t border-border">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="enableExpiration"
+                    checked={enableExpiration}
+                    onChange={(e) => setEnableExpiration(e.target.checked)}
+                    className="rounded border-border"
+                  />
+                  <Label htmlFor="enableExpiration" className="flex items-center gap-2 cursor-pointer">
+                    <Timer className="w-4 h-4 text-amber-400" />
+                    Auto-disable after time
+                  </Label>
+                </div>
+                {enableExpiration && (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      value={expirationHours}
+                      onChange={(e) => setExpirationHours(parseInt(e.target.value) || 1)}
+                      className="bg-secondary border-border w-24"
+                    />
+                    <span className="text-sm text-muted-foreground">hours</span>
+                    <div className="flex gap-2 ml-auto">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setExpirationHours(24)}
+                      >
+                        1 day
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setExpirationHours(24 * 7)}
+                      >
+                        7 days
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setExpirationHours(24 * 30)}
+                      >
+                        30 days
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
@@ -933,120 +1124,109 @@ PersistentKeepalive = 25`;
         </DialogContent>
       </Dialog>
 
-      {/* View Config Dialog */}
-      <Dialog open={viewConfigOpen} onOpenChange={(open) => {
-        setViewConfigOpen(open);
-        if (!open) cancelDialogEdit();
-      }}>
+      {/* Peer Management Dialog */}
+      <Dialog open={peerManageOpen} onOpenChange={setPeerManageOpen}>
         <DialogContent className="bg-card border-border max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Peer Configuration</DialogTitle>
+            <DialogTitle>{managingPeer?.name || "Peer Details"}</DialogTitle>
             <DialogDescription>
-              {selectedPeer?.name || selectedPeer?.comment}
+              {managingPeer?.comment || managingPeer?.["allowed-address"]}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">Name</Label>
-                <p className="font-mono text-sm">{selectedPeer?.name || "-"}</p>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">Interface</Label>
-                <p className="font-mono text-sm">{selectedPeer?.interface || "-"}</p>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">Allowed Address</Label>
-                <p className="font-mono text-sm text-cyan-400">{selectedPeer?.["allowed-address"] || "-"}</p>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">Public IP</Label>
-                <p className="font-mono text-sm text-emerald-400">{selectedPeer?.comment || "-"}</p>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">Status</Label>
-                <Badge variant="outline" className={selectedPeer?.disabled ? "text-red-400" : "text-emerald-400"}>
-                  {selectedPeer?.disabled ? "Disabled" : "Enabled"}
-                </Badge>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">RX (Download)</Label>
-                <p className="font-mono text-sm text-emerald-400">{formatBytes(selectedPeer?.rx)}</p>
-              </div>
-              <div className="space-y-2">
-                <Label className="text-muted-foreground text-xs">TX (Upload)</Label>
-                <p className="font-mono text-sm text-blue-400">{formatBytes(selectedPeer?.tx)}</p>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-muted-foreground text-xs">Public Key</Label>
-              <div className="flex gap-2">
-                <Input
-                  value={dialogEditMode ? dialogPublicKey : (selectedPeer?.["public-key"] || "")}
-                  onChange={(e) => setDialogPublicKey(e.target.value)}
-                  readOnly={!dialogEditMode}
-                  className="bg-secondary border-border font-mono text-xs flex-1"
-                />
-                {dialogEditMode && (
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={handleGenerateKeys}
-                    title="Generate new keys">
-                    <RefreshCw className="w-4 h-4" />
-                  </Button>
-                )}
-              </div>
-            </div>
-            {/* Edit Section - Terminal Style */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label className="text-muted-foreground text-xs">
-                  {dialogEditMode ? "Edit Tunnel" : "Client Configuration"}
-                </Label>
-                {!dialogEditMode && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={startDialogEdit}
-                    className="gap-2 h-7 text-xs">
-                    <Pencil className="w-3 h-3" />
-                    Edit
-                  </Button>
+          {managingPeer && (
+            <div className="space-y-4 py-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Name</Label>
+                  <p className="font-mono text-sm">{managingPeer.name || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Interface</Label>
+                  <p className="font-mono text-sm">{managingPeer.interface || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Allowed Address</Label>
+                  <p className="font-mono text-sm text-cyan-400">{managingPeer["allowed-address"] || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Public IP</Label>
+                  <p className="font-mono text-sm text-emerald-400">{managingPeer.comment || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Status</Label>
+                  <Badge variant="outline" className={managingPeer.disabled ? "text-red-400" : "text-emerald-400"}>
+                    {managingPeer.disabled ? "Disabled" : "Enabled"}
+                  </Badge>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Created By</Label>
+                  <p className="text-sm">{peerMetadata[managingPeer["public-key"]]?.created_by_email || "-"}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-muted-foreground text-xs">Created At</Label>
+                  <p className="text-sm">{formatDate(peerMetadata[managingPeer["public-key"]]?.created_at)}</p>
+                </div>
+                {peerMetadata[managingPeer["public-key"]]?.expires_at && (
+                  <div className="space-y-2">
+                    <Label className="text-muted-foreground text-xs">Expires At</Label>
+                    <p className="text-sm text-amber-400">
+                      {formatDate(peerMetadata[managingPeer["public-key"]]?.expires_at)}
+                    </p>
+                  </div>
                 )}
               </div>
 
-              {dialogEditMode ? (
-                <div className="space-y-3">
-                  <textarea
-                    value={dialogEditConfig}
-                    onChange={(e) => setDialogEditConfig(e.target.value)}
-                    className="w-full h-72 bg-secondary p-3 rounded-lg text-sm font-mono border border-amber-500/50 focus:border-amber-500 focus:outline-none resize-none"
-                    placeholder={`Name: peer-name\nAddress: 10.10.x.x\nPublicIP: 76.245.59.xxx`}
-                  />
-                  <div className="flex gap-2 justify-end">
-                    <Button variant="outline" size="sm" onClick={cancelDialogEdit}>
-                      Cancel
-                    </Button>
-                    <Button size="sm" onClick={saveDialogEdit} disabled={dialogUpdating} className="gap-2">
-                      {dialogUpdating ? "Saving..." : "Save"}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
+              <div className="space-y-2">
+                <Label className="text-muted-foreground text-xs">Configuration</Label>
                 <pre className="bg-secondary p-4 rounded-lg text-sm overflow-x-auto font-mono border border-border">
-                  {selectedPeer && generateConfig(selectedPeer)}
+                  {generateConfig(managingPeer)}
                 </pre>
-              )}
+              </div>
+
+              <div className="flex gap-2 pt-4 border-t border-border">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    const isDisabled = managingPeer.disabled === true || String(managingPeer.disabled) === "true";
+                    handleTogglePeer(managingPeer[".id"], isDisabled);
+                    setPeerManageOpen(false);
+                  }}
+                  className="gap-2"
+                >
+                  {managingPeer.disabled ? (
+                    <>
+                      <Power className="w-4 h-4 text-emerald-400" />
+                      Enable
+                    </>
+                  ) : (
+                    <>
+                      <PowerOff className="w-4 h-4 text-amber-400" />
+                      Disable
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => downloadConfig(managingPeer)}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => handleDeletePeer(managingPeer[".id"], managingPeer["public-key"])}
+                  className="gap-2 ml-auto"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </Button>
+              </div>
             </div>
-          </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setViewConfigOpen(false)}>
+            <Button variant="outline" onClick={() => setPeerManageOpen(false)}>
               Close
-            </Button>
-            <Button onClick={() => selectedPeer && downloadConfig(selectedPeer)}>
-              <Download className="w-4 h-4 mr-2" />
-              Download .conf
             </Button>
           </DialogFooter>
         </DialogContent>

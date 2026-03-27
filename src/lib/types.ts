@@ -1,5 +1,11 @@
 export type UserRole = "admin" | "user";
 
+export interface UserCapabilities {
+  can_auto_expire?: boolean;
+  can_see_all_peers?: boolean;
+  can_use_restricted_ips?: boolean;
+}
+
 export interface Profile {
   id: string;
   username: string | null;
@@ -8,6 +14,23 @@ export interface Profile {
   first_name: string | null;
   last_name: string | null;
   created_at: string;
+  capabilities?: UserCapabilities;
+}
+
+export interface PeerMetadata {
+  id: string;
+  router_id: string;
+  peer_public_key: string;
+  peer_name: string | null;
+  peer_interface: string | null;
+  allowed_address: string | null;
+  created_at: string;
+  created_by_email: string | null;
+  created_by_user_id: string | null;
+  expires_at: string | null;
+  auto_disable_enabled: boolean;
+  expiration_hours: number | null;
+  last_status_check: string | null;
 }
 
 export type ConnectionType = "rest" | "rest-8443" | "api" | "api-ssl";
