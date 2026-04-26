@@ -1,0 +1,19 @@
+
+  useEffect(() => {
+    if (selectedRouterId && profile) {
+      fetchWireGuardData();
+      fetchPublicIps();
+      fetchCreatedUsers();
+    }
+  }, [selectedRouterId, fetchWireGuardData, fetchPublicIps, fetchCreatedUsers, profile]);
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.push("/login");
+  };
+
+  // Save peer metadata to database
+  const savePeerMetadata = async (peer: WireGuardPeer, expiresAt?: Date, expirationValue?: number, expirationUnit?: TimeUnit) => {
+    if (!profile || !selectedRouterId) return;
+
+    try {
