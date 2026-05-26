@@ -41,9 +41,34 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-05-26 — Scoping de peers por router + UI simplificada (post-mortem)
+
+**Contexto:** Se descubrió que el usuario ya manejaba múltiples interfaces creando **un "router" config por interface**, todos apuntando al mismo host pero con `wg_interface` distinto. El feature anterior (per-IP override) rompió ese flujo al mezclar peers de todas las interfaces del server en cada vista.
+
+**Cambios:**
+- `src/app/api/wireguard/route.ts`: `getPeers` (Linux) ahora muestra peers SOLO de las interfaces que pertenecen al router seleccionado: `{ router.wg_interface } ∪ { public_ips.wg_interface where router_id = X }`. Las interfaces huérfanas (sin público_ips asignadas a este router) se filtran. Cada config router-por-interface sigue funcionando como antes.
+- `src/app/admin/page.tsx`: simplificación UI.
+  - El dropdown global "WG: [wg0 ▾]" al lado de Connected → reemplazado por un **Badge informativo** que solo muestra `router.wg_interface` (read-only). El usuario configura la interface al editar el router, no acá.
+  - Selectores wg_interface en modales Add IP / Bulk Add → quitados. Las IPs heredan automáticamente.
+  - Columna WG editable inline en la tabla → quitada. Inconsistente con el modelo "router per interface".
+  - Estado/handlers no usados → eliminados.
+
+**Lo que queda del feature per-IP:**
+- Columna `public_ips.wg_interface` (NULL = inherit) sigue ahí — sin UI directa pero permite overrides server-side si en el futuro hace falta.
+- Backend: `addWgIpAddress`, `createMikroTikRules`, `addPeer` aceptan override y `getPeers` lo respeta.
+
+**Lecciones aprendidas:**
+- **Preguntar antes de inventar.** El usuario ya tenía un workflow funcional (router-per-interface). Asumí que era una limitación y la "arreglé" con un feature elaborado. Resultado: rompí algo que funcionaba.
+- Verificar el modelo mental del usuario antes de migrar el data model.
+- Mantenerse con "el cambio más pequeño que resuelve el problema" — en este caso era solo cambiar el getPeers para que cada router viera lo suyo.
+
+---
+
 ### 2026-05-26 — Per-IP wg_interface (multi-interface en un solo server)
 
 **Motivo:** Cada router tenía un único `wg_interface`, por lo que TODAS las IPs públicas se forzaban a usar la misma. Imposible repartir IPs entre `wg0`, `wg1`, etc. en un mismo server.
+
+⚠️ **Ver entrada de más arriba — el UI fue revertido/simplificado.** La capa de DB y backend de este cambio se mantiene como base por si en el futuro hace falta.
 
 **Migración SQL:** `scripts/migration-v15-per-ip-wg-interface.sql` — agrega columna `wg_interface TEXT` (nullable) a `public_ips` + índice. Backwards-compatible: NULL = heredar de `routers.wg_interface`.
 

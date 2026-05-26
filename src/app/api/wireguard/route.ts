@@ -98,8 +98,26 @@ export async function POST(request: Request) {
         }
 
         case "getPeers": {
-          // v15: aggregate peers from ALL interfaces on the server, not just router.wg_interface
-          const livePeers = await linuxClient.getPeersAllInterfaces();
+          // v15: each router config only sees peers from interfaces that BELONG to it:
+          //   - router.wg_interface (always)
+          //   - any public_ips.wg_interface (per-IP overrides) of THIS router
+          // This honors the "one router per interface, same host" workflow while still
+          // supporting per-IP overrides within a single router.
+          const interfaceSet = new Set<string>();
+          if (router.wg_interface) interfaceSet.add(router.wg_interface);
+          const { data: ipsForRouter } = await supabase
+            .from("public_ips")
+            .select("wg_interface")
+            .eq("router_id", routerId);
+          for (const row of ipsForRouter || []) {
+            if (row.wg_interface) interfaceSet.add(row.wg_interface);
+          }
+
+          const livePeers: Array<{ publicKey: string; allowedIps: string; endpoint?: string; latestHandshake?: string; transfer?: { rx: number; tx: number }; interface: string }> = [];
+          for (const iface of interfaceSet) {
+            const peers = await linuxClient.getPeersForInterface(iface);
+            for (const p of peers) livePeers.push({ ...p, interface: iface });
+          }
 
           // Get stored peer metadata from database
           const { data: storedPeers } = await supabase

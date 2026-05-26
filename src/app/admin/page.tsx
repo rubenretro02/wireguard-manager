@@ -288,19 +288,12 @@ export default function AdminPage() {
   const [selectedRouterForIps, setSelectedRouterForIps] = useState<string>("");
   const [addIpOpen, setAddIpOpen] = useState(false);
   const [newIpNumber, setNewIpNumber] = useState("");
-  const [newIpWgInterface, setNewIpWgInterface] = useState<string>("");
   const [addingIp, setAddingIp] = useState(false);
   // Bulk Add IP states
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [bulkStartIp, setBulkStartIp] = useState("");
   const [bulkEndIp, setBulkEndIp] = useState("");
-  const [bulkWgInterface, setBulkWgInterface] = useState<string>("");
   const [bulkAdding, setBulkAdding] = useState(false);
-  // v15: default WG interface for new IPs (picked from the header dropdown)
-  const [defaultWgInterfaceForIps, setDefaultWgInterfaceForIps] = useState<string>("");
-  const [availableWgInterfacesForIps, setAvailableWgInterfacesForIps] = useState<string[]>([]);
-  // Inline edit state for changing an IP's wg_interface
-  const [editingIpWgInterface, setEditingIpWgInterface] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [savingImported, setSavingImported] = useState(false);
   const [detectedIps, setDetectedIps] = useState<DetectedIp[]>([]);
@@ -741,30 +734,8 @@ export default function AdminPage() {
       fetchPeerCounts();
       fetchNatTraffic();
       checkRouterConnection();
-      // v15: load available WG interfaces for the per-IP dropdown
-      (async () => {
-        try {
-          const res = await fetch("/api/wireguard", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "getSystemInterfaces", routerId: selectedRouterForIps }),
-          });
-          const data = await res.json();
-          if (data.success) {
-            const ifaces: string[] = data.wgInterfaces || [];
-            setAvailableWgInterfacesForIps(ifaces);
-            // Default to the router's wg_interface, fallback to first detected
-            const router = routers.find(r => r.id === selectedRouterForIps);
-            const initial = router?.wg_interface || ifaces[0] || "";
-            setDefaultWgInterfaceForIps(initial);
-          }
-        } catch (err) {
-          console.error("Failed to load WG interfaces:", err);
-          setAvailableWgInterfacesForIps([]);
-        }
-      })();
     }
-  }, [selectedRouterForIps, fetchPublicIps, fetchPeerCounts, fetchNatTraffic, checkRouterConnection, routers]);
+  }, [selectedRouterForIps, fetchPublicIps, fetchPeerCounts, fetchNatTraffic, checkRouterConnection]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -1093,7 +1064,6 @@ export default function AdminPage() {
         body: JSON.stringify({
           router_id: selectedRouterForIps,
           ip_number: parseInt(newIpNumber),
-          wg_interface: newIpWgInterface || null,
         })
       });
       const data = await res.json();
@@ -1136,7 +1106,6 @@ export default function AdminPage() {
           router_id: selectedRouterForIps,
           start_ip: start,
           end_ip: end,
-          wg_interface: bulkWgInterface || null,
         })
       });
       const data = await res.json();
@@ -1174,28 +1143,6 @@ export default function AdminPage() {
     } catch {
       toast.error("Failed to update IP");
     }
-  };
-
-  // v15: change wg_interface for one IP
-  const handleChangeIpWgInterface = async (ip: PublicIP, newIface: string) => {
-    const normalized = newIface || null; // "" = inherit from router
-    try {
-      const res = await fetch("/api/public-ips", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: ip.id, wg_interface: normalized }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        toast.error(data.error);
-      } else {
-        toast.success(normalized ? `IP ${ip.public_ip} now uses ${normalized}` : `IP ${ip.public_ip} inherits from router`);
-        fetchPublicIps();
-      }
-    } catch {
-      toast.error("Failed to update interface");
-    }
-    setEditingIpWgInterface(null);
   };
 
   // Toggle IP restriction
@@ -2051,22 +1998,17 @@ export default function AdminPage() {
                     )}
                   </div>
                 )}
-                {/* v15: default WG interface for new IPs created from this page */}
-                {availableWgInterfacesForIps.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Label className="text-xs text-muted-foreground">WG:</Label>
-                    <Select value={defaultWgInterfaceForIps} onValueChange={setDefaultWgInterfaceForIps}>
-                      <SelectTrigger className="w-[110px] h-8 bg-secondary">
-                        <SelectValue placeholder="wg interface" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {availableWgInterfacesForIps.map(iface => (
-                          <SelectItem key={iface} value={iface}>{iface}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                {/* v15: read-only badge showing this router's configured WG interface.
+                    New IPs created from this page inherit it automatically. */}
+                {(() => {
+                  const r = routers.find(rt => rt.id === selectedRouterForIps);
+                  return r?.wg_interface ? (
+                    <Badge variant="outline" className="text-cyan-400 border-cyan-400/50 gap-1 font-mono">
+                      <Network className="w-3 h-3" />
+                      {r.wg_interface}
+                    </Badge>
+                  ) : null;
+                })()}
               </div>
               <div className="flex items-center gap-2">
                 <div className="relative">
@@ -2095,18 +2037,11 @@ export default function AdminPage() {
                   <Download className="w-4 h-4" />
                   {importing ? "Importing..." : "Import"}
                 </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => { setBulkWgInterface(defaultWgInterfaceForIps); setBulkAddOpen(true); }}
-                  className="gap-2 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10"
-                >
+                <Button variant="outline" onClick={() => setBulkAddOpen(true)} className="gap-2 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10">
                   <Plus className="w-4 h-4" />
                   Bulk Add
                 </Button>
-                <Button
-                  onClick={() => { setNewIpWgInterface(defaultWgInterfaceForIps); setAddIpOpen(true); }}
-                  className="gap-2"
-                >
+                <Button onClick={() => setAddIpOpen(true)} className="gap-2">
                   <Plus className="w-4 h-4" />
                   Add IP
                 </Button>
@@ -2216,7 +2151,6 @@ export default function AdminPage() {
                     <TableHead className="w-[80px]">#</TableHead>
                     <TableHead>Public IP</TableHead>
                     <TableHead>Internal Subnet</TableHead>
-                    <TableHead>WG</TableHead>
                     <TableHead>Peers</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>
@@ -2250,49 +2184,18 @@ export default function AdminPage() {
                 <TableBody>
                   {filteredIps.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={12} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                         {ipSearchQuery ? "No IPs match your search" : "No IPs configured"}
                       </TableCell>
                     </TableRow>
                   ) : (
                     filteredIps.map((ip) => {
                       const peersInfo = peersByIp[ip.public_ip];
-                      const routerDefaultWg = routers.find(r => r.id === ip.router_id)?.wg_interface || "";
-                      const effectiveWg = ip.wg_interface || routerDefaultWg;
-                      const isInherited = !ip.wg_interface;
                       return (
                         <TableRow key={ip.id} className="border-border">
                           <TableCell className="font-mono font-bold">{ip.ip_number}</TableCell>
                           <TableCell className="font-mono text-emerald-400">{ip.public_ip}</TableCell>
                           <TableCell className="font-mono text-cyan-400">{ip.internal_subnet}</TableCell>
-                          <TableCell>
-                            {editingIpWgInterface === ip.id ? (
-                              <Select
-                                value={ip.wg_interface || ""}
-                                onValueChange={(v) => handleChangeIpWgInterface(ip, v)}
-                                open
-                                onOpenChange={(open) => { if (!open) setEditingIpWgInterface(null); }}
-                              >
-                                <SelectTrigger className="h-7 w-[100px] bg-secondary text-xs">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="">(inherit)</SelectItem>
-                                  {availableWgInterfacesForIps.map(iface => (
-                                    <SelectItem key={iface} value={iface}>{iface}</SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
-                            ) : (
-                              <button
-                                onClick={() => setEditingIpWgInterface(ip.id)}
-                                className={`font-mono text-xs px-2 py-0.5 rounded border ${isInherited ? "text-muted-foreground border-muted-foreground/30 hover:border-muted-foreground/60" : "text-amber-400 border-amber-400/40 hover:border-amber-400/70"}`}
-                                title={isInherited ? `Inheriting ${effectiveWg} from router — click to override` : `Click to change`}
-                              >
-                                {effectiveWg || "—"}
-                              </button>
-                            )}
-                          </TableCell>
                           <TableCell>
                             {peersInfo ? (
                               <Button
@@ -3691,25 +3594,6 @@ export default function AdminPage() {
                 This will create IP based on router prefix configuration
               </p>
             </div>
-            {availableWgInterfacesForIps.length > 0 && (
-              <div className="space-y-2">
-                <Label>WireGuard Interface</Label>
-                <Select value={newIpWgInterface} onValueChange={setNewIpWgInterface}>
-                  <SelectTrigger className="bg-secondary">
-                    <SelectValue placeholder="Inherit from router" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">(inherit from router)</SelectItem>
-                    {availableWgInterfacesForIps.map(iface => (
-                      <SelectItem key={iface} value={iface}>{iface}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Routes traffic for this IP through the selected interface.
-                </p>
-              </div>
-            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddIpOpen(false)}>Cancel</Button>
@@ -3766,25 +3650,6 @@ export default function AdminPage() {
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
                   From {routers.find(r => r.id === selectedRouterForIps)?.public_ip_prefix || "X.X.X"}.{bulkStartIp} to {routers.find(r => r.id === selectedRouterForIps)?.public_ip_prefix || "X.X.X"}.{bulkEndIp}
-                </p>
-              </div>
-            )}
-            {availableWgInterfacesForIps.length > 0 && (
-              <div className="space-y-2">
-                <Label>WireGuard Interface for the batch</Label>
-                <Select value={bulkWgInterface} onValueChange={setBulkWgInterface}>
-                  <SelectTrigger className="bg-secondary">
-                    <SelectValue placeholder="Inherit from router" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="">(inherit from router)</SelectItem>
-                    {availableWgInterfacesForIps.map(iface => (
-                      <SelectItem key={iface} value={iface}>{iface}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  All IPs in the batch will use this interface. You can change individual IPs later.
                 </p>
               </div>
             )}
