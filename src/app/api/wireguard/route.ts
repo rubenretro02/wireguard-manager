@@ -1,9 +1,21 @@
 import { createClient } from "@/lib/supabase/server";
+import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { MikroTikClient, clearClientCacheForRouter } from "@/lib/mikrotik";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { logActivity } from "@/lib/activity-logger";
 import type { ConnectionType, AuthMethod } from "@/lib/types";
+
+// Lazy service-role client for reads that must bypass RLS
+// (peer metadata visible to authorised viewers regardless of who created the peer).
+function getAdminClient() {
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  if (!serviceRoleKey || !supabaseUrl) return null;
+  return createAdminClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
 
 // Force Node.js runtime for ssh2 native modules
 export const runtime = "nodejs";
@@ -119,11 +131,11 @@ export async function POST(request: Request) {
             for (const p of peers) livePeers.push({ ...p, interface: iface });
           }
 
-          // Get stored peer metadata from database
-          const { data: storedPeers } = await supabase
-            .from("linux_peers")
-            .select("*")
-            .eq("router_id", routerId);
+          // Get stored peer metadata from BOTH tables to fully populate names/comments
+          // regardless of who created the peer. Use service-role so RLS doesn't hide
+          // sibling rows from the requesting user (capability-based filtering is done
+          // on the frontend with the metadata we return here).
+          const metaClient = getAdminClient() ?? supabase;
 
           interface StoredLinuxPeer {
             id: string;
@@ -138,13 +150,30 @@ export async function POST(request: Request) {
             created_by_email?: string;
           }
 
+          const [{ data: storedPeers }, { data: storedMeta }] = await Promise.all([
+            metaClient
+              .from("linux_peers")
+              .select("*")
+              .eq("router_id", routerId),
+            metaClient
+              .from("peer_metadata")
+              .select("id, peer_public_key, peer_name")
+              .eq("router_id", routerId),
+          ]);
+
           const storedPeersMap = new Map<string, StoredLinuxPeer>(
             (storedPeers || []).map((p: StoredLinuxPeer) => [p.public_key, p])
           );
+          const legacyMetaMap = new Map<string, string>(
+            (storedMeta || [])
+              .filter((m: { peer_public_key?: string; peer_name?: string | null }) => m.peer_public_key && m.peer_name)
+              .map((m: { peer_public_key: string; peer_name: string }) => [m.peer_public_key, m.peer_name])
+          );
 
-          // Merge live peers with stored metadata
+          // Merge live peers with stored metadata (linux_peers takes priority, peer_metadata as fallback)
           const formattedPeers = livePeers.map((peer, index) => {
             const stored = storedPeersMap.get(peer.publicKey) as StoredLinuxPeer | undefined;
+            const fallbackName = legacyMetaMap.get(peer.publicKey);
             return {
               ".id": stored?.id || `*${index + 1}`,
               "public-key": peer.publicKey,
@@ -157,7 +186,7 @@ export async function POST(request: Request) {
               tx: peer.transfer?.tx,
               interface: peer.interface,
               disabled: false,
-              name: stored?.name || "",
+              name: stored?.name || fallbackName || "",
               comment: stored?.comment || stored?.public_ip || "",
             };
           });
