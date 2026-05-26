@@ -463,6 +463,13 @@ export default function Socks5Page() {
     loadProxiesAndStatus();
   }, [loadProxiesAndStatus]);
 
+  // Persist selected router across navigation (mirrors dashboard behaviour)
+  useEffect(() => {
+    if (selectedRouterId) {
+      localStorage.setItem(SOCKS5_LAST_ROUTER_KEY, selectedRouterId);
+    }
+  }, [selectedRouterId]);
+
   // Auto-refresh every 30 seconds
   useEffect(() => {
     if (!selectedRouterId) return;
@@ -1762,7 +1769,14 @@ export default function Socks5Page() {
                 >
                   <Command className="border-0">
                     <CommandInput placeholder="Type IP to search..." className="font-mono" />
-                    <CommandList className="max-h-[200px] overflow-y-auto">
+                    <CommandList
+                      className="max-h-[200px] overflow-y-auto"
+                      onWheel={(e) => {
+                        e.stopPropagation();
+                        const target = e.currentTarget;
+                        target.scrollTop += e.deltaY;
+                      }}
+                    >
                       <CommandEmpty>No IP found.</CommandEmpty>
                       <div className="flex items-center justify-between px-2 py-1.5 text-xs text-muted-foreground border-b border-border">
                         <span className="flex-1">IP Address</span>
