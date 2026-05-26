@@ -548,6 +548,133 @@ export async function POST(request: Request) {
           }
         }
 
+        case "updatePeerWithKeys": {
+          // v15: full peer update for Linux (mirrors the MikroTik handler below).
+          // Handles name/comment/allowed-address/public-key/private-key changes.
+          // If the new allowed-address falls in a subnet served by a different
+          // wg_interface, the peer is migrated between interfaces transparently.
+          console.log("[WireGuard API] [Linux] Updating peer with keys:", data.id);
+          try {
+            const peerId = data.id;
+            const newName = data.name as string | undefined;
+            const newComment = data.comment as string | undefined;
+            const newAllowed = data["allowed-address"] as string | undefined;
+            const newPubKey = data["public-key"] as string | undefined;
+            const newPrivKey = data["private-key"] as string | undefined;
+
+            const { data: storedPeer, error: peerErr } = await supabase
+              .from("linux_peers")
+              .select("*")
+              .eq("id", peerId)
+              .single();
+            if (peerErr || !storedPeer) {
+              return NextResponse.json({ error: "Peer not found in database" }, { status: 404 });
+            }
+
+            // Public-key uniqueness check across the same router (when changing the key)
+            if (newPubKey && newPubKey !== storedPeer.public_key) {
+              const { data: collision } = await supabase
+                .from("linux_peers")
+                .select("id")
+                .eq("router_id", routerId)
+                .eq("public_key", newPubKey)
+                .neq("id", peerId)
+                .maybeSingle();
+              if (collision) {
+                return NextResponse.json({ error: "Public key already exists on another peer" }, { status: 400 });
+              }
+            }
+
+            // Resolve the wg_interface for a given allowed-address.
+            // Looks up public_ips by internal_subnet; falls back to router default.
+            const resolveInterface = async (address: string | null | undefined): Promise<string> => {
+              if (!address) return router.wg_interface || "wg1";
+              const subnetMatch = address.match(/^(\d+\.\d+\.\d+)\./);
+              if (!subnetMatch) return router.wg_interface || "wg1";
+              const { data: ipRow } = await supabase
+                .from("public_ips")
+                .select("wg_interface, public_ip")
+                .eq("router_id", routerId)
+                .eq("internal_subnet", subnetMatch[1])
+                .maybeSingle();
+              return ipRow?.wg_interface || router.wg_interface || "wg1";
+            };
+
+            const oldPubKey = storedPeer.public_key as string;
+            const oldAllowed = storedPeer.allowed_ips as string;
+            const oldInterface = await resolveInterface(oldAllowed);
+            const effectiveAllowed = newAllowed ?? oldAllowed;
+            const effectivePubKey = newPubKey ?? oldPubKey;
+            const newInterface = await resolveInterface(effectiveAllowed);
+
+            const interfaceChanged = oldInterface !== newInterface;
+            const keyChanged = !!newPubKey && newPubKey !== oldPubKey;
+            const addressChanged = !!newAllowed && newAllowed !== oldAllowed;
+
+            if (keyChanged || interfaceChanged) {
+              // Remove the old peer from its current interface (tolerate failure)
+              await linuxClient.removePeer(oldPubKey, oldInterface);
+              const ok = await linuxClient.addPeer(effectivePubKey, effectiveAllowed, newInterface);
+              if (!ok) {
+                return NextResponse.json({ error: `Failed to add peer to ${newInterface}` }, { status: 500 });
+              }
+            } else if (addressChanged) {
+              // Same key, same interface, just update allowed-ips (wg set acts as update)
+              const ok = await linuxClient.addPeer(effectivePubKey, effectiveAllowed, oldInterface);
+              if (!ok) {
+                return NextResponse.json({ error: "Failed to update allowed-address" }, { status: 500 });
+              }
+            }
+
+            // Sync the DB row
+            const updates: Record<string, unknown> = {};
+            if (newName !== undefined) updates.name = newName;
+            if (newComment !== undefined) updates.comment = newComment;
+            if (newAllowed !== undefined) updates.allowed_ips = newAllowed;
+            if (newPubKey) updates.public_key = newPubKey;
+            if (newPrivKey) updates.private_key = newPrivKey;
+
+            // If the address moved to a different public IP, refresh public_ip + comment too
+            if (addressChanged) {
+              const subnetMatch = newAllowed!.match(/^(\d+\.\d+\.\d+)\./);
+              if (subnetMatch) {
+                const { data: newPubIpRow } = await supabase
+                  .from("public_ips")
+                  .select("public_ip")
+                  .eq("router_id", routerId)
+                  .eq("internal_subnet", subnetMatch[1])
+                  .maybeSingle();
+                if (newPubIpRow?.public_ip) {
+                  updates.public_ip = newPubIpRow.public_ip;
+                  if (newComment === undefined) updates.comment = newPubIpRow.public_ip;
+                }
+              }
+            }
+
+            if (Object.keys(updates).length > 0) {
+              await supabase.from("linux_peers").update(updates).eq("id", peerId);
+            }
+
+            await logActivity({
+              supabase,
+              userId: user.id,
+              routerId,
+              action: "update",
+              entityType: "peer",
+              entityId: peerId,
+              entityName: newName || storedPeer.name || null,
+              details: { updatedFields: Object.keys(updates), keyChanged, interfaceChanged, addressChanged, oldInterface, newInterface }
+            });
+
+            console.log(`[WireGuard API] [Linux] Peer ${peerId} updated (key=${keyChanged}, iface=${oldInterface}→${newInterface}, addr=${addressChanged})`);
+            return NextResponse.json({ success: true });
+          } catch (err) {
+            const errMsg = err instanceof Error ? err.message : "Unknown error";
+            console.error("[WireGuard API] Failed to update Linux peer:", errMsg);
+            return NextResponse.json({ error: `Failed to update peer: ${errMsg}` }, { status: 500 });
+          }
+        }
+
         case "updatePeer": {
           // Update peer name/comment in database
           console.log("[WireGuard API] Updating Linux peer:", data.id);
