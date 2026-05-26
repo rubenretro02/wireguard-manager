@@ -84,7 +84,9 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json();
-  const { router_id, ip_number, ip_numbers, start_ip, end_ip } = body;
+  const { router_id, ip_number, ip_numbers, start_ip, end_ip, wg_interface } = body;
+  // v15: optional per-IP wg_interface override. NULL/undefined inherits from router.
+  const wgInterfaceForNew: string | null = typeof wg_interface === "string" && wg_interface.trim() ? wg_interface.trim() : null;
 
   if (!router_id) {
     return NextResponse.json({ error: "Router ID required" }, { status: 400 });
@@ -133,6 +135,7 @@ export async function POST(request: Request) {
         wg_ip_created: false,
         ip_address_created: false,
         nat_rule_created: false,
+        wg_interface: wgInterfaceForNew,
       });
     }
 
@@ -182,6 +185,7 @@ export async function POST(request: Request) {
       wg_ip_created: false,
       ip_address_created: false,
       nat_rule_created: false,
+      wg_interface: wgInterfaceForNew,
     }));
 
     // Insert all IPs, ignoring duplicates
@@ -237,6 +241,7 @@ export async function POST(request: Request) {
       wg_ip_created: false,
       ip_address_created: false,
       nat_rule_created: false,
+      wg_interface: wgInterfaceForNew,
     })
     .select()
     .single();
@@ -281,12 +286,17 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Public IP ID required" }, { status: 400 });
   }
 
-  const allowedFields = ["enabled", "restricted", "nat_rule_created", "ip_address_created", "wg_ip_created"];
+  const allowedFields = ["enabled", "restricted", "nat_rule_created", "ip_address_created", "wg_ip_created", "wg_interface"];
   const filteredUpdates: Record<string, unknown> = {};
   for (const key of allowedFields) {
     if (key in updates) {
       filteredUpdates[key] = updates[key];
     }
+  }
+  // Normalise wg_interface: empty string -> NULL (inherit)
+  if ("wg_interface" in filteredUpdates) {
+    const v = filteredUpdates.wg_interface;
+    filteredUpdates.wg_interface = typeof v === "string" && v.trim() ? v.trim() : null;
   }
 
   const { data: publicIp, error } = await supabase

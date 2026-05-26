@@ -41,6 +41,45 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-05-26 — Per-IP wg_interface (multi-interface en un solo server)
+
+**Motivo:** Cada router tenía un único `wg_interface`, por lo que TODAS las IPs públicas se forzaban a usar la misma. Imposible repartir IPs entre `wg0`, `wg1`, etc. en un mismo server.
+
+**Migración SQL:** `scripts/migration-v15-per-ip-wg-interface.sql` — agrega columna `wg_interface TEXT` (nullable) a `public_ips` + índice. Backwards-compatible: NULL = heredar de `routers.wg_interface`.
+
+**Archivos modificados:**
+- `src/lib/types.ts` — `PublicIP.wg_interface: string | null`
+- `src/lib/linux-wireguard.ts`
+  - `addWgIpAddress`, `removeWgIpAddress`, `createMikroTikRules`, `deleteMikroTikRules`, `addPeer` aceptan `wgInterfaceOverride?: string`.
+  - `removePeer` con fallback: si no se le da interface, prueba la default y luego escanea todas.
+  - Nuevos: `getPeersForInterface(name)` y `getPeersAllInterfaces()` para agregar peers desde TODAS las interfaces (cada peer queda etiquetado con su `interface`).
+- `src/app/api/wireguard/route.ts`
+  - `createMikroTikRules` y `deleteMikroTikRules` consultan `public_ips.wg_interface` antes de invocar al cliente.
+  - `createPeerSimplified` usa `publicIp.wg_interface || data.interface`.
+  - `getPeers` (Linux) ahora usa `getPeersAllInterfaces` — un solo router con N interfaces muestra peers unificados.
+- `src/app/api/public-ips/route.ts`
+  - POST acepta `wg_interface` (single + bulk).
+  - PATCH lo agrega a `allowedFields`, normaliza `""` → NULL.
+- `src/app/admin/page.tsx`
+  - Estados: `availableWgInterfacesForIps`, `defaultWgInterfaceForIps`, `newIpWgInterface`, `bulkWgInterface`, `editingIpWgInterface`.
+  - Carga interfaces detectadas al cambiar `selectedRouterForIps`.
+  - Dropdown global "WG: [wg0 ▾]" al lado del badge Connected (default para Add IP y Bulk Add).
+  - Dropdowns en los modales Add IP y Bulk Add, con opción "(inherit from router)".
+  - Nueva columna **WG** en la tabla de Public IPs con botón que abre Select inline para cambiar la interface — amber si la IP tiene override, muted si hereda del router.
+
+**Gotchas / lecciones:**
+- El campo en DB es nullable a propósito: para no perder retro-compatibilidad y tener un fallback claro (`router.wg_interface`). Todo el código siempre debe usar `publicIp.wg_interface || router.wg_interface`.
+- `getPeers` ahora hace N calls SSH (uno por interface). El pool ssh2 mitiga el overhead; aún así, en servidores con muchas interfaces puede ser más lento. Si pesa, considerar cachear `wg show all dump` en una sola llamada.
+- Al crear las reglas para una IP que cambió de interface, **no se limpia la interface vieja**. Si moves IP 66 de wg0 a wg1, hay que correr "Delete Rules" en wg0 primero, después "Create Rules" para que cree en wg1. TODO: handler que detecte el cambio y haga la migración atómica.
+
+**Pendiente / TODO:**
+- Validar colisiones al crear rules: si `10.10.66.0/24` ya está en wg3, no permitir agregarlo a wg0.
+- Migración automática "mueve IP X de wgY a wgZ" que limpie el viejo y cree el nuevo en un paso.
+- Detect & clean orphans (NAT rules a bloques inexistentes, addresses huérfanas) — flagged en el chat del 2026-05-26 pero no implementado.
+- Replicar dropdown global en `/public-ips` (usuarios no-admin) si tiene sentido para ellos.
+
+---
+
 ### 2026-05-26 — Crear interfaces WireGuard desde la UI (Linux SSH)
 
 **Motivo:** El manager solo gestionaba peers; las interfaces (`wg0`, `wg1`, …) había que crearlas manualmente por SSH.

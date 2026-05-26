@@ -442,18 +442,20 @@ export class LinuxWireGuardClient {
 
   /**
    * Add a new peer (live, without restart)
+   * @param wgInterfaceOverride optional — override the interface for this single operation
    */
-  async addPeer(publicKey: string, allowedIps: string): Promise<boolean> {
+  async addPeer(publicKey: string, allowedIps: string, wgInterfaceOverride?: string): Promise<boolean> {
+    const iface = wgInterfaceOverride || this.config.wgInterface;
     try {
       // Add peer to running interface
       await this.executeCommand(
-        `wg set ${this.config.wgInterface} peer ${publicKey} allowed-ips ${allowedIps}`
+        `wg set ${iface} peer ${publicKey} allowed-ips ${allowedIps}`
       );
 
       // Save to config file for persistence
-      await this.executeCommand(`wg-quick save ${this.config.wgInterface}`);
+      await this.executeCommand(`wg-quick save ${iface}`);
 
-      console.log(`[LinuxWG] Added peer ${publicKey.substring(0, 8)}... with IP ${allowedIps}`);
+      console.log(`[LinuxWG] Added peer ${publicKey.substring(0, 8)}... with IP ${allowedIps} on ${iface}`);
       return true;
     } catch (error) {
       console.error("[LinuxWG] Failed to add peer:", error);
@@ -462,23 +464,82 @@ export class LinuxWireGuardClient {
   }
 
   /**
-   * Remove a peer (live, without restart)
+   * Remove a peer (live, without restart). If wgInterfaceOverride is not provided
+   * and the peer cannot be found on the default interface, scans all interfaces.
    */
-  async removePeer(publicKey: string): Promise<boolean> {
-    try {
-      await this.executeCommand(
-        `wg set ${this.config.wgInterface} peer ${publicKey} remove`
-      );
+  async removePeer(publicKey: string, wgInterfaceOverride?: string): Promise<boolean> {
+    const tryRemove = async (iface: string): Promise<boolean> => {
+      try {
+        await this.executeCommand(`wg set ${iface} peer ${publicKey} remove`);
+        await this.executeCommand(`wg-quick save ${iface}`);
+        console.log(`[LinuxWG] Removed peer ${publicKey.substring(0, 8)}... from ${iface}`);
+        return true;
+      } catch (error) {
+        console.error(`[LinuxWG] Failed to remove peer from ${iface}:`, error);
+        return false;
+      }
+    };
 
-      // Save to config file
-      await this.executeCommand(`wg-quick save ${this.config.wgInterface}`);
-
-      console.log(`[LinuxWG] Removed peer ${publicKey.substring(0, 8)}...`);
-      return true;
-    } catch (error) {
-      console.error("[LinuxWG] Failed to remove peer:", error);
-      return false;
+    if (wgInterfaceOverride) {
+      return tryRemove(wgInterfaceOverride);
     }
+
+    // Default behaviour: try the configured interface first
+    const defaultIface = this.config.wgInterface || "wg1";
+    if (await tryRemove(defaultIface)) return true;
+
+    // Fall back to scanning all interfaces (multi-interface setups)
+    const all = await this.getInterfacesDetail();
+    for (const i of all) {
+      if (i.name === defaultIface) continue;
+      if (await tryRemove(i.name)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Get peers from one interface (defaults to config.wgInterface)
+   */
+  async getPeersForInterface(wgInterface: string): Promise<LinuxPeer[]> {
+    try {
+      const output = await this.executeCommand(`wg show ${wgInterface} dump`);
+      const lines = output.split("\n").filter(line => line.trim());
+      const peers: LinuxPeer[] = [];
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split("\t");
+        if (parts.length >= 4) {
+          const [publicKey, , endpoint, allowedIps, latestHandshake, rxBytes, txBytes] = parts;
+          peers.push({
+            publicKey,
+            allowedIps,
+            endpoint: endpoint !== "(none)" ? endpoint : undefined,
+            latestHandshake: latestHandshake !== "0" ? latestHandshake : undefined,
+            transfer: { rx: parseInt(rxBytes || "0", 10), tx: parseInt(txBytes || "0", 10) },
+          });
+        }
+      }
+      return peers;
+    } catch (error) {
+      console.error(`[LinuxWG] Failed to get peers for ${wgInterface}:`, error);
+      return [];
+    }
+  }
+
+  /**
+   * Get peers from ALL WireGuard interfaces on the server.
+   * Returns each peer tagged with the interface it lives on.
+   */
+  async getPeersAllInterfaces(): Promise<Array<LinuxPeer & { interface: string }>> {
+    const interfaces = await this.getInterfacesDetail();
+    const all: Array<LinuxPeer & { interface: string }> = [];
+    for (const iface of interfaces) {
+      if (!iface.running) continue;
+      const peers = await this.getPeersForInterface(iface.name);
+      for (const p of peers) {
+        all.push({ ...p, interface: iface.name });
+      }
+    }
+    return all;
   }
 
   /**
@@ -637,14 +698,15 @@ export class LinuxWireGuardClient {
   /**
    * Add WireGuard IP address for a subnet gateway
    * Example: 10.10.200.1/24 on wg1
+   * @param wgInterfaceOverride optional — when provided, uses this interface instead of the config default
    */
-  async addWgIpAddress(ipNumber: number): Promise<{ success: boolean; error?: string }> {
+  async addWgIpAddress(ipNumber: number, wgInterfaceOverride?: string): Promise<{ success: boolean; error?: string }> {
     if (!this.config.internalPrefix) {
       return { success: false, error: "Missing internal_prefix in config" };
     }
 
     const ipAddress = `${this.config.internalPrefix}.${ipNumber}.1/24`;
-    const wgIface = this.config.wgInterface || "wg1";
+    const wgIface = wgInterfaceOverride || this.config.wgInterface || "wg1";
 
     try {
       // Check if already exists
@@ -671,14 +733,15 @@ export class LinuxWireGuardClient {
 
   /**
    * Remove WireGuard IP address
+   * @param wgInterfaceOverride optional — when provided, removes from this interface instead of the config default
    */
-  async removeWgIpAddress(ipNumber: number): Promise<boolean> {
+  async removeWgIpAddress(ipNumber: number, wgInterfaceOverride?: string): Promise<boolean> {
     if (!this.config.internalPrefix) {
       return false;
     }
 
     const ipAddress = `${this.config.internalPrefix}.${ipNumber}.1/24`;
-    const wgIface = this.config.wgInterface || "wg1";
+    const wgIface = wgInterfaceOverride || this.config.wgInterface || "wg1";
 
     try {
       await this.executeCommand(`ip addr del ${ipAddress} dev ${wgIface} || true`);
@@ -730,8 +793,9 @@ export class LinuxWireGuardClient {
    * 1. WG IP (10.10.X.1/24)
    * 2. Public IP (69.176.94.X/24)
    * 3. NAT rule (10.10.X.0/24 -> 69.176.94.X)
+   * @param wgInterfaceOverride optional — when provided, the WG IP gets added to THIS interface instead of the config default
    */
-  async createMikroTikRules(ipNumber: number, mask: string = "/24"): Promise<{
+  async createMikroTikRules(ipNumber: number, mask: string = "/24", wgInterfaceOverride?: string): Promise<{
     wg_ip_created: boolean;
     ip_address_created: boolean;
     nat_rule_created: boolean;
@@ -744,11 +808,12 @@ export class LinuxWireGuardClient {
       errors: [] as string[],
     };
 
+    const effectiveWgInterface = wgInterfaceOverride || this.config.wgInterface;
     console.log(`[LinuxWG] Creating rules for IP number ${ipNumber}...`);
-    console.log(`[LinuxWG] Config: wgInterface=${this.config.wgInterface}, outInterface=${this.config.outInterface}, internalPrefix=${this.config.internalPrefix}, publicIpPrefix=${this.config.publicIpPrefix}`);
+    console.log(`[LinuxWG] Config: wgInterface=${effectiveWgInterface}, outInterface=${this.config.outInterface}, internalPrefix=${this.config.internalPrefix}, publicIpPrefix=${this.config.publicIpPrefix}`);
 
     // 1. Add WG IP
-    const wgResult = await this.addWgIpAddress(ipNumber);
+    const wgResult = await this.addWgIpAddress(ipNumber, wgInterfaceOverride);
     results.wg_ip_created = wgResult.success;
     if (!wgResult.success && wgResult.error) {
       results.errors.push(wgResult.error);
@@ -778,8 +843,9 @@ export class LinuxWireGuardClient {
 
   /**
    * Delete all MikroTik-style rules for an IP number
+   * @param wgInterfaceOverride optional — when provided, removes the WG IP from this interface
    */
-  async deleteMikroTikRules(ipNumber: number): Promise<{
+  async deleteMikroTikRules(ipNumber: number, wgInterfaceOverride?: string): Promise<{
     wg_ip_deleted: boolean;
     ip_address_deleted: boolean;
     nat_rule_deleted: boolean;
@@ -799,13 +865,13 @@ export class LinuxWireGuardClient {
     }
 
     try {
-      results.ip_address_deleted = await this.removeWgIpAddress(ipNumber);
+      results.ip_address_deleted = await this.removeWgIpAddress(ipNumber, wgInterfaceOverride);
     } catch (error) {
       results.errors.push(`Public IP: ${error}`);
     }
 
     try {
-      results.wg_ip_deleted = await this.removeWgIpAddress(ipNumber);
+      results.wg_ip_deleted = await this.removeWgIpAddress(ipNumber, wgInterfaceOverride);
     } catch (error) {
       results.errors.push(`WG IP: ${error}`);
     }

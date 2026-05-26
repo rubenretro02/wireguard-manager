@@ -88,6 +88,8 @@ export interface PublicIP {
   created_at: string;
   updated_at: string;
   created_by: string | null;
+  // v15: per-IP WG interface override. NULL = inherit from routers.wg_interface
+  wg_interface: string | null;
 }
 
 export interface UserRouter {

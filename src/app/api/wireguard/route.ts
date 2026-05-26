@@ -98,8 +98,8 @@ export async function POST(request: Request) {
         }
 
         case "getPeers": {
-          // Get live peers from WireGuard
-          const livePeers = await linuxClient.getPeers();
+          // v15: aggregate peers from ALL interfaces on the server, not just router.wg_interface
+          const livePeers = await linuxClient.getPeersAllInterfaces();
 
           // Get stored peer metadata from database
           const { data: storedPeers } = await supabase
@@ -137,7 +137,7 @@ export async function POST(request: Request) {
               "last-handshake": peer.latestHandshake,
               rx: peer.transfer?.rx,
               tx: peer.transfer?.tx,
-              interface: router.wg_interface || "wg1",
+              interface: peer.interface,
               disabled: false,
               name: stored?.name || "",
               comment: stored?.comment || stored?.public_ip || "",
@@ -173,9 +173,19 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing ip_number" }, { status: 400 });
           }
 
+          // Per-IP wg_interface override (v15). Falls back to router.wg_interface when NULL.
+          const { data: ipRow } = await supabase
+            .from("public_ips")
+            .select("wg_interface")
+            .eq("router_id", routerId)
+            .eq("ip_number", ip_number)
+            .single();
+          const wgInterfaceOverride = ipRow?.wg_interface || undefined;
+
           const results = await linuxClient.createMikroTikRules(
             ip_number,
-            router.public_ip_mask || "/24"
+            router.public_ip_mask || "/24",
+            wgInterfaceOverride
           );
 
           if (results.wg_ip_created || results.ip_address_created || results.nat_rule_created) {
@@ -202,7 +212,16 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing ip_number" }, { status: 400 });
           }
 
-          const results = await linuxClient.deleteMikroTikRules(delIpNumber);
+          // Per-IP wg_interface override (v15)
+          const { data: delIpRow } = await supabase
+            .from("public_ips")
+            .select("wg_interface")
+            .eq("router_id", routerId)
+            .eq("ip_number", delIpNumber)
+            .single();
+          const delWgInterfaceOverride = delIpRow?.wg_interface || undefined;
+
+          const results = await linuxClient.deleteMikroTikRules(delIpNumber, delWgInterfaceOverride);
           return NextResponse.json({
             success: results.errors.length === 0,
             ...results,
@@ -228,6 +247,9 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Public IP not found" }, { status: 404 });
           }
 
+          // v15: per-IP wg_interface — fall back to whatever the frontend sent (router default)
+          const effectiveInterface = publicIp.wg_interface || wgInterface;
+
           // Get next available IP in the subnet
           const nextIp = await linuxClient.getNextAvailableIp(publicIp.ip_number);
           if (!nextIp) {
@@ -241,15 +263,15 @@ export async function POST(request: Request) {
           const keyPair = generateKeyPair();
 
           console.log("[WireGuard API] Creating Linux peer:", {
-            interface: wgInterface,
+            interface: effectiveInterface,
             name,
             allowedAddress,
             publicIp: publicIp.public_ip
           });
 
           try {
-            // Add peer to WireGuard
-            const success = await linuxClient.addPeer(keyPair.publicKey, allowedAddress);
+            // Add peer to WireGuard on the IP's interface (v15 override)
+            const success = await linuxClient.addPeer(keyPair.publicKey, allowedAddress, effectiveInterface);
 
             if (!success) {
               return NextResponse.json({ error: "Failed to add peer to WireGuard" }, { status: 500 });
@@ -286,7 +308,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: storedPeer?.id || keyPair.publicKey.substring(0, 8),
               entityName: name,
-              details: { allowedAddress, publicIp: publicIp.public_ip, interface: wgInterface }
+              details: { allowedAddress, publicIp: publicIp.public_ip, interface: effectiveInterface }
             });
 
             console.log("[WireGuard API] Linux peer created successfully");
@@ -298,7 +320,7 @@ export async function POST(request: Request) {
                 "public-key": keyPair.publicKey,
                 "private-key": keyPair.privateKey,
                 "allowed-address": allowedAddress,
-                interface: wgInterface,
+                interface: effectiveInterface,
                 comment: publicIp.public_ip,
                 disabled: false,
               },
