@@ -542,11 +542,12 @@ export default function MyUserDetailPage() {
   };
 
   // Save user info and capabilities
+  // Uses the /api/users/capabilities endpoint instead of a direct Supabase update
+  // so semi-admins can manage capabilities of users they created — direct updates
+  // fail silently under typical RLS policies.
   const handleSaveUserInfo = async () => {
     setSaving(true);
     try {
-      // Semi-admins can grant ANY capability to users they created
-      // These capabilities only apply within their group, so it's safe
       const allowedCapabilities: UserCapabilities = {
         can_auto_expire: editCapabilities.can_auto_expire || false,
         can_see_all_peers: editCapabilities.can_see_all_peers || false,
@@ -557,20 +558,25 @@ export default function MyUserDetailPage() {
         can_see_group_peers: editCapabilities.can_see_group_peers || false,
       };
 
-      const { error } = await supabase
-        .from("profiles")
-        .update({
-          username: editUsername || null,
-          capabilities: allowedCapabilities
-        })
-        .eq("id", userId);
-
-      if (error) throw error;
+      const res = await fetch("/api/users/capabilities", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          username: editUsername,
+          capabilities: allowedCapabilities,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || "Update failed");
+      }
 
       toast.success("User info saved");
       fetchUserData();
     } catch (err) {
-      toast.error("Failed to save user info");
+      const msg = err instanceof Error ? err.message : "Failed to save user info";
+      toast.error(msg);
     }
     setSaving(false);
   };
