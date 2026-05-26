@@ -584,15 +584,17 @@ export async function POST(request: Request) {
           // Get network and WireGuard interfaces from Linux
           console.log("[WireGuard API] Getting interfaces from Linux...");
           try {
-            const [networkInterfaces, wgInterfaces] = await Promise.all([
+            const [networkInterfaces, wgInterfaces, wgInterfacesDetail] = await Promise.all([
               linuxClient.getNetworkInterfaces(),
               linuxClient.getWireGuardInterfaces(),
+              linuxClient.getInterfacesDetail(),
             ]);
 
             return NextResponse.json({
               success: true,
               networkInterfaces,
               wgInterfaces,
+              wgInterfacesDetail,
             });
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : "Unknown error";
@@ -602,8 +604,61 @@ export async function POST(request: Request) {
               error: errMsg,
               networkInterfaces: [],
               wgInterfaces: [],
+              wgInterfacesDetail: [],
             });
           }
+        }
+
+        case "createLinuxInterface": {
+          // Create a new WireGuard interface on the Linux server
+          const { name, listenPort, address } = data || {};
+          console.log("[WireGuard API] Creating Linux interface:", { name, listenPort, address });
+
+          if (!name || !listenPort || !address) {
+            return NextResponse.json(
+              { error: "Missing required fields: name, listenPort, address" },
+              { status: 400 }
+            );
+          }
+
+          const { generateKeyPair } = await import("@/lib/wireguard-keys");
+          const keyPair = generateKeyPair();
+
+          const result = await linuxClient.createInterface({
+            name,
+            listenPort: parseInt(String(listenPort), 10),
+            address,
+            privateKey: keyPair.privateKey,
+          });
+
+          if (!result.success) {
+            return NextResponse.json(
+              { error: result.error, details: result.details },
+              { status: 400 }
+            );
+          }
+
+          // Log activity
+          await logActivity({
+            supabase,
+            userId: user.id,
+            routerId,
+            action: "create",
+            entityType: "interface",
+            entityId: name,
+            entityName: name,
+            details: { listenPort, address, publicKey: keyPair.publicKey },
+          });
+
+          return NextResponse.json({
+            success: true,
+            interface: {
+              name,
+              listenPort: parseInt(String(listenPort), 10),
+              address,
+              publicKey: keyPair.publicKey,
+            },
+          });
         }
 
         case "getNatRuleTraffic": {

@@ -916,6 +916,127 @@ export class LinuxWireGuardClient {
   }
 
   /**
+   * Get WireGuard interfaces with their listen ports.
+   * Parses /etc/wireguard/*.conf so disabled interfaces are still listed.
+   */
+  async getInterfacesDetail(): Promise<Array<{ name: string; port: number | null; running: boolean }>> {
+    const detail = new Map<string, { name: string; port: number | null; running: boolean }>();
+
+    // Running interfaces (from wg show)
+    try {
+      const wgShow = await this.executeCommand("wg show all listen-port 2>/dev/null || true");
+      for (const line of wgShow.split("\n")) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 2) {
+          const port = parseInt(parts[1], 10);
+          detail.set(parts[0], { name: parts[0], port: isNaN(port) ? null : port, running: true });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // Configured interfaces (from /etc/wireguard/*.conf)
+    try {
+      const lsOut = await this.executeCommand("ls /etc/wireguard/*.conf 2>/dev/null || true");
+      const files = lsOut.split("\n").map(f => f.trim()).filter(Boolean);
+      for (const file of files) {
+        const name = file.split("/").pop()!.replace(/\.conf$/, "");
+        let port: number | null = detail.get(name)?.port ?? null;
+        if (port === null) {
+          try {
+            const grepOut = await this.executeCommand(`grep -i '^[[:space:]]*ListenPort' ${file} 2>/dev/null || true`);
+            const match = grepOut.match(/ListenPort\s*=\s*(\d+)/i);
+            if (match) port = parseInt(match[1], 10);
+          } catch {
+            // ignore
+          }
+        }
+        if (!detail.has(name)) {
+          detail.set(name, { name, port, running: false });
+        } else {
+          const existing = detail.get(name)!;
+          if (existing.port === null && port !== null) existing.port = port;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return Array.from(detail.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Create a new WireGuard interface on Linux.
+   * Validates name and port collisions, writes the conf, enables and starts the service.
+   */
+  async createInterface(opts: {
+    name: string;
+    listenPort: number;
+    address: string;
+    privateKey: string;
+  }): Promise<{ success: boolean; error?: string; details?: string }> {
+    const { name, listenPort, address, privateKey } = opts;
+
+    if (!/^wg\d+$/.test(name)) {
+      return { success: false, error: "Invalid interface name", details: "Name must match wg<N> (e.g. wg0, wg1)" };
+    }
+    if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+      return { success: false, error: "Invalid listen port", details: "Port must be between 1 and 65535" };
+    }
+    if (!/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(address)) {
+      return { success: false, error: "Invalid address", details: "Address must be CIDR (e.g. 10.10.0.1/24)" };
+    }
+    if (!privateKey || privateKey.length < 40) {
+      return { success: false, error: "Invalid private key" };
+    }
+
+    // Collision checks
+    const existing = await this.getInterfacesDetail();
+    if (existing.some(i => i.name === name)) {
+      return { success: false, error: "Interface name already in use", details: `${name} already exists on the server` };
+    }
+    const portTaken = existing.find(i => i.port === listenPort);
+    if (portTaken) {
+      return { success: false, error: "Listen port already in use", details: `Port ${listenPort} is used by ${portTaken.name}` };
+    }
+
+    const conf = `[Interface]\nPrivateKey = ${privateKey}\nAddress = ${address}\nListenPort = ${listenPort}\n`;
+    const b64 = Buffer.from(conf, "utf-8").toString("base64");
+    const confPath = `/etc/wireguard/${name}.conf`;
+
+    try {
+      // Write conf via base64 to avoid quoting issues
+      await this.executeCommand(`bash -c 'echo ${b64} | base64 -d > ${confPath}'`);
+      await this.executeCommand(`chmod 600 ${confPath}`);
+      await this.executeCommand(`systemctl enable wg-quick@${name}`);
+      await this.executeCommand(`systemctl start wg-quick@${name}`);
+
+      // Verify it came up
+      const verify = await this.executeCommand(`wg show ${name} 2>&1 || true`);
+      if (!verify || verify.toLowerCase().includes("unable to access interface")) {
+        return { success: false, error: "Interface did not start", details: verify || "wg show returned empty" };
+      }
+
+      console.log(`[LinuxWG] Created interface ${name} on port ${listenPort}`);
+      return { success: true };
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error("[LinuxWG] Failed to create interface:", errMsg);
+
+      // Best-effort cleanup if conf was partially written
+      try {
+        await this.executeCommand(`systemctl stop wg-quick@${name} 2>/dev/null || true`);
+        await this.executeCommand(`rm -f ${confPath}`);
+      } catch {
+        // ignore
+      }
+
+      return { success: false, error: "Failed to create interface", details: errMsg };
+    }
+  }
+
+  /**
    * Get WireGuard interfaces
    */
   async getWireGuardInterfaces(): Promise<string[]> {

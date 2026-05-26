@@ -265,7 +265,14 @@ export default function AdminPage() {
   const [savingRouter, setSavingRouter] = useState(false);
   const [detectedNetworkInterfaces, setDetectedNetworkInterfaces] = useState<string[]>([]);
   const [detectedWgInterfaces, setDetectedWgInterfaces] = useState<string[]>([]);
+  const [detectedWgInterfacesDetail, setDetectedWgInterfacesDetail] = useState<Array<{ name: string; port: number | null; running: boolean }>>([]);
   const [loadingEditInterfaces, setLoadingEditInterfaces] = useState(false);
+
+  // Create-interface dialog state
+  const [createIfaceOpen, setCreateIfaceOpen] = useState(false);
+  const [creatingIface, setCreatingIface] = useState(false);
+  const [newIfaceData, setNewIfaceData] = useState({ name: "", listenPort: "", address: "" });
+  const [newIfaceError, setNewIfaceError] = useState<string | null>(null);
 
   // User states
   const [addUserOpen, setAddUserOpen] = useState(false);
@@ -872,6 +879,7 @@ export default function AdminPage() {
     });
     setDetectedNetworkInterfaces([]);
     setDetectedWgInterfaces([]);
+    setDetectedWgInterfacesDetail([]);
     setEditRouterOpen(true);
 
     // Load interfaces from router
@@ -886,11 +894,102 @@ export default function AdminPage() {
       if (data.success) {
         setDetectedNetworkInterfaces(data.networkInterfaces || []);
         setDetectedWgInterfaces(data.wgInterfaces || []);
+        setDetectedWgInterfacesDetail(data.wgInterfacesDetail || []);
       }
     } catch (err) {
       console.error("Failed to load interfaces:", err);
     }
     setLoadingEditInterfaces(false);
+  };
+
+  // Suggest defaults for a new WG interface based on what's already on the server
+  const suggestNewInterfaceDefaults = () => {
+    const usedNames = new Set(detectedWgInterfacesDetail.map(i => i.name));
+    let nextName = "wg0";
+    for (let i = 0; i < 100; i++) {
+      if (!usedNames.has(`wg${i}`)) { nextName = `wg${i}`; break; }
+    }
+    const usedPorts = detectedWgInterfacesDetail.map(i => i.port).filter((p): p is number => p !== null);
+    const maxPort = usedPorts.length > 0 ? Math.max(...usedPorts) : 51719;
+    const nextPort = maxPort + 1;
+    const prefix = (editRouterData.internal_prefix || "10.10").trim().replace(/\.$/, "");
+    const suggestedAddress = `${prefix}.0.1/24`;
+    return { name: nextName, listenPort: String(nextPort), address: suggestedAddress };
+  };
+
+  const openCreateInterfaceDialog = () => {
+    setNewIfaceData(suggestNewInterfaceDefaults());
+    setNewIfaceError(null);
+    setCreateIfaceOpen(true);
+  };
+
+  const handleCreateInterface = async () => {
+    if (!editingRouter) return;
+    const name = newIfaceData.name.trim();
+    const listenPort = parseInt(newIfaceData.listenPort, 10);
+    const address = newIfaceData.address.trim();
+
+    // Client-side validation
+    if (!/^wg\d+$/.test(name)) {
+      setNewIfaceError("Name must be wg<N> (e.g. wg0, wg1)");
+      return;
+    }
+    if (detectedWgInterfacesDetail.some(i => i.name === name)) {
+      setNewIfaceError(`Interface ${name} already exists on the server`);
+      return;
+    }
+    if (!Number.isInteger(listenPort) || listenPort < 1 || listenPort > 65535) {
+      setNewIfaceError("Port must be between 1 and 65535");
+      return;
+    }
+    const portCollision = detectedWgInterfacesDetail.find(i => i.port === listenPort);
+    if (portCollision) {
+      setNewIfaceError(`Port ${listenPort} is already used by ${portCollision.name}`);
+      return;
+    }
+    if (!/^\d+\.\d+\.\d+\.\d+\/\d+$/.test(address)) {
+      setNewIfaceError("Address must be CIDR (e.g. 10.10.0.1/24)");
+      return;
+    }
+
+    setCreatingIface(true);
+    setNewIfaceError(null);
+    try {
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "createLinuxInterface",
+          routerId: editingRouter.id,
+          data: { name, listenPort, address },
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        setNewIfaceError(json.details || json.error || "Failed to create interface");
+        return;
+      }
+
+      // Refresh interface list and auto-select the new one
+      const refreshRes = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getSystemInterfaces", routerId: editingRouter.id }),
+      });
+      const refreshData = await refreshRes.json();
+      if (refreshData.success) {
+        setDetectedWgInterfaces(refreshData.wgInterfaces || []);
+        setDetectedWgInterfacesDetail(refreshData.wgInterfacesDetail || []);
+      }
+      setEditRouterData(prev => ({ ...prev, wg_interface: name }));
+      toast.success(`Interface ${name} created on port ${listenPort}`);
+      setCreateIfaceOpen(false);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setNewIfaceError(msg);
+    } finally {
+      setCreatingIface(false);
+    }
   };
 
   // Save edited router
@@ -3275,28 +3374,52 @@ export default function AdminPage() {
                     WireGuard Interface
                     {loadingEditInterfaces && <RefreshCw className="w-3 h-3 animate-spin" />}
                   </Label>
-                  {detectedWgInterfaces.length > 0 ? (
-                    <Select
-                      value={editRouterData.wg_interface}
-                      onValueChange={(v) => setEditRouterData({ ...editRouterData, wg_interface: v })}
-                    >
-                      <SelectTrigger className="bg-secondary">
-                        <SelectValue placeholder="Select WG interface" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {detectedWgInterfaces.map((iface) => (
-                          <SelectItem key={iface} value={iface}>{iface}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <Input
-                      placeholder={editRouterData.connection_type === "linux-ssh" ? "wg1" : "wg0"}
-                      value={editRouterData.wg_interface}
-                      onChange={(e) => setEditRouterData({ ...editRouterData, wg_interface: e.target.value })}
-                      className="bg-secondary"
-                    />
-                  )}
+                  <div className="flex gap-2">
+                    {detectedWgInterfaces.length > 0 ? (
+                      <Select
+                        value={editRouterData.wg_interface}
+                        onValueChange={(v) => {
+                          if (v === "__new__") {
+                            openCreateInterfaceDialog();
+                          } else {
+                            setEditRouterData({ ...editRouterData, wg_interface: v });
+                          }
+                        }}
+                      >
+                        <SelectTrigger className="bg-secondary flex-1">
+                          <SelectValue placeholder="Select WG interface" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {detectedWgInterfaces.map((iface) => (
+                            <SelectItem key={iface} value={iface}>{iface}</SelectItem>
+                          ))}
+                          {editRouterData.connection_type === "linux-ssh" && (
+                            <SelectItem key="__new__" value="__new__" className="text-emerald-400">
+                              + New Interface...
+                            </SelectItem>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        placeholder={editRouterData.connection_type === "linux-ssh" ? "wg1" : "wg0"}
+                        value={editRouterData.wg_interface}
+                        onChange={(e) => setEditRouterData({ ...editRouterData, wg_interface: e.target.value })}
+                        className="bg-secondary flex-1"
+                      />
+                    )}
+                    {editRouterData.connection_type === "linux-ssh" && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        onClick={openCreateInterfaceDialog}
+                        title="Create new WireGuard interface"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    )}
+                  </div>
                   {detectedWgInterfaces.length > 0 && (
                     <p className="text-xs text-emerald-400">Detected {detectedWgInterfaces.length} WG interface(s)</p>
                   )}
@@ -3358,6 +3481,79 @@ export default function AdminPage() {
             <Button variant="outline" onClick={() => setEditRouterOpen(false)}>Cancel</Button>
             <Button onClick={handleEditRouter} disabled={savingRouter}>
               {savingRouter ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create WireGuard Interface Dialog */}
+      <Dialog open={createIfaceOpen} onOpenChange={setCreateIfaceOpen}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Create WireGuard Interface</DialogTitle>
+            <DialogDescription>
+              Creates /etc/wireguard/&lt;name&gt;.conf on the Linux server and starts wg-quick@&lt;name&gt;.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>Interface Name</Label>
+              <Input
+                placeholder="wg4"
+                value={newIfaceData.name}
+                onChange={(e) => {
+                  setNewIfaceData({ ...newIfaceData, name: e.target.value });
+                  setNewIfaceError(null);
+                }}
+                className="bg-secondary"
+              />
+              <p className="text-xs text-muted-foreground">
+                Must match wg&lt;N&gt;. Existing: {detectedWgInterfacesDetail.map(i => i.name).join(", ") || "none"}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Listen Port</Label>
+              <Input
+                type="number"
+                placeholder="51820"
+                value={newIfaceData.listenPort}
+                onChange={(e) => {
+                  setNewIfaceData({ ...newIfaceData, listenPort: e.target.value });
+                  setNewIfaceError(null);
+                }}
+                className="bg-secondary"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used ports: {detectedWgInterfacesDetail.filter(i => i.port !== null).map(i => `${i.name}=${i.port}`).join(", ") || "none"}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Address (CIDR)</Label>
+              <Input
+                placeholder="10.10.0.1/24"
+                value={newIfaceData.address}
+                onChange={(e) => {
+                  setNewIfaceData({ ...newIfaceData, address: e.target.value });
+                  setNewIfaceError(null);
+                }}
+                className="bg-secondary"
+              />
+              <p className="text-xs text-muted-foreground">
+                Primary address assigned to the interface. Per-IP subnets are added separately.
+              </p>
+            </div>
+            {newIfaceError && (
+              <div className="rounded-md border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400">
+                {newIfaceError}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCreateIfaceOpen(false)} disabled={creatingIface}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateInterface} disabled={creatingIface}>
+              {creatingIface ? "Creating..." : "Create Interface"}
             </Button>
           </DialogFooter>
         </DialogContent>
