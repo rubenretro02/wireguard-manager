@@ -548,9 +548,11 @@ export default function MyUserDetailPage() {
   const handleSaveUserInfo = async () => {
     setSaving(true);
     try {
+      // Semi-admins cannot grant "See All Peers" — that's super-admin only and would
+      // let a sub-user view peers from other groups. Always force false here.
       const allowedCapabilities: UserCapabilities = {
         can_auto_expire: editCapabilities.can_auto_expire || false,
-        can_see_all_peers: editCapabilities.can_see_all_peers || false,
+        can_see_all_peers: false,
         can_create_users: editCapabilities.can_create_users || false,
         can_manage_user_ips: editCapabilities.can_manage_user_ips || false,
         can_delete: editCapabilities.can_delete || false,
@@ -784,21 +786,9 @@ export default function MyUserDetailPage() {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
-                    <div className="flex items-center gap-3">
-                      <Users className="w-4 h-4 text-cyan-400" />
-                      <div>
-                        <p className="font-medium text-sm">See All Peers</p>
-                        <p className="text-xs text-muted-foreground">Can view all peers, not just own</p>
-                      </div>
-                    </div>
-                    <Checkbox
-                      checked={editCapabilities.can_see_all_peers || false}
-                      onCheckedChange={(checked) =>
-                        setEditCapabilities(prev => ({ ...prev, can_see_all_peers: !!checked }))
-                      }
-                    />
-                  </div>
+                  {/* "See All Peers" is intentionally hidden here — it grants visibility across
+                      every group on the platform, which is super-admin only. Sub-users should use
+                      "See Group Peers" instead, which is scoped to their parent + siblings. */}
 
                   <div className="flex items-center justify-between p-3 bg-secondary rounded-lg">
                     <div className="flex items-center gap-3">

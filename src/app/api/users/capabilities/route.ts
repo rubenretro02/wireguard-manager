@@ -53,13 +53,16 @@ export async function PATCH(request: Request) {
     }
   }
 
-  // Validate capabilities object (whitelist known keys)
+  // Validate capabilities object (whitelist known keys).
+  // Non-admins cannot grant capabilities that would let a sub-user see content outside
+  // their own group: can_see_all_peers, can_use_restricted_ips, can_see_restricted_peers.
+  // Those are forced to false here regardless of what the client sent.
   const validCapabilities: UserCapabilities | undefined = capabilities
     ? {
         can_auto_expire: capabilities.can_auto_expire === true,
-        can_see_all_peers: capabilities.can_see_all_peers === true,
-        can_use_restricted_ips: capabilities.can_use_restricted_ips === true,
-        can_see_restricted_peers: capabilities.can_see_restricted_peers === true,
+        can_see_all_peers: isAdmin && capabilities.can_see_all_peers === true,
+        can_use_restricted_ips: isAdmin && capabilities.can_use_restricted_ips === true,
+        can_see_restricted_peers: isAdmin && capabilities.can_see_restricted_peers === true,
         can_create_users: capabilities.can_create_users === true,
         can_manage_user_ips: capabilities.can_manage_user_ips === true,
         can_delete: capabilities.can_delete === true,
