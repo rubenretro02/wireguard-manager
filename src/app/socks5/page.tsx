@@ -1068,6 +1068,17 @@ export default function Socks5Page() {
     setNewProxy({ ...newProxy, password });
   };
 
+  // Generate random username (lowercase letters + digits, 8 chars, starts with a letter)
+  const generateUsername = () => {
+    const letters = "abcdefghijklmnopqrstuvwxyz";
+    const alnum = "abcdefghijklmnopqrstuvwxyz0123456789";
+    let username = letters.charAt(Math.floor(Math.random() * letters.length));
+    for (let i = 1; i < 8; i++) {
+      username += alnum.charAt(Math.floor(Math.random() * alnum.length));
+    }
+    setNewProxy({ ...newProxy, username });
+  };
+
   // Helper functions
   const canManageProxy = (proxy: Socks5Proxy) => {
     return isAdmin || proxy.created_by === currentUser?.id;
@@ -1722,12 +1733,17 @@ export default function Socks5Page() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Username</Label>
-                <Input
-                  placeholder="proxy_user1"
-                  value={newProxy.username}
-                  onChange={(e) => setNewProxy({ ...newProxy, username: e.target.value })}
-                  className="bg-secondary border-border"
-                />
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="proxy_user1"
+                    value={newProxy.username}
+                    onChange={(e) => setNewProxy({ ...newProxy, username: e.target.value })}
+                    className="bg-secondary border-border"
+                  />
+                  <Button variant="outline" onClick={generateUsername} size="sm">
+                    Gen
+                  </Button>
+                </div>
               </div>
 
               <div className="space-y-2">

@@ -140,19 +140,25 @@ export async function GET(request: Request) {
     }
     proxies = data || [];
   } else if (canSeeAllProxies && createdByUserId) {
-    // User has can_see_all_proxies - see proxies from their parent + siblings
-    // Get all users created by the same parent (siblings)
-    const { data: siblings } = await supabase
+    // User has can_see_all_proxies - see proxies from their parent + siblings.
+    // The RLS policy on socks5_proxies does not cover this "see parent + siblings"
+    // case, so a plain query under the user's session would come back empty.
+    // The API already authorised the user by capability, so we use the service-role
+    // client (when available) just for THIS read.
+    const adminClient = createAdminClient();
+    const readClient = adminClient ?? supabase;
+
+    const { data: siblings } = await readClient
       .from("profiles")
       .select("id")
       .eq("created_by_user_id", createdByUserId);
 
-    const siblingIds = siblings?.map((s: { id: string }) => s.id) || [];
+    const siblingIds = (siblings as { id: string }[] | null)?.map(s => s.id) || [];
 
     // Include: parent user + all siblings (including self)
     const groupUserIds = [createdByUserId, ...siblingIds];
 
-    const { data, error } = await supabase
+    const { data, error } = await readClient
       .from("socks5_proxies")
       .select("*")
       .eq("router_id", routerId)
