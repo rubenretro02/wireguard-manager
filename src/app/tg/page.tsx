@@ -564,8 +564,9 @@ export default function TgMiniApp() {
                           </>
                         )}
                         {live && (
-                          <span className="ml-auto text-muted-foreground font-mono">
-                            ↓{formatBytes(live.rx)} ↑{formatBytes(live.tx)}
+                          <span className="ml-auto font-mono">
+                            <span className="text-sky-400">↓ {formatBytes(live.rx)}</span>{" "}
+                            <span className="text-emerald-400">↑ {formatBytes(live.tx)}</span>
                           </span>
                         )}
                       </div>

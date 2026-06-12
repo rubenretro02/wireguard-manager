@@ -268,14 +268,16 @@ export default function DashboardPage() {
     }
     const { data } = await supabase
       .from("tg_customer_peers")
-      .select("peer_public_key, tg_customers(username, first_name, telegram_id)")
+      .select("peer_public_key, display_name, tg_customers(username, first_name, telegram_id)")
       .eq("router_id", selectedRouterId);
     const map: Record<string, string> = {};
     for (const row of data || []) {
       // biome-ignore lint/suspicious/noExplicitAny: joined shape
-      const c = (row as any).tg_customers;
-      map[(row as { peer_public_key: string }).peer_public_key] =
-        c?.username ? `@${c.username}` : c?.first_name || String(c?.telegram_id || "TG");
+      const r = row as any;
+      const c = r.tg_customers;
+      const who = c?.username ? `@${c.username}` : c?.first_name || String(c?.telegram_id || "TG");
+      // incluye el nombre que ve el cliente ("Peer 4") para mapear tarjetas ↔ peers
+      map[r.peer_public_key] = r.display_name ? `${who} · ${r.display_name}` : who;
     }
     setTgAssigned(map);
     // eslint-disable-next-line react-hooks/exhaustive-deps

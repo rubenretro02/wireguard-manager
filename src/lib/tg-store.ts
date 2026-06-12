@@ -658,7 +658,10 @@ export interface LivePeerStatus {
 export async function getLiveStatusesForPeers(
   supabase: SupabaseClient,
   peers: TgCustomerPeer[]
-): Promise<{ live: Map<string, LivePeerStatus>; statusChanges: Map<string, TgPeerStatus> }> {
+): Promise<{
+  live: Map<string, LivePeerStatus>;
+  statusChanges: Map<string, TgPeerStatus>;
+}> {
   const live = new Map<string, LivePeerStatus>();
   const statusChanges = new Map<string, TgPeerStatus>();
 
