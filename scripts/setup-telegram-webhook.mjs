@@ -21,6 +21,7 @@ if (existsSync(envFile)) {
 }
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
+const agentToken = process.env.TELEGRAM_AGENT_BOT_TOKEN;
 const appUrl = process.env.NEXT_PUBLIC_APP_URL;
 const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
@@ -29,30 +30,39 @@ if (!token || !appUrl) {
   process.exit(1);
 }
 
-const webhookUrl = `${appUrl.replace(/\/$/, "")}/api/telegram/webhook`;
+const base = appUrl.replace(/\/$/, "");
 
-const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    url: webhookUrl,
-    secret_token: secret || undefined,
-    allowed_updates: ["message"],
-  }),
-});
-const json = await res.json();
-console.log("setWebhook:", JSON.stringify(json, null, 2));
+async function configureBot(botToken, label, webhookUrl, menuText) {
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      url: webhookUrl,
+      secret_token: secret || undefined,
+      allowed_updates: ["message"],
+    }),
+  });
+  console.log(`[${label}] setWebhook:`, JSON.stringify(await res.json()));
 
-// Botón de menú que abre la Mini App directamente
-const menuRes = await fetch(`https://api.telegram.org/bot${token}/setChatMenuButton`, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    menu_button: {
-      type: "web_app",
-      text: "VPN Store",
-      web_app: { url: `${appUrl.replace(/\/$/, "")}/tg` },
-    },
-  }),
-});
-console.log("setChatMenuButton:", JSON.stringify(await menuRes.json(), null, 2));
+  // Botón de menú que abre la Mini App directamente
+  const menuRes = await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      menu_button: {
+        type: "web_app",
+        text: menuText,
+        web_app: { url: `${base}/tg` },
+      },
+    }),
+  });
+  console.log(`[${label}] setChatMenuButton:`, JSON.stringify(await menuRes.json()));
+}
+
+await configureBot(token, "store", `${base}/api/telegram/webhook`, "VPN Store");
+
+if (agentToken) {
+  await configureBot(agentToken, "agent", `${base}/api/telegram/webhook?bot=agent`, "VPN Manager");
+} else {
+  console.log("[agent] TELEGRAM_AGENT_BOT_TOKEN no configurado — bot de agents omitido");
+}

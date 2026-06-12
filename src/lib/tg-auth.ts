@@ -28,25 +28,51 @@ export async function authenticateTgRequest(
 
   const supabase = getServiceClient();
   const u = validated.user;
-  const { data: customer, error } = await supabase
-    .from("tg_customers")
-    .upsert(
-      {
-        telegram_id: u.id,
-        username: u.username || null,
-        first_name: u.first_name || null,
-        last_name: u.last_name || null,
-        photo_url: u.photo_url || null,
-        language_code: u.language_code || null,
-        last_seen_at: new Date().toISOString(),
-      },
-      { onConflict: "telegram_id" }
-    )
-    .select()
-    .single();
+  const profileFields = {
+    username: u.username || null,
+    first_name: u.first_name || null,
+    last_name: u.last_name || null,
+    photo_url: u.photo_url || null,
+    language_code: u.language_code || null,
+    last_seen_at: new Date().toISOString(),
+  };
 
-  if (error || !customer) {
-    console.error("[TgAuth] Failed to upsert customer:", error?.message);
+  // No usamos upsert ciego: el customer_type inicial depende del bot por el
+  // que entró (bot manager → agent), pero NUNCA se pisa en cuentas existentes.
+  let customer: TgCustomer | null = null;
+  const { data: existing } = await supabase
+    .from("tg_customers")
+    .select("*")
+    .eq("telegram_id", u.id)
+    .maybeSingle();
+
+  if (existing) {
+    const { data: updated, error } = await supabase
+      .from("tg_customers")
+      .update(profileFields)
+      .eq("id", existing.id)
+      .select()
+      .single();
+    if (error) console.error("[TgAuth] Failed to update customer:", error.message);
+    customer = (updated || existing) as TgCustomer;
+  } else {
+    const { data: created, error } = await supabase
+      .from("tg_customers")
+      .insert({
+        telegram_id: u.id,
+        ...profileFields,
+        customer_type: validated.bot === "agent" ? "agent" : "client",
+      })
+      .select()
+      .single();
+    if (error || !created) {
+      console.error("[TgAuth] Failed to create customer:", error?.message);
+      return { error: NextResponse.json({ error: "Failed to load account" }, { status: 500 }) };
+    }
+    customer = created as TgCustomer;
+  }
+
+  if (!customer) {
     return { error: NextResponse.json({ error: "Failed to load account" }, { status: 500 }) };
   }
 

@@ -104,6 +104,13 @@ con Cryptomus a ese precio sin plan (webhook usa esos días si payment.plan_id e
 columna Type en Customers, botón "Assign existing peer" en Peers (server→peer→customer+pricing),
 botón $ por peer para editar pricing, y la pestaña IPs sin server muestra TODAS las for-sale.
 
+**Bots separados (store/agent):** `TELEGRAM_AGENT_BOT_TOKEN` (@Wireguardvpnmanagerbot) además del
+store bot (@blackgoatvpn_bot). `validateInitData` prueba ambos tokens y devuelve `bot`; quien se
+registra por el bot agent se crea con `customer_type='agent'` (cuentas existentes nunca se pisan).
+Webhook compartido: `/api/telegram/webhook` (store) y `?bot=agent` (agent), mismo secret.
+Notificaciones salen por el bot del tipo del customer (`botForCustomerType`). El setup script
+configura ambos bots si el token agent está presente.
+
 **Pendiente / TODO:**
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).

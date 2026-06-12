@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sendTelegramMessage } from "@/lib/telegram";
+import { botForCustomerType, sendTelegramMessage } from "@/lib/telegram";
 import {
   deactivateCustomerPeer,
   getServiceClient,
@@ -46,7 +46,9 @@ export async function GET(request: Request) {
           peer.tg_customers.telegram_id,
           isAgent
             ? `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nContact support to extend it.`
-            : `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nYou can renew it from the app to reactivate it with the same configuration.`
+            : `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nYou can renew it from the app to reactivate it with the same configuration.`,
+          {},
+          botForCustomerType(peer.tg_customers.customer_type)
         );
       }
     } catch (err) {

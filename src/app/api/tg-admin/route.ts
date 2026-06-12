@@ -12,7 +12,7 @@ import {
   renewCustomerPeer,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
-import { getMiniAppUrl } from "@/lib/telegram";
+import { botForCustomerType, getMiniAppUrl } from "@/lib/telegram";
 import type { Router } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -165,11 +165,13 @@ export async function POST(request: Request) {
         });
 
         if (notify) {
-          const { data: customer } = await supabase.from("tg_customers").select("telegram_id").eq("id", peer.customer_id).single();
+          const { data: customer } = await supabase.from("tg_customers").select("telegram_id, customer_type").eq("id", peer.customer_id).single();
           if (customer) {
             await sendTelegramMessage(
               customer.telegram_id,
-              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`
+              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`,
+              {},
+              botForCustomerType(customer.customer_type)
             );
           }
         }
@@ -313,10 +315,12 @@ export async function POST(request: Request) {
         if (notify) {
           let appUrl = "";
           try { appUrl = getMiniAppUrl(); } catch { /* optional */ }
+          const isAgentCustomer = customer.customer_type === "agent";
           await sendTelegramMessage(
             customer.telegram_id,
-            `🔗 The peer <b>${assigned.peer_name}</b> was linked to your account.\n\nYou can now check its status and renew it from the app.${privateKey ? "" : "\n\nNote: to download a fresh config, use <b>Rotate keys</b> in the app."}`,
-            appUrl ? { reply_markup: { inline_keyboard: [[{ text: "🚀 Open App", web_app: { url: appUrl } }]] } } : {}
+            `🔗 The peer <b>${assigned.peer_name}</b> was linked to your account.\n\nYou can now check its status${isAgentCustomer ? "" : " and renew it"} from the app.${privateKey ? "" : "\n\nNote: to download a fresh config, use <b>Rotate keys</b> in the app."}`,
+            appUrl ? { reply_markup: { inline_keyboard: [[{ text: "🚀 Open App", web_app: { url: appUrl } }]] } } : {},
+            botForCustomerType(customer.customer_type)
           );
         }
 
