@@ -81,6 +81,11 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 - El QR se genera client-side con `qrcode` (nueva dep) — nunca mandar la config a servicios externos.
 - `tg_customer_peers` guarda la private key del cliente: es lo que permite re-mostrar config y QR.
 
+**v17 — IPs en venta:** `scripts/migration-v17-ips-for-sale.sql` agrega `public_ips.for_sale`.
+El provisioning automático SOLO usa IPs `for_sale = true` (elige la menos cargada por peers
+activos); las demás quedan reservadas para uso propio/dedicated. Toggle en
+Admin → Telegram → "IPs en venta". Dedicated = fijar `public_ip_id` en el plan.
+
 **Pendiente / TODO:**
 - Soporte MikroTik en provisioning.
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.

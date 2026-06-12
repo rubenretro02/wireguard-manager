@@ -243,11 +243,22 @@ export async function POST(request: Request) {
         if (!data.routerId) return NextResponse.json({ error: "Missing routerId" }, { status: 400 });
         const { data: ips, error } = await supabase
           .from("public_ips")
-          .select("id, public_ip, ip_number, enabled, restricted, wg_interface")
+          .select("id, public_ip, ip_number, enabled, restricted, wg_interface, for_sale")
           .eq("router_id", data.routerId)
           .order("ip_number");
         if (error) throw new Error(error.message);
         return NextResponse.json({ ips });
+      }
+
+      case "setIpForSale": {
+        const { id, forSale } = data;
+        if (!id) return NextResponse.json({ error: "Missing ip id" }, { status: 400 });
+        const { error } = await supabase
+          .from("public_ips")
+          .update({ for_sale: Boolean(forSale) })
+          .eq("id", id);
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
       }
 
       default:

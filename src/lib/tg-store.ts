@@ -119,6 +119,7 @@ async function pickPublicIp(
   supabase: SupabaseClient,
   plan: TgPlan
 ): Promise<PublicIP> {
+  // IP fija del plan (clientes con dedicated IP elegida por el admin)
   if (plan.public_ip_id) {
     const { data, error } = await supabase
       .from("public_ips")
@@ -129,15 +130,40 @@ async function pickPublicIp(
     if (!data.enabled) throw new Error("Plan public IP is disabled");
     return data as PublicIP;
   }
+
+  // Auto: SOLO IPs marcadas "for sale" por el admin (v17). Las demás quedan
+  // reservadas para uso propio o dedicated. Se elige la menos cargada.
   const { data, error } = await supabase
     .from("public_ips")
     .select("*")
     .eq("router_id", plan.router_id)
     .eq("enabled", true)
-    .eq("restricted", false)
+    .eq("for_sale", true)
     .order("ip_number", { ascending: true });
-  if (error || !data?.length) throw new Error("No public IPs available for this plan's server");
-  return data[0] as PublicIP;
+  if (error || !data?.length) {
+    throw new Error("No public IPs marked for sale on this server — mark some in Admin → Telegram → IPs en venta");
+  }
+
+  const { data: activePeers } = await supabase
+    .from("tg_customer_peers")
+    .select("public_ip")
+    .eq("router_id", plan.router_id)
+    .eq("status", "active");
+  const load = new Map<string, number>();
+  for (const p of activePeers || []) {
+    load.set(p.public_ip, (load.get(p.public_ip) || 0) + 1);
+  }
+
+  let best = data[0] as PublicIP;
+  let bestLoad = load.get(best.public_ip) || 0;
+  for (const ip of data as PublicIP[]) {
+    const l = load.get(ip.public_ip) || 0;
+    if (l < bestLoad) {
+      best = ip;
+      bestLoad = l;
+    }
+  }
+  return best;
 }
 
 /**

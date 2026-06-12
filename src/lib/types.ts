@@ -90,6 +90,8 @@ export interface PublicIP {
   created_by: string | null;
   // v15: per-IP WG interface override. NULL = inherit from routers.wg_interface
   wg_interface: string | null;
+  // v17: only IPs marked for sale are used by the Telegram store auto-provisioning
+  for_sale?: boolean;
 }
 
 export interface UserRouter {

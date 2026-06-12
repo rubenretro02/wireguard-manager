@@ -87,6 +87,7 @@ interface IpOption {
   ip_number: number;
   enabled: boolean;
   restricted: boolean;
+  for_sale?: boolean;
 }
 
 const emptyPlanForm = {
@@ -122,6 +123,11 @@ export default function AdminTelegramPage() {
   const [payments, setPayments] = useState<AdminPayment[]>([]);
   const [routers, setRouters] = useState<RouterOption[]>([]);
   const [ips, setIps] = useState<IpOption[]>([]);
+
+  // Tab "IPs en venta"
+  const [saleRouterId, setSaleRouterId] = useState<string>("");
+  const [saleIps, setSaleIps] = useState<IpOption[]>([]);
+  const [loadingSaleIps, setLoadingSaleIps] = useState(false);
 
   // Plan dialog
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
@@ -196,6 +202,29 @@ export default function AdminTelegramPage() {
       .then((r) => setIps(r.ips || []))
       .catch(() => setIps([]));
   }, [planForm.router_id, tgAdmin]);
+
+  // Cargar IPs del router seleccionado en la pestaña "IPs en venta"
+  useEffect(() => {
+    if (!saleRouterId) {
+      setSaleIps([]);
+      return;
+    }
+    setLoadingSaleIps(true);
+    tgAdmin("listPublicIps", { routerId: saleRouterId })
+      .then((r) => setSaleIps(r.ips || []))
+      .catch((err) => toast.error(err instanceof Error ? err.message : "Error cargando IPs"))
+      .finally(() => setLoadingSaleIps(false));
+  }, [saleRouterId, tgAdmin]);
+
+  const toggleForSale = async (ip: IpOption) => {
+    try {
+      await tgAdmin("setIpForSale", { id: ip.id, forSale: !ip.for_sale });
+      setSaleIps((prev) => prev.map((i) => (i.id === ip.id ? { ...i, for_sale: !ip.for_sale } : i)));
+      toast.success(!ip.for_sale ? `${ip.public_ip} abierta a ventas` : `${ip.public_ip} reservada`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error");
+    }
+  };
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -361,6 +390,7 @@ export default function AdminTelegramPage() {
         <Tabs defaultValue="plans">
           <TabsList>
             <TabsTrigger value="plans">Planes ({plans.length})</TabsTrigger>
+            <TabsTrigger value="ips">IPs en venta</TabsTrigger>
             <TabsTrigger value="customers">Clientes ({customers.length})</TabsTrigger>
             <TabsTrigger value="peers">Peers ({peers.length})</TabsTrigger>
             <TabsTrigger value="payments">Pagos ({payments.length})</TabsTrigger>
@@ -417,6 +447,93 @@ export default function AdminTelegramPage() {
                 </TableBody>
               </Table>
             </div>
+          </TabsContent>
+
+          {/* ============ IPs EN VENTA ============ */}
+          <TabsContent value="ips" className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm text-muted-foreground">
+                Las órdenes automáticas SOLO usan IPs marcadas <b>en venta</b> (se elige la menos cargada).
+                Las demás quedan reservadas para tu uso o clientes con IP dedicada (esas se asignan fijándolas en un plan).
+              </p>
+              <div className="w-64 shrink-0">
+                <Select value={saleRouterId} onValueChange={setSaleRouterId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecciona un servidor" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {routers.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name} ({r.host})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {saleRouterId && (
+              <div className="rounded-xl border border-border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>IP pública</TableHead>
+                      <TableHead>Clientes activos</TableHead>
+                      <TableHead>Estado</TableHead>
+                      <TableHead className="text-right">En venta</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {loadingSaleIps && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center py-8">
+                          <Loader2 className="w-5 h-5 animate-spin inline-block" />
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {!loadingSaleIps && saleIps.length === 0 && (
+                      <TableRow>
+                        <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                          Este servidor no tiene IPs públicas configuradas.
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {!loadingSaleIps &&
+                      saleIps.map((ip) => {
+                        const activeCount = peers.filter(
+                          (p) => p.public_ip === ip.public_ip && p.status === "active"
+                        ).length;
+                        return (
+                          <TableRow key={ip.id}>
+                            <TableCell className="font-mono">{ip.public_ip}</TableCell>
+                            <TableCell>{activeCount}</TableCell>
+                            <TableCell className="space-x-1.5">
+                              {!ip.enabled && (
+                                <Badge variant="outline" className="bg-red-500/15 text-red-400 border-red-500/30">disabled</Badge>
+                              )}
+                              {ip.restricted && (
+                                <Badge variant="outline" className="bg-amber-500/15 text-amber-400 border-amber-500/30">restricted</Badge>
+                              )}
+                              {ip.for_sale ? (
+                                <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">en venta</Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-zinc-500/15 text-zinc-400 border-zinc-500/30">reservada</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Switch checked={Boolean(ip.for_sale)} onCheckedChange={() => toggleForSale(ip)} disabled={!ip.enabled} />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {!saleRouterId && (
+              <div className="text-center py-12 text-muted-foreground text-sm">
+                Selecciona un servidor para ver sus IPs.
+              </div>
+            )}
           </TabsContent>
 
           {/* ============ CLIENTES ============ */}
