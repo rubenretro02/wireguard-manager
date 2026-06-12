@@ -218,7 +218,7 @@ export default function DashboardPage() {
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
   const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number; username: string | null; first_name: string | null; customer_type?: string }[]>([]);
   const [bulkAssignCustomerId, setBulkAssignCustomerId] = useState("");
-  const [bulkAssignDays, setBulkAssignDays] = useState("30");
+  const [bulkAssignDays, setBulkAssignDays] = useState("");
   const [bulkAssignPrice, setBulkAssignPrice] = useState("");
   const [bulkAssignRenewDays, setBulkAssignRenewDays] = useState("");
   const [bulkAssignNotify, setBulkAssignNotify] = useState(true);
@@ -1393,7 +1393,7 @@ export default function DashboardPage() {
 
   const openBulkAssign = async () => {
     setBulkAssignCustomerId("");
-    setBulkAssignDays("30");
+    setBulkAssignDays("");
     setBulkAssignPrice("");
     setBulkAssignRenewDays("");
     setBulkAssignNotify(true);
@@ -1414,7 +1414,7 @@ export default function DashboardPage() {
 
   const bulkAssign = async () => {
     const selected = getSelectedPeers();
-    if (!selected.length || !bulkAssignCustomerId || !Number(bulkAssignDays)) return;
+    if (!selected.length || !bulkAssignCustomerId) return;
     setBulkWorking(true);
     let ok = 0;
     const errors: string[] = [];
@@ -1433,7 +1433,7 @@ export default function DashboardPage() {
               allowedAddress: peer["allowed-address"]?.split(",")[0],
               wgInterface: peer.interface,
               comment: peer.comment,
-              days: Number(bulkAssignDays),
+              days: bulkAssignDays === "" ? null : Number(bulkAssignDays),
               notify: bulkAssignNotify,
               renewalPriceUsd: bulkAssignPrice === "" ? null : Number(bulkAssignPrice),
               renewalDurationDays: bulkAssignRenewDays === "" ? null : Number(bulkAssignRenewDays),
@@ -3345,8 +3345,8 @@ PersistentKeepalive = 25"
             </div>
             <div className="grid grid-cols-2 gap-3 items-end">
               <div className="space-y-1.5">
-                <Label>Days until expiration</Label>
-                <Input type="number" min="1" value={bulkAssignDays} onChange={(e) => setBulkAssignDays(e.target.value)} />
+                <Label>Days (empty = dashboard timer / no timer)</Label>
+                <Input type="number" min="1" placeholder="auto" value={bulkAssignDays} onChange={(e) => setBulkAssignDays(e.target.value)} />
               </div>
               <div className="flex items-center gap-2 pb-2">
                 <Checkbox checked={bulkAssignNotify} onCheckedChange={(v) => setBulkAssignNotify(v === true)} id="bulk-assign-notify" />
@@ -3366,7 +3366,7 @@ PersistentKeepalive = 25"
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBulkAssignOpen(false)}>Cancel</Button>
-            <Button onClick={bulkAssign} disabled={bulkWorking || !bulkAssignCustomerId || !Number(bulkAssignDays)}>
+            <Button onClick={bulkAssign} disabled={bulkWorking || !bulkAssignCustomerId}>
               {bulkWorking && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Assign {selectedPeerIds.size} peer(s)
             </Button>

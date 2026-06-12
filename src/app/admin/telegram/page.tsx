@@ -157,7 +157,7 @@ export default function AdminTelegramPage() {
   // Peer detail + assign-to-customer (from the IP peers dialog)
   const [peerDetail, setPeerDetail] = useState<RouterPeer | null>(null);
   const [assignCustomerId, setAssignCustomerId] = useState("");
-  const [assignDays, setAssignDays] = useState("30");
+  const [assignDays, setAssignDays] = useState("");
   const [assignNotify, setAssignNotify] = useState(true);
   const [assignPrice, setAssignPrice] = useState("");
   const [assignRenewDays, setAssignRenewDays] = useState("");
@@ -339,7 +339,7 @@ export default function AdminTelegramPage() {
         allowedAddress: rp["allowed-address"]?.split(",")[0],
         wgInterface: rp.interface,
         comment: rp.comment,
-        days: Number(assignDays),
+        days: assignDays === "" ? null : Number(assignDays),
         notify: assignNotify,
         renewalPriceUsd: assignPrice === "" ? null : Number(assignPrice),
         renewalDurationDays: assignRenewDays === "" ? null : Number(assignRenewDays),
@@ -357,7 +357,7 @@ export default function AdminTelegramPage() {
 
   const resetAssignForm = () => {
     setAssignCustomerId("");
-    setAssignDays("30");
+    setAssignDays("");
     setAssignNotify(true);
     setAssignPrice("");
     setAssignRenewDays("");
@@ -421,7 +421,7 @@ export default function AdminTelegramPage() {
   };
 
   const assignPeer = async () => {
-    if (!peerDetail || !assignCustomerId || !saleRouterId || !Number(assignDays)) return;
+    if (!peerDetail || !assignCustomerId || !saleRouterId) return;
     await doAssignPeer(saleRouterId, peerDetail);
   };
 
@@ -1152,8 +1152,8 @@ export default function AdminTelegramPage() {
               </div>
               <div className="grid grid-cols-2 gap-3 items-end">
                 <div className="space-y-1.5">
-                  <Label>Days until expiration</Label>
-                  <Input type="number" min="1" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
+                  <Label>Days (empty = dashboard timer / no timer)</Label>
+                  <Input type="number" min="1" placeholder="auto" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
                 </div>
                 <div className="flex items-center gap-2 pb-2">
                   <Checkbox checked={assignNotify} onCheckedChange={(v) => setAssignNotify(v === true)} id="assign2-notify" />
@@ -1184,7 +1184,7 @@ export default function AdminTelegramPage() {
                   const rp = assignRouterPeers.find((p) => p["public-key"] === assignPeerKey);
                   if (rp) doAssignPeer(assignRouterId, rp);
                 }}
-                disabled={assigning || !assignRouterId || !assignPeerKey || !assignCustomerId || !Number(assignDays)}
+                disabled={assigning || !assignRouterId || !assignPeerKey || !assignCustomerId}
               >
                 {assigning && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Assign
@@ -1287,8 +1287,8 @@ export default function AdminTelegramPage() {
                     </div>
                     <div className="grid grid-cols-2 gap-3 items-end">
                       <div className="space-y-1.5">
-                        <Label>Days until expiration</Label>
-                        <Input type="number" min="1" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
+                        <Label>Days (empty = dashboard timer / no timer)</Label>
+                        <Input type="number" min="1" placeholder="auto" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
                       </div>
                       <div className="flex items-center gap-2 pb-2">
                         <Checkbox checked={assignNotify} onCheckedChange={(v) => setAssignNotify(v === true)} id="assign-notify" />
@@ -1305,7 +1305,7 @@ export default function AdminTelegramPage() {
                         <Input type="number" min="1" placeholder="30" value={assignRenewDays} onChange={(e) => setAssignRenewDays(e.target.value)} />
                       </div>
                     </div>
-                    <Button className="w-full" onClick={assignPeer} disabled={assigning || !assignCustomerId || !Number(assignDays)}>
+                    <Button className="w-full" onClick={assignPeer} disabled={assigning || !assignCustomerId}>
                       {assigning && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                       Assign peer
                     </Button>

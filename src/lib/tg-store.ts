@@ -63,7 +63,8 @@ export interface TgCustomerPeer {
   listen_port: number;
   dns: string;
   status: TgPeerStatus;
-  expires_at: string;
+  // NULL = sin timer (peer asignado sin expiración): la app no muestra fecha
+  expires_at: string | null;
   created_at: string;
   // v19: precio de renovación propio (peers asignados). NULL = usa planes del store
   renewal_price_usd: number | null;
@@ -460,7 +461,7 @@ export async function renewCustomerPeer(params: {
   const supabase = params.supabase || getServiceClient();
   const { peer, durationDays } = params;
 
-  const base = Math.max(Date.now(), new Date(peer.expires_at).getTime());
+  const base = Math.max(Date.now(), peer.expires_at ? new Date(peer.expires_at).getTime() : 0);
   const newExpiry = new Date(base + durationDays * 24 * 60 * 60 * 1000);
 
   if (peer.status !== "active") {
@@ -680,12 +681,20 @@ export async function getLiveStatusesForPeers(
 
   const now = Date.now();
 
-  // status guardado vs. realidad del router (enabled = presente y habilitado)
+  // status guardado vs. realidad del router (enabled = presente y habilitado).
+  // Sin expires_at = sin timer (nunca expira). Si está apagado en el server y
+  // su fecha ya pasó, se muestra "expired" (no "disabled").
   const sync = (p: TgCustomerPeer, enabledOnServer: boolean) => {
-    const notExpired = new Date(p.expires_at).getTime() > now;
-    if (p.status === "active" && !enabledOnServer) statusChanges.set(p.id, "disabled");
-    else if (p.status === "disabled" && enabledOnServer) statusChanges.set(p.id, "active");
-    else if (p.status === "expired" && enabledOnServer && notExpired) statusChanges.set(p.id, "active");
+    const isPastExpiry = Boolean(p.expires_at) && new Date(p.expires_at as string).getTime() <= now;
+    if (p.status === "active" && !enabledOnServer) {
+      statusChanges.set(p.id, isPastExpiry ? "expired" : "disabled");
+    } else if (p.status === "disabled" && enabledOnServer) {
+      statusChanges.set(p.id, "active");
+    } else if (p.status === "disabled" && !enabledOnServer && isPastExpiry) {
+      statusChanges.set(p.id, "expired");
+    } else if (p.status === "expired" && enabledOnServer && !isPastExpiry) {
+      statusChanges.set(p.id, "active");
+    }
   };
 
   for (const router of routers || []) {

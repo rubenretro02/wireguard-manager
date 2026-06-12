@@ -10,10 +10,13 @@ import {
   Download,
   Globe,
   KeyRound,
+  LayoutDashboard,
   Loader2,
+  Network,
   Pencil,
   QrCode,
   RefreshCw,
+  Search,
   Shield,
   ShoppingCart,
   Wallet,
@@ -62,7 +65,7 @@ interface Peer {
   public_ip: string;
   allowed_address: string;
   status: "active" | "expired" | "disabled";
-  expires_at: string;
+  expires_at: string | null;
   created_at: string;
   plan_id: string | null;
   renewal_price_usd: number | null;
@@ -86,7 +89,7 @@ interface LiveStatus {
   tx: number;
 }
 
-type Tab = "peers" | "buy" | "payments";
+type Tab = "dashboard" | "peers" | "proxies" | "buy" | "payments";
 
 /* ============ Helpers ============ */
 function formatBytes(bytes: number): string {
@@ -123,10 +126,14 @@ export default function TgMiniApp() {
   const [banned, setBanned] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  const [tab, setTab] = useState<Tab>("peers");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [peers, setPeers] = useState<Peer[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+
+  // Búsqueda/filtro en My Peers
+  const [peerSearch, setPeerSearch] = useState("");
+  const [peerFilter, setPeerFilter] = useState<"all" | "active" | "expired" | "disabled">("all");
 
   const [configPeer, setConfigPeer] = useState<Peer | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -428,6 +435,30 @@ export default function TgMiniApp() {
   // Agents: solo gestionan sus peers — sin tienda, sin precios, sin pagos
   const isAgent = customer?.customer_type === "agent";
 
+  // Resumen para el Dashboard
+  const stats = {
+    total: peers.length,
+    online: peers.filter((p) => p.live?.connected).length,
+    active: peers.filter((p) => p.status === "active").length,
+    inactive: peers.filter((p) => p.status !== "active").length,
+  };
+  const nextExpiry = peers
+    .filter((p) => p.status === "active" && p.expires_at && new Date(p.expires_at).getTime() > Date.now())
+    .sort((a, b) => new Date(a.expires_at as string).getTime() - new Date(b.expires_at as string).getTime())[0];
+
+  // Filtro de My Peers
+  const visiblePeers = peers.filter((p) => {
+    if (peerFilter !== "all" && p.status !== peerFilter) return false;
+    const q = peerSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      p.name.toLowerCase().includes(q) ||
+      p.public_ip.toLowerCase().includes(q) ||
+      p.allowed_address.toLowerCase().includes(q) ||
+      p.status.toLowerCase().includes(q)
+    );
+  });
+
   return (
     <div className="min-h-screen pb-20 max-w-lg mx-auto">
       {/* Header */}
@@ -478,8 +509,124 @@ export default function TgMiniApp() {
 
       {/* Contenido */}
       <main className="px-4 space-y-3">
+        {tab === "dashboard" && (
+          <>
+            {/* Resumen de productos */}
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <p className="text-2xl font-bold">{stats.total}</p>
+                <p className="text-xs text-muted-foreground">Total peers</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <p className="text-2xl font-bold text-emerald-400">{stats.online}</p>
+                <p className="text-xs text-muted-foreground">Online now</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <p className="text-2xl font-bold text-primary">{stats.active}</p>
+                <p className="text-xs text-muted-foreground">Active</p>
+              </div>
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <p className="text-2xl font-bold text-red-400">{stats.inactive}</p>
+                <p className="text-xs text-muted-foreground">Expired / Disabled</p>
+              </div>
+            </div>
+
+            {nextExpiry && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-center gap-3">
+                <Clock className="w-5 h-5 text-amber-400 shrink-0" />
+                <div className="flex-1 min-w-0 text-sm">
+                  <p className="font-medium text-amber-300">Next expiration: {nextExpiry.name}</p>
+                  <p className="text-xs text-amber-300/70">
+                    {fmtDate(nextExpiry.expires_at as string)} · {daysLeft(nextExpiry.expires_at as string)} day(s) left
+                  </p>
+                </div>
+                {!isAgent && (
+                  <button
+                    onClick={() => setRenewPeer(nextExpiry)}
+                    className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 font-medium shrink-0"
+                  >
+                    Renew
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Mis productos */}
+            <div className="rounded-2xl border border-border bg-card divide-y divide-border">
+              <button onClick={() => setTab("peers")} className="w-full flex items-center gap-3 p-4 text-left">
+                <Globe className="w-5 h-5 text-primary" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">My Peers</p>
+                  <p className="text-xs text-muted-foreground">{stats.total} peer(s) · {stats.online} online</p>
+                </div>
+                <span className="text-muted-foreground">›</span>
+              </button>
+              <button onClick={() => setTab("proxies")} className="w-full flex items-center gap-3 p-4 text-left">
+                <Network className="w-5 h-5 text-primary" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">My Proxies</p>
+                  <p className="text-xs text-muted-foreground">SOCKS5 proxies</p>
+                </div>
+                <span className="text-muted-foreground">›</span>
+              </button>
+            </div>
+
+            {!isAgent && (
+              <button
+                onClick={() => setTab("buy")}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-primary text-primary-foreground text-sm font-medium"
+              >
+                <ShoppingCart className="w-4 h-4" /> Buy VPN access
+              </button>
+            )}
+          </>
+        )}
+
+        {tab === "proxies" && (
+          <div className="text-center py-16 space-y-3">
+            <Network className="w-10 h-10 text-muted-foreground mx-auto" />
+            <p className="text-sm font-medium">No proxies yet</p>
+            <p className="text-xs text-muted-foreground px-8">
+              SOCKS5 proxies will show up here. Contact support if you want to order one.
+            </p>
+            <button
+              onClick={openSupport}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-secondary text-sm font-medium"
+            >
+              <Bell className="w-4 h-4" /> Contact support
+            </button>
+          </div>
+        )}
+
         {tab === "peers" && (
           <>
+            {/* Buscador + filtro por estado */}
+            {peers.length > 0 && (
+              <>
+                <div className="relative">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    value={peerSearch}
+                    onChange={(e) => setPeerSearch(e.target.value)}
+                    placeholder="Search by name, IP or status…"
+                    className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-secondary/50 border border-border text-sm outline-none focus:border-primary"
+                  />
+                </div>
+                <div className="flex gap-1.5">
+                  {(["all", "active", "expired", "disabled"] as const).map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setPeerFilter(f)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${
+                        peerFilter === f ? "bg-primary/15 text-primary" : "bg-secondary/50 text-muted-foreground"
+                      }`}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
             {peers.length === 0 ? (
               <div className="text-center py-16 space-y-3">
                 <Globe className="w-10 h-10 text-muted-foreground mx-auto" />
@@ -495,10 +642,14 @@ export default function TgMiniApp() {
                   </button>
                 )}
               </div>
+            ) : visiblePeers.length === 0 ? (
+              <div className="text-center py-10">
+                <p className="text-sm text-muted-foreground">No peers match your search.</p>
+              </div>
             ) : (
-              peers.map((peer) => {
+              visiblePeers.map((peer) => {
                 const live = peer.live;
-                const days = daysLeft(peer.expires_at);
+                const days = peer.expires_at ? daysLeft(peer.expires_at) : null;
                 return (
                   <div key={peer.id} className="rounded-2xl border border-border bg-card p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
@@ -523,21 +674,26 @@ export default function TgMiniApp() {
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <Clock className="w-3.5 h-3.5" />
-                      {peer.status === "active" ? (
-                        days > 0 ? (
-                          <span>
-                            Expires {fmtDate(peer.expires_at)} ·{" "}
-                            <span className={days <= 3 ? "text-amber-400 font-medium" : ""}>{days} day{days === 1 ? "" : "s"} left</span>
-                          </span>
+                    {/* Sin expires_at = sin timer: no se muestra fecha */}
+                    {peer.expires_at && days !== null && (
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <Clock className="w-3.5 h-3.5" />
+                        {peer.status === "active" ? (
+                          days > 0 ? (
+                            <span>
+                              Expires {fmtDate(peer.expires_at)} ·{" "}
+                              <span className={days <= 3 ? "text-amber-400 font-medium" : ""}>{days} day{days === 1 ? "" : "s"} left</span>
+                            </span>
+                          ) : (
+                            <span className="text-amber-400">Expires today</span>
+                          )
+                        ) : peer.status === "expired" ? (
+                          <span>Expired {fmtDate(peer.expires_at)}</span>
                         ) : (
-                          <span className="text-amber-400">Expires today</span>
-                        )
-                      ) : (
-                        <span>Expired {fmtDate(peer.expires_at)}</span>
-                      )}
-                    </div>
+                          <span>Until {fmtDate(peer.expires_at)}</span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Estado en vivo (igual que el dashboard): online/offline + tráfico */}
                     {peer.status === "active" && (
@@ -846,34 +1002,36 @@ export default function TgMiniApp() {
         </div>
       )}
 
-      {/* Bottom nav — agents solo ven sus peers, sin tienda */}
-      {!isAgent && (
+      {/* Bottom nav — agents sin tienda (sin Buy/Payments) */}
       <nav className="fixed bottom-0 inset-x-0 border-t border-border bg-card/95 backdrop-blur-sm">
-        <div className="max-w-lg mx-auto grid grid-cols-3">
+        <div className={`max-w-lg mx-auto grid ${isAgent ? "grid-cols-3" : "grid-cols-5"}`}>
           {(
             [
-              { key: "peers", label: "My Peers", icon: Globe },
-              { key: "buy", label: "Buy", icon: ShoppingCart },
-              { key: "payments", label: "Payments", icon: Wallet },
+              { key: "dashboard", label: "Dashboard", icon: LayoutDashboard, agentVisible: true },
+              { key: "peers", label: "Peers", icon: Globe, agentVisible: true },
+              { key: "proxies", label: "Proxies", icon: Network, agentVisible: true },
+              { key: "buy", label: "Buy", icon: ShoppingCart, agentVisible: false },
+              { key: "payments", label: "Payments", icon: Wallet, agentVisible: false },
             ] as const
-          ).map((item) => (
-            <button
-              key={item.key}
-              onClick={() => {
-                setTab(item.key);
-                if (item.key === "payments") refreshPayments().catch(() => {});
-              }}
-              className={`flex flex-col items-center gap-1 py-2.5 text-[11px] font-medium transition-colors ${
-                tab === item.key ? "text-primary" : "text-muted-foreground"
-              }`}
-            >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-            </button>
-          ))}
+          )
+            .filter((item) => !isAgent || item.agentVisible)
+            .map((item) => (
+              <button
+                key={item.key}
+                onClick={() => {
+                  setTab(item.key);
+                  if (item.key === "payments") refreshPayments().catch(() => {});
+                }}
+                className={`flex flex-col items-center gap-1 py-2.5 text-[10px] font-medium transition-colors ${
+                  tab === item.key ? "text-primary" : "text-muted-foreground"
+                }`}
+              >
+                <item.icon className="w-5 h-5" />
+                {item.label}
+              </button>
+            ))}
         </div>
       </nav>
-      )}
     </div>
   );
 }

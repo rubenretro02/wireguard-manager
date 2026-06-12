@@ -111,7 +111,7 @@ export async function POST(request: Request) {
       if (customer) {
         await sendTelegramMessage(
           (customer as TgCustomer).telegram_id,
-          `✅ <b>Renewal successful</b>\n\nYour peer <b>${renewed.peer_name}</b> was renewed until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`
+          `✅ <b>Renewal successful</b>\n\nYour peer <b>${renewed.peer_name}</b> was renewed until <b>${new Date(renewed.expires_at as string).toLocaleDateString("en-US")}</b>.`
         );
       }
     } else {
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
 
       await sendTelegramMessage(
         (customer as TgCustomer).telegram_id,
-        `✅ <b>Payment received</b>\n\nYour peer <b>${peer.peer_name}</b> is ready. Open the app to download your configuration.\n\nExpires: <b>${new Date(peer.expires_at).toLocaleDateString("en-US")}</b>`
+        `✅ <b>Payment received</b>\n\nYour peer <b>${peer.peer_name}</b> is ready. Open the app to download your configuration.\n\nExpires: <b>${new Date(peer.expires_at as string).toLocaleDateString("en-US")}</b>`
       );
     }
 

@@ -120,6 +120,14 @@ toggle en el plan, acción `unassignPeer` (quita la asignación sin tocar el pee
 UserMinus en Peers). Mini App: lápiz para renombrar, badge "Dedicated IP" en planes, nota de
 soporte para pedir dedicated IPs.
 
+**v21 — Expiración opcional + Mini App multi-página:** `scripts/migration-v21-optional-expiry.sql`
+hace `tg_customer_peers.expires_at` nullable. Al asignar: días explícitos > timer del dashboard
+(`peer_metadata.expires_at` si auto_disable_enabled) > NULL (sin timer; la app no muestra fecha y
+el cron lo ignora). El sync ahora marca "expired" (no "disabled") cuando la fecha ya pasó.
+Mini App: tabs Dashboard (resumen: total/online/active/expirados + próxima expiración) /
+My Peers (con buscador por nombre/IP/estado y chips de filtro) / My Proxies (placeholder SOCKS5) /
+Buy / Payments (agents solo ven los 3 primeros).
+
 **Pendiente / TODO:**
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).

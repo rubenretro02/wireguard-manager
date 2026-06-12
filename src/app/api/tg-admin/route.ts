@@ -170,7 +170,7 @@ export async function POST(request: Request) {
           if (customer) {
             await sendTelegramMessage(
               customer.telegram_id,
-              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`,
+              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at as string).toLocaleDateString("en-US")}</b>.`,
               {},
               botForCustomerType(customer.customer_type)
             );
@@ -219,7 +219,7 @@ export async function POST(request: Request) {
         // Vincula un peer YA existente en el servidor a un customer de Telegram.
         // El customer podrá verlo en la Mini App, ver su estado y renovarlo solo.
         const { customerId, routerId, publicKey, name, allowedAddress, wgInterface, comment, days, notify, renewalPriceUsd, renewalDurationDays } = data;
-        if (!customerId || !routerId || !publicKey || !allowedAddress || !days) {
+        if (!customerId || !routerId || !publicKey || !allowedAddress) {
           return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
 
@@ -298,7 +298,22 @@ export async function POST(request: Request) {
           publicIpStr = ipRow?.public_ip || assignRouter.host;
         }
 
-        const expiresAt = new Date(Date.now() + Number(days) * 24 * 60 * 60 * 1000);
+        // Expiración: días explícitos > timer del dashboard (peer_metadata) > sin timer
+        let expiresAtIso: string | null = null;
+        if (days) {
+          expiresAtIso = new Date(Date.now() + Number(days) * 24 * 60 * 60 * 1000).toISOString();
+        } else {
+          const { data: meta } = await supabase
+            .from("peer_metadata")
+            .select("expires_at, auto_disable_enabled")
+            .eq("router_id", routerId)
+            .eq("peer_public_key", publicKey)
+            .maybeSingle();
+          if (meta?.expires_at && meta.auto_disable_enabled) {
+            expiresAtIso = meta.expires_at;
+          }
+        }
+        const isPastExpiry = Boolean(expiresAtIso) && new Date(expiresAtIso as string).getTime() <= Date.now();
 
         const { count: peerCount } = await supabase
           .from("tg_customer_peers")
@@ -321,9 +336,9 @@ export async function POST(request: Request) {
             public_ip: publicIpStr,
             server_public_key: serverPublicKey,
             listen_port: listenPort,
-            // refleja la realidad del server: si está disabled, se asigna disabled
-            status: enabledOnServer ? "active" : "disabled",
-            expires_at: expiresAt.toISOString(),
+            // refleja la realidad: expirado > disabled en server > active
+            status: isPastExpiry ? "expired" : enabledOnServer ? "active" : "disabled",
+            expires_at: expiresAtIso,
             renewal_price_usd: renewalPriceUsd === undefined || renewalPriceUsd === null || renewalPriceUsd === "" ? null : Number(renewalPriceUsd),
             renewal_duration_days: renewalDurationDays === undefined || renewalDurationDays === null || renewalDurationDays === "" ? null : Number(renewalDurationDays),
           })
