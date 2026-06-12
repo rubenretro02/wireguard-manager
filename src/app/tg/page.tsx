@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { toast } from "sonner";
 import {
-  Activity,
   Bell,
   Clock,
   Copy,
@@ -70,6 +69,7 @@ interface Peer {
   renewal_duration_days: number | null;
   has_config: boolean;
   config: string | null;
+  live: LiveStatus | null;
 }
 interface Payment {
   id: string;
@@ -137,7 +137,6 @@ export default function TgMiniApp() {
   const [renameValue, setRenameValue] = useState("");
   const [renaming, setRenaming] = useState(false);
   const [renewPeer, setRenewPeer] = useState<Peer | null>(null);
-  const [statuses, setStatuses] = useState<Record<string, LiveStatus | "loading">>({});
   const [buying, setBuying] = useState<string | null>(null); // planId en proceso
   const [pendingPayment, setPendingPayment] = useState<Payment | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -162,7 +161,8 @@ export default function TgMiniApp() {
   }, []);
 
   const refreshPeers = useCallback(async () => {
-    const { peers } = await tgFetch("/api/tg/peers");
+    // live=1: el server consulta handshake/tráfico real (como el dashboard)
+    const { peers } = await tgFetch("/api/tg/peers?live=1");
     setPeers(peers);
   }, [tgFetch]);
 
@@ -315,24 +315,6 @@ export default function TgMiniApp() {
     a.download = `${peer.name.replace(/[^a-zA-Z0-9_-]/g, "_")}.conf`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  const checkStatus = async (peer: Peer) => {
-    setStatuses((s) => ({ ...s, [peer.id]: "loading" }));
-    try {
-      const { status } = await tgFetch("/api/tg/peers", {
-        method: "POST",
-        body: JSON.stringify({ action: "status", peerId: peer.id }),
-      });
-      setStatuses((s) => ({ ...s, [peer.id]: status }));
-    } catch (err) {
-      setStatuses((s) => {
-        const next = { ...s };
-        delete next[peer.id];
-        return next;
-      });
-      toast.error(err instanceof Error ? err.message : "Failed to get status");
-    }
   };
 
   const startPaymentPolling = useCallback(
@@ -515,7 +497,7 @@ export default function TgMiniApp() {
               </div>
             ) : (
               peers.map((peer) => {
-                const live = statuses[peer.id];
+                const live = peer.live;
                 const days = daysLeft(peer.expires_at);
                 return (
                   <div key={peer.id} className="rounded-2xl border border-border bg-card p-4 space-y-3">
@@ -557,34 +539,44 @@ export default function TgMiniApp() {
                       )}
                     </div>
 
-                    {live && live !== "loading" && (
-                      <div className="flex items-center gap-3 text-xs rounded-xl bg-secondary/50 px-3 py-2">
-                        <span className={`w-2 h-2 rounded-full ${live.connected ? "bg-emerald-400" : "bg-zinc-500"}`} />
-                        <span className="text-muted-foreground">{live.connected ? "Connected" : "Not connected"}</span>
-                        <span className="ml-auto text-muted-foreground font-mono">
-                          ↓{formatBytes(live.rx)} ↑{formatBytes(live.tx)}
-                        </span>
+                    {/* Estado en vivo (igual que el dashboard): online/offline + tráfico */}
+                    {peer.status === "active" && (
+                      <div className="flex items-center gap-2 text-xs rounded-xl bg-secondary/50 px-3 py-2">
+                        {live ? (
+                          live.connected ? (
+                            <>
+                              <span className="relative flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                              </span>
+                              <span className="text-emerald-400 font-medium">Online</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="inline-flex rounded-full h-2.5 w-2.5 bg-amber-500/50" />
+                              <span className="text-amber-400">Offline</span>
+                            </>
+                          )
+                        ) : (
+                          <>
+                            <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                            <span className="text-muted-foreground">Checking…</span>
+                          </>
+                        )}
+                        {live && (
+                          <span className="ml-auto text-muted-foreground font-mono">
+                            ↓{formatBytes(live.rx)} ↑{formatBytes(live.tx)}
+                          </span>
+                        )}
                       </div>
                     )}
 
-                    <div className={`grid gap-2 ${isAgent ? "grid-cols-2" : "grid-cols-3"}`}>
+                    <div className={`grid gap-2 ${isAgent ? "grid-cols-1" : "grid-cols-2"}`}>
                       <button
                         onClick={() => setConfigPeer(peer)}
                         className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-secondary text-xs font-medium hover:bg-secondary/80 transition-colors"
                       >
                         <QrCode className="w-3.5 h-3.5" /> Config
-                      </button>
-                      <button
-                        onClick={() => checkStatus(peer)}
-                        disabled={live === "loading" || peer.status !== "active"}
-                        className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-secondary text-xs font-medium hover:bg-secondary/80 transition-colors disabled:opacity-40"
-                      >
-                        {live === "loading" ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        ) : (
-                          <Activity className="w-3.5 h-3.5" />
-                        )}{" "}
-                        Status
                       </button>
                       {!isAgent && (
                         <button

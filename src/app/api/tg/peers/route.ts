@@ -3,16 +3,19 @@ import { authenticateTgRequest } from "@/lib/tg-auth";
 import {
   buildClientConfig,
   getLivePeerStatus,
+  getLiveStatusesForPeers,
   getServiceClient,
   rotateCustomerPeerKeys,
+  type LivePeerStatus,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function serializePeer(peer: TgCustomerPeer) {
+function serializePeer(peer: TgCustomerPeer, live?: LivePeerStatus | null) {
   return {
+    live: live ?? null,
     id: peer.id,
     // El customer ve su display_name editable, nunca el nombre del sistema
     name: peer.display_name || "Peer",
@@ -33,7 +36,10 @@ function serializePeer(peer: TgCustomerPeer) {
   };
 }
 
-/** Peers del customer autenticado, con su config lista para usar. */
+/**
+ * Peers del customer autenticado, con su config lista para usar.
+ * ?live=1 agrega estado en vivo (online/offline + tráfico) consultando el server.
+ */
 export async function GET(request: Request) {
   const auth = await authenticateTgRequest(request);
   if ("error" in auth) return auth.error;
@@ -48,7 +54,20 @@ export async function GET(request: Request) {
   if (error) {
     return NextResponse.json({ error: "Failed to load peers" }, { status: 500 });
   }
-  return NextResponse.json({ peers: (peers || []).map((p) => serializePeer(p as TgCustomerPeer)) });
+
+  const wantLive = new URL(request.url).searchParams.get("live") === "1";
+  let liveMap = new Map<string, LivePeerStatus>();
+  if (wantLive && peers?.length) {
+    try {
+      liveMap = await getLiveStatusesForPeers(supabase, peers as TgCustomerPeer[]);
+    } catch (err) {
+      console.warn("[TgPeers] live statuses failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  return NextResponse.json({
+    peers: (peers || []).map((p) => serializePeer(p as TgCustomerPeer, liveMap.get(p.id) || null)),
+  });
 }
 
 /** Acciones sobre un peer propio. Por ahora: status en vivo (handshake/tráfico). */

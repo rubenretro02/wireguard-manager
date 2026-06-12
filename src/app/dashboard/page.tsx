@@ -258,6 +258,31 @@ export default function DashboardPage() {
   const canSeeRestrictedPeers = isAdmin || capabilities.can_see_restricted_peers; // For VIEWING peers
   const canCreateUsers = capabilities.can_create_users; // For semiadmin functionality
   const canDelete = isAdmin || capabilities.can_delete; // Can delete peers and proxies
+
+  // Peers asignados a customers de Telegram (badge "TG" en la tabla, solo admin)
+  const [tgAssigned, setTgAssigned] = useState<Record<string, string>>({});
+  const fetchTgAssigned = useCallback(async () => {
+    if (!isAdmin || !selectedRouterId) {
+      setTgAssigned({});
+      return;
+    }
+    const { data } = await supabase
+      .from("tg_customer_peers")
+      .select("peer_public_key, tg_customers(username, first_name, telegram_id)")
+      .eq("router_id", selectedRouterId);
+    const map: Record<string, string> = {};
+    for (const row of data || []) {
+      // biome-ignore lint/suspicious/noExplicitAny: joined shape
+      const c = (row as any).tg_customers;
+      map[(row as { peer_public_key: string }).peer_public_key] =
+        c?.username ? `@${c.username}` : c?.first_name || String(c?.telegram_id || "TG");
+    }
+    setTgAssigned(map);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin, selectedRouterId]);
+  useEffect(() => {
+    fetchTgAssigned();
+  }, [fetchTgAssigned]);
   // Get accessible IPs for filtering (based on user_ip_access)
   const accessibleIps = useMemo(() => {
     if (isAdmin) {
@@ -1426,6 +1451,7 @@ export default function DashboardPage() {
     if (ok) {
       setBulkAssignOpen(false);
       clearSelection();
+      fetchTgAssigned();
     }
   };
 
@@ -2172,12 +2198,19 @@ PersistentKeepalive = 25`;
                             autoFocus
                           />
                         ) : (
-                          <button
-                            onClick={() => openPeerManagement(peer, "view")}
-                            className="font-medium hover:text-primary transition-colors text-left"
-                          >
-                            {peer.name || "-"}
-                          </button>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <button
+                              onClick={() => openPeerManagement(peer, "view")}
+                              className="font-medium hover:text-primary transition-colors text-left"
+                            >
+                              {peer.name || "-"}
+                            </button>
+                            {tgAssigned[peer["public-key"]] && (
+                              <Badge variant="outline" className="bg-sky-500/15 text-sky-400 border-sky-500/30 text-[10px] px-1.5 py-0">
+                                TG {tgAssigned[peer["public-key"]]}
+                              </Badge>
+                            )}
+                          </div>
                         )}
                       </TableCell>
 

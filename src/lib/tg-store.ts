@@ -636,6 +636,88 @@ export async function removeCustomerPeerFromServer(
   }
 }
 
+export interface LivePeerStatus {
+  connected: boolean;
+  latestHandshake: string | null;
+  rx: number;
+  tx: number;
+}
+
+/**
+ * Estados en vivo para VARIOS peers de un customer, agrupando por router para
+ * hacer una sola consulta por interface (Linux) o por router (MikroTik).
+ * Devuelve un Map por peer.id; los routers que fallen se omiten.
+ */
+export async function getLiveStatusesForPeers(
+  supabase: SupabaseClient,
+  peers: TgCustomerPeer[]
+): Promise<Map<string, LivePeerStatus>> {
+  const result = new Map<string, LivePeerStatus>();
+  const byRouter = new Map<string, TgCustomerPeer[]>();
+  for (const p of peers) {
+    if (p.status !== "active") continue; // expired/disabled no están en el server
+    const list = byRouter.get(p.router_id) || [];
+    list.push(p);
+    byRouter.set(p.router_id, list);
+  }
+  if (!byRouter.size) return result;
+
+  const { data: routers } = await supabase
+    .from("routers")
+    .select("*")
+    .in("id", Array.from(byRouter.keys()));
+
+  const now = Date.now();
+  for (const router of routers || []) {
+    const routerPeers = byRouter.get(router.id) || [];
+    try {
+      if (router.connection_type === "linux-ssh") {
+        const interfaces = Array.from(new Set(routerPeers.map((p) => p.wg_interface)));
+        for (const iface of interfaces) {
+          const client = buildLinuxClient(router as Router, iface);
+          const livePeers = await client.getPeersForInterface(iface);
+          const byKey = new Map(livePeers.map((lp) => [lp.publicKey, lp]));
+          for (const p of routerPeers.filter((x) => x.wg_interface === iface)) {
+            const live = byKey.get(p.peer_public_key);
+            if (!live) {
+              result.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
+              continue;
+            }
+            const handshakeEpoch = Number.parseInt(live.latestHandshake || "0", 10);
+            result.set(p.id, {
+              connected: handshakeEpoch > 0 && now / 1000 - handshakeEpoch < 180,
+              latestHandshake: handshakeEpoch > 0 ? new Date(handshakeEpoch * 1000).toISOString() : null,
+              rx: live.transfer?.rx || 0,
+              tx: live.transfer?.tx || 0,
+            });
+          }
+        }
+      } else {
+        const client = buildMikroTikClient(router as Router);
+        const livePeers = await client.getWireGuardPeers();
+        const byKey = new Map(livePeers.map((lp) => [lp["public-key"], lp]));
+        for (const p of routerPeers) {
+          const live = byKey.get(p.peer_public_key);
+          if (!live || live.disabled) {
+            result.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
+            continue;
+          }
+          const secondsAgo = parseMikroTikDuration(live["last-handshake"]);
+          result.set(p.id, {
+            connected: secondsAgo !== null && secondsAgo < 180,
+            latestHandshake: secondsAgo !== null ? new Date(now - secondsAgo * 1000).toISOString() : null,
+            rx: Number(live.rx) || 0,
+            tx: Number(live.tx) || 0,
+          });
+        }
+      }
+    } catch (err) {
+      console.warn(`[TgStore] live status failed for router ${router.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return result;
+}
+
 /** Estado en vivo de un peer (handshake + tráfico). Linux por SSH, MikroTik por API. */
 export async function getLivePeerStatus(peer: TgCustomerPeer): Promise<{
   connected: boolean;

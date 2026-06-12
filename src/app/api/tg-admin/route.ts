@@ -243,27 +243,19 @@ export async function POST(request: Request) {
         const isLinux = assignRouter.connection_type === "linux-ssh";
         const effectiveInterface = wgInterface || assignRouter.wg_interface || "wg0";
 
-        // Server pubkey + listen port para poder armar la config del cliente
+        // Server pubkey + listen port para armar la config del cliente, y la
+        // private key del peer si la conocemos (Linux: linux_peers; MikroTik:
+        // el router la guarda cuando el peer se creó desde la app)
         let serverPublicKey = "";
         let listenPort = 13231;
+        let privateKey: string | null = null;
         if (isLinux) {
           const client = buildLinuxClient(assignRouter as Router, effectiveInterface);
           const info = await client.getInterfaceInfo();
           if (!info) throw new Error(`Could not read server info for ${effectiveInterface}`);
           serverPublicKey = info.publicKey;
           listenPort = info.listenPort;
-        } else {
-          const client = buildMikroTikClient(assignRouter as Router);
-          const interfaces = await client.getWireGuardInterfaces();
-          const iface = interfaces.find((i) => i.name === effectiveInterface);
-          if (!iface) throw new Error(`Interface ${effectiveInterface} not found on router`);
-          serverPublicKey = iface["public-key"];
-          listenPort = iface["listen-port"] || 13231;
-        }
 
-        // Private key si la conocemos (peers Linux creados por la app la guardan)
-        let privateKey: string | null = null;
-        if (isLinux) {
           const { data: lp } = await supabase
             .from("linux_peers")
             .select("id, private_key")
@@ -271,6 +263,17 @@ export async function POST(request: Request) {
             .eq("public_key", publicKey)
             .maybeSingle();
           privateKey = lp?.private_key || null;
+        } else {
+          const client = buildMikroTikClient(assignRouter as Router);
+          const interfaces = await client.getWireGuardInterfaces();
+          const iface = interfaces.find((i) => i.name === effectiveInterface);
+          if (!iface) throw new Error(`Interface ${effectiveInterface} not found on router`);
+          serverPublicKey = iface["public-key"];
+          listenPort = iface["listen-port"] || 13231;
+
+          const routerPeers = await client.getWireGuardPeers();
+          const rp = routerPeers.find((p) => p["public-key"] === publicKey);
+          privateKey = rp?.["private-key"] || null;
         }
 
         // IP pública: comment si es una IP, si no por subnet, si no el host
