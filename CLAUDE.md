@@ -41,6 +41,53 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-06-11 — Telegram Mini App + tienda con Cryptomus
+
+**Qué es:** Mini App de Telegram (`/tg`) donde los customers finales se registran solos
+(login automático con `initData`), compran acceso VPN, ven el estado/config de sus peers
+(QR + .conf) y renuevan pagando con cripto vía Cryptomus. Panel admin en `/admin/telegram`.
+
+**Migración SQL:** `scripts/migration-v16-telegram-store.sql` — tablas `tg_customers`,
+`tg_plans`, `tg_customer_peers`, `tg_payments` (RLS admin-only; la app usa service role).
+
+**Arquitectura:**
+- Auth miniapp: cada request a `/api/tg/*` manda el `initData` crudo en header `x-tg-init-data`;
+  se valida el HMAC en cada request (stateless, ver `src/lib/telegram.ts` + `src/lib/tg-auth.ts`).
+  El customer se upserta por `telegram_id`.
+- Provisioning: `src/lib/tg-store.ts` — replica el flujo `createPeerSimplified` (Linux SSH only):
+  elige public IP (del plan o auto), siguiente IP interna libre (cruza `wg show` + `linux_peers`
+  + `tg_customer_peers` porque los peers disabled no aparecen en wg), genera llaves, `addPeer`,
+  inserta en `linux_peers` (para que se vea en el dashboard normal) y en `tg_customer_peers`
+  con server_public_key/listen_port/endpoint para armar la config sin SSH.
+- Pagos: `src/lib/cryptomus.ts`. Checkout crea `tg_payments` pending + invoice; el webhook
+  `/api/cryptomus/webhook` verifica firma (MD5 base64 + API key, con escape `\/` estilo PHP)
+  y hace fulfillment idempotente (claim atómico vía `fulfilled_at IS NULL`). Si el fulfillment
+  falla devuelve 500 para que Cryptomus reintente. Planes con precio 0 = fulfill inmediato (trial).
+- Renovación: extiende desde `max(now, expires_at)`; si estaba expired/disabled re-agrega el peer
+  a WG con la MISMA llave/IP (la config del cliente no cambia).
+- Expiración: `/api/cron/expire-customer-peers` (Bearer CRON_SECRET) quita de WG, marca expired
+  y notifica por bot. `vercel.json` lo corre diario (Hobby no permite más granularidad);
+  para granularidad horaria usar cron-job.org contra ese endpoint.
+- Bot: `/api/telegram/webhook` responde a /start con botón web_app. Registrar con
+  `node scripts/setup-telegram-webhook.mjs` (también setea el menu button).
+
+**Env nuevas:** `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `NEXT_PUBLIC_APP_URL`,
+`CRYPTOMUS_MERCHANT_ID`, `CRYPTOMUS_PAYMENT_API_KEY`, `CRON_SECRET` (ver `.env.example`).
+
+**Gotchas:**
+- Solo routers `linux-ssh` se aprovisionan automáticamente (MikroTik pendiente).
+- La miniapp necesita HTTPS público — para probar en local usar un túnel (ngrok/cloudflared)
+  y apuntar `NEXT_PUBLIC_APP_URL` + el bot ahí.
+- El QR se genera client-side con `qrcode` (nueva dep) — nunca mandar la config a servicios externos.
+- `tg_customer_peers` guarda la private key del cliente: es lo que permite re-mostrar config y QR.
+
+**Pendiente / TODO:**
+- Soporte MikroTik en provisioning.
+- Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
+- Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).
+
+
+
 ### 2026-05-26 — Scoping de peers por router + UI simplificada (post-mortem)
 
 **Contexto:** Se descubrió que el usuario ya manejaba múltiples interfaces creando **un "router" config por interface**, todos apuntando al mismo host pero con `wg_interface` distinto. El feature anterior (per-IP override) rompió ese flujo al mezclar peers de todas las interfaces del server en cada vista.

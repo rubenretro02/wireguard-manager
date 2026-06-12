@@ -15,7 +15,8 @@ import {
   ChevronDown,
   Network,
   UserCog,
-  Key
+  Key,
+  Send
 } from "lucide-react";
 import { useState, Suspense } from "react";
 import { cn } from "@/lib/utils";
@@ -42,6 +43,7 @@ const adminSubMenu = [
   { name: "IPs", href: "/admin?tab=ips", icon: Globe, tab: "ips" },
   { name: "Users", href: "/admin?tab=users", icon: UserCog, tab: "users" },
   { name: "Access", href: "/admin?tab=access", icon: Key, tab: "access" },
+  { name: "Telegram", href: "/admin/telegram", icon: Send, tab: null },
 ];
 
 // Inner component that uses useSearchParams
@@ -159,8 +161,9 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
                   <div className="ml-4 pl-4 border-l border-border space-y-1">
                     {adminSubMenu.map((subItem) => {
                       // Check if this submenu item is active
-                      const isSubActive = pathname === "/admin" &&
-                        (subItem.tab === null ? !currentTab : currentTab === subItem.tab);
+                      const isSubActive = subItem.href.startsWith("/admin?") || subItem.href === "/admin"
+                        ? pathname === "/admin" && (subItem.tab === null ? !currentTab : currentTab === subItem.tab)
+                        : pathname.startsWith(subItem.href);
 
                       return (
                         <Link
