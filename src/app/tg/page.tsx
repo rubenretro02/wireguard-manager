@@ -40,6 +40,7 @@ interface Customer {
   telegram_id: number;
   username: string | null;
   first_name: string | null;
+  customer_type?: "client" | "agent";
 }
 interface Plan {
   id: string;
@@ -59,6 +60,8 @@ interface Peer {
   expires_at: string;
   created_at: string;
   plan_id: string | null;
+  renewal_price_usd: number | null;
+  renewal_duration_days: number | null;
   has_config: boolean;
   config: string | null;
 }
@@ -213,7 +216,12 @@ export default function TgMiniApp() {
       try {
         const { customer } = await tgFetch("/api/tg/auth", { method: "POST" });
         setCustomer(customer);
-        await Promise.all([refreshPeers(), tgFetch("/api/tg/plans").then((r) => setPlans(r.plans))]);
+        const jobs: Promise<unknown>[] = [refreshPeers()];
+        // Agents no ven la tienda: no cargamos planes
+        if (customer.customer_type !== "agent") {
+          jobs.push(tgFetch("/api/tg/plans").then((r) => setPlans(r.plans)));
+        }
+        await Promise.all(jobs);
       } catch (err) {
         if (!banned) toast.error(err instanceof Error ? err.message : "Connection error");
       } finally {
@@ -330,12 +338,13 @@ export default function TgMiniApp() {
     if (pollRef.current) clearInterval(pollRef.current);
   }, []);
 
-  const checkout = async (plan: Plan, peer?: Peer) => {
-    setBuying(plan.id);
+  // plan = null → renovación con precio propio del peer (sin plan)
+  const checkout = async (plan: Plan | null, peer?: Peer) => {
+    setBuying(plan?.id || peer?.id || "x");
     try {
       const res = await tgFetch("/api/tg/checkout", {
         method: "POST",
-        body: JSON.stringify({ planId: plan.id, peerId: peer?.id }),
+        body: JSON.stringify({ planId: plan?.id, peerId: peer?.id }),
       });
       setRenewPeer(null);
       if (res.free && res.fulfilled) {
@@ -394,6 +403,9 @@ export default function TgMiniApp() {
     );
   }
 
+  // Agents: solo gestionan sus peers — sin tienda, sin precios, sin pagos
+  const isAgent = customer?.customer_type === "agent";
+
   return (
     <div className="min-h-screen pb-20 max-w-lg mx-auto">
       {/* Header */}
@@ -443,13 +455,17 @@ export default function TgMiniApp() {
             {peers.length === 0 ? (
               <div className="text-center py-16 space-y-3">
                 <Globe className="w-10 h-10 text-muted-foreground mx-auto" />
-                <p className="text-sm text-muted-foreground">You don't have any peers yet.</p>
-                <button
-                  onClick={() => setTab("buy")}
-                  className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
-                >
-                  Buy my first access
-                </button>
+                <p className="text-sm text-muted-foreground">
+                  {isAgent ? "No peers assigned to you yet." : "You don't have any peers yet."}
+                </p>
+                {!isAgent && (
+                  <button
+                    onClick={() => setTab("buy")}
+                    className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
+                  >
+                    Buy my first access
+                  </button>
+                )}
               </div>
             ) : (
               peers.map((peer) => {
@@ -493,7 +509,7 @@ export default function TgMiniApp() {
                       </div>
                     )}
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className={`grid gap-2 ${isAgent ? "grid-cols-2" : "grid-cols-3"}`}>
                       <button
                         onClick={() => setConfigPeer(peer)}
                         className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-secondary text-xs font-medium hover:bg-secondary/80 transition-colors"
@@ -512,12 +528,14 @@ export default function TgMiniApp() {
                         )}{" "}
                         Status
                       </button>
-                      <button
-                        onClick={() => setRenewPeer(peer)}
-                        className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-primary/15 text-primary text-xs font-medium hover:bg-primary/25 transition-colors"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" /> Renew
-                      </button>
+                      {!isAgent && (
+                        <button
+                          onClick={() => setRenewPeer(peer)}
+                          className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-primary/15 text-primary text-xs font-medium hover:bg-primary/25 transition-colors"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Renew
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -675,7 +693,27 @@ export default function TgMiniApp() {
                 <X className="w-4 h-4" />
               </button>
             </div>
-            {plans.filter((p) => p.router_id === renewPeer.router_id).length === 0 ? (
+            {renewPeer.renewal_price_usd != null ? (
+              // Precio de renovación propio de este peer (asignado por el admin)
+              <button
+                onClick={() => checkout(null, renewPeer)}
+                disabled={buying !== null}
+                className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-border bg-secondary/40 hover:bg-secondary transition-colors disabled:opacity-50"
+              >
+                <span className="text-sm font-medium">
+                  Renew · {renewPeer.renewal_duration_days || 30} days
+                </span>
+                <span className="text-sm font-bold text-primary">
+                  {buying ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : Number(renewPeer.renewal_price_usd) <= 0 ? (
+                    "Free"
+                  ) : (
+                    `$${Number(renewPeer.renewal_price_usd).toFixed(2)}`
+                  )}
+                </span>
+              </button>
+            ) : plans.filter((p) => p.router_id === renewPeer.router_id).length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
                 No renewal plans available for this server.
               </p>
@@ -708,7 +746,8 @@ export default function TgMiniApp() {
         </div>
       )}
 
-      {/* Bottom nav */}
+      {/* Bottom nav — agents solo ven sus peers, sin tienda */}
+      {!isAgent && (
       <nav className="fixed bottom-0 inset-x-0 border-t border-border bg-card/95 backdrop-blur-sm">
         <div className="max-w-lg mx-auto grid grid-cols-3">
           {(
@@ -734,6 +773,7 @@ export default function TgMiniApp() {
           ))}
         </div>
       </nav>
+      )}
     </div>
   );
 }

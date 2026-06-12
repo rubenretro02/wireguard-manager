@@ -88,17 +88,24 @@ export async function POST(request: Request) {
         .select("*")
         .eq("id", payment.customer_peer_id)
         .single();
-      const { data: plan } = await supabase
-        .from("tg_plans")
-        .select("*")
-        .eq("id", payment.plan_id)
-        .single();
-      if (!peer || !plan) throw new Error("Peer or plan missing for renewal");
+      if (!peer) throw new Error("Peer missing for renewal");
+
+      // Duración: plan del pago, o el renewal propio del peer (peers asignados)
+      let durationDays: number | null = null;
+      if (payment.plan_id) {
+        const { data: plan } = await supabase
+          .from("tg_plans")
+          .select("duration_days")
+          .eq("id", payment.plan_id)
+          .single();
+        durationDays = plan?.duration_days || null;
+      }
+      if (!durationDays) durationDays = (peer as TgCustomerPeer).renewal_duration_days || 30;
 
       const renewed = await renewCustomerPeer({
         supabase,
         peer: peer as TgCustomerPeer,
-        durationDays: plan.duration_days,
+        durationDays,
       });
 
       if (customer) {

@@ -11,6 +11,8 @@ import type { AuthMethod, PublicIP, Router, WireGuardPeer } from "@/lib/types";
  * (create + enable/disable nativo por API/REST).
  */
 
+export type TgCustomerType = "client" | "agent";
+
 export interface TgCustomer {
   id: string;
   telegram_id: number;
@@ -20,6 +22,8 @@ export interface TgCustomer {
   photo_url: string | null;
   language_code: string | null;
   is_banned: boolean;
+  // 'client' ve la tienda completa; 'agent' solo ve sus peers (sin precios)
+  customer_type: TgCustomerType;
   created_at: string;
   last_seen_at: string;
 }
@@ -57,6 +61,9 @@ export interface TgCustomerPeer {
   status: TgPeerStatus;
   expires_at: string;
   created_at: string;
+  // v19: precio de renovación propio (peers asignados). NULL = usa planes del store
+  renewal_price_usd: number | null;
+  renewal_duration_days: number | null;
 }
 
 export type TgPaymentType = "purchase" | "renewal";

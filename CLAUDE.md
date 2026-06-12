@@ -96,6 +96,14 @@ renovar) pero sin enable/disable. Si no se conoce la private key (peers MikroTik
 la app no muestra config y ofrece "Generate new keys" (rotateKeys) que regenera el keypair
 en el servidor conservando IP/nombre. Customers también clickeables en el admin (peers+pagos).
 
+**v19 — Customer types + renewal pricing por peer:** `scripts/migration-v19-customer-types-renewal-pricing.sql`.
+`tg_customers.customer_type`: 'client' (ve la tienda) | 'agent' (la app solo muestra sus peers:
+sin Buy/Payments/precios/Renew; checkout devuelve 403). `tg_customer_peers.renewal_price_usd`
++ `renewal_duration_days`: precio propio de renovación para peers asignados — el customer renueva
+con Cryptomus a ese precio sin plan (webhook usa esos días si payment.plan_id es null). Admin:
+columna Type en Customers, botón "Assign existing peer" en Peers (server→peer→customer+pricing),
+botón $ por peer para editar pricing, y la pestaña IPs sin server muestra TODAS las for-sale.
+
 **Pendiente / TODO:**
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).

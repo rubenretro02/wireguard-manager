@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { CalendarPlus, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, Users } from "lucide-react";
+import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, Users } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
 /* ============ Types (tg-admin API responses, with joins) ============ */
@@ -47,6 +47,7 @@ interface AdminCustomer {
   first_name: string | null;
   last_name: string | null;
   is_banned: boolean;
+  customer_type: "client" | "agent";
   created_at: string;
   last_seen_at: string;
   tg_customer_peers?: { id: string; status: string }[];
@@ -62,6 +63,8 @@ interface AdminPeer {
   status: "active" | "expired" | "disabled";
   expires_at: string;
   created_at: string;
+  renewal_price_usd: number | null;
+  renewal_duration_days: number | null;
   tg_customers?: { telegram_id: number; username: string | null; first_name: string | null } | null;
   tg_plans?: { name: string } | null;
   routers?: { name: string } | null;
@@ -93,6 +96,8 @@ interface IpOption {
   enabled: boolean;
   restricted: boolean;
   for_sale?: boolean;
+  router_id?: string;
+  routers?: { name: string } | null;
 }
 /* Live peer from the router (via /api/wireguard getPeers) */
 interface RouterPeer {
@@ -151,7 +156,25 @@ export default function AdminTelegramPage() {
   const [assignCustomerId, setAssignCustomerId] = useState("");
   const [assignDays, setAssignDays] = useState("30");
   const [assignNotify, setAssignNotify] = useState(true);
+  const [assignPrice, setAssignPrice] = useState("");
+  const [assignRenewDays, setAssignRenewDays] = useState("");
   const [assigning, setAssigning] = useState(false);
+
+  // "Assign peer" dialog from the Peers tab (pick server → peer → customer)
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [assignRouterId, setAssignRouterId] = useState("");
+  const [assignRouterPeers, setAssignRouterPeers] = useState<RouterPeer[]>([]);
+  const [loadingAssignPeers, setLoadingAssignPeers] = useState(false);
+  const [assignPeerKey, setAssignPeerKey] = useState("");
+
+  // Renewal pricing dialog (per customer peer)
+  const [pricingTarget, setPricingTarget] = useState<AdminPeer | null>(null);
+  const [pricingPrice, setPricingPrice] = useState("");
+  const [pricingDays, setPricingDays] = useState("");
+  const [savingPricing, setSavingPricing] = useState(false);
+
+  // All for-sale IPs (shown when no server is selected in IPs tab)
+  const [forSaleAll, setForSaleAll] = useState<IpOption[]>([]);
 
   // Customer detail dialog
   const [customerDialog, setCustomerDialog] = useState<AdminCustomer | null>(null);
@@ -181,18 +204,20 @@ export default function AdminTelegramPage() {
   }, []);
 
   const loadAll = useCallback(async () => {
-    const [p, c, cp, pay, r] = await Promise.all([
+    const [p, c, cp, pay, r, fs] = await Promise.all([
       tgAdmin("listPlans"),
       tgAdmin("listCustomers"),
       tgAdmin("listCustomerPeers"),
       tgAdmin("listPayments"),
       tgAdmin("listRouters"),
+      tgAdmin("listForSaleIps"),
     ]);
     setPlans(p.plans || []);
     setCustomers(c.customers || []);
     setPeers(cp.peers || []);
     setPayments(pay.payments || []);
     setRouters(r.routers || []);
+    setForSaleAll(fs.ips || []);
   }, [tgAdmin]);
 
   useEffect(() => {
@@ -274,35 +299,99 @@ export default function AdminTelegramPage() {
     try {
       await tgAdmin("setIpForSale", { id: ip.id, forSale: next });
       toast.success(next ? `${ip.public_ip} is now for sale` : `${ip.public_ip} reserved`);
+      tgAdmin("listForSaleIps").then((r) => setForSaleAll(r.ips || [])).catch(() => {});
     } catch (err) {
       setSaleIps((prev) => prev.map((i) => (i.id === ip.id ? { ...i, for_sale: !next } : i)));
       toast.error(err instanceof Error ? err.message : "Error");
     }
   };
 
-  const assignPeer = async () => {
-    if (!peerDetail || !assignCustomerId || !saleRouterId || !Number(assignDays)) return;
+  // Live peers for the "Assign peer" dialog (Peers tab)
+  useEffect(() => {
+    if (!assignRouterId) {
+      setAssignRouterPeers([]);
+      return;
+    }
+    setLoadingAssignPeers(true);
+    setAssignPeerKey("");
+    fetch("/api/wireguard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "getPeers", routerId: assignRouterId }),
+    })
+      .then((res) => res.json())
+      .then((json) => setAssignRouterPeers(json.peers || []))
+      .catch(() => setAssignRouterPeers([]))
+      .finally(() => setLoadingAssignPeers(false));
+  }, [assignRouterId]);
+
+  const doAssignPeer = async (routerId: string, rp: RouterPeer) => {
     setAssigning(true);
     try {
       await tgAdmin("assignPeerToCustomer", {
         customerId: assignCustomerId,
-        routerId: saleRouterId,
-        publicKey: peerDetail["public-key"],
-        name: peerDetail.name,
-        allowedAddress: peerDetail["allowed-address"]?.split(",")[0],
-        wgInterface: peerDetail.interface,
-        comment: peerDetail.comment,
+        routerId,
+        publicKey: rp["public-key"],
+        name: rp.name,
+        allowedAddress: rp["allowed-address"]?.split(",")[0],
+        wgInterface: rp.interface,
+        comment: rp.comment,
         days: Number(assignDays),
         notify: assignNotify,
+        renewalPriceUsd: assignPrice === "" ? null : Number(assignPrice),
+        renewalDurationDays: assignRenewDays === "" ? null : Number(assignRenewDays),
       });
       toast.success("Peer assigned to customer");
       setPeerDetail(null);
+      setAssignDialogOpen(false);
       await Promise.all([refreshPeers(), tgAdmin("listCustomers").then((r) => setCustomers(r.customers || []))]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to assign peer");
     } finally {
       setAssigning(false);
     }
+  };
+
+  const resetAssignForm = () => {
+    setAssignCustomerId("");
+    setAssignDays("30");
+    setAssignNotify(true);
+    setAssignPrice("");
+    setAssignRenewDays("");
+  };
+
+  const setCustomerType = async (c: AdminCustomer, type: "client" | "agent") => {
+    try {
+      await tgAdmin("setCustomerType", { id: c.id, type });
+      setCustomers((prev) => prev.map((x) => (x.id === c.id ? { ...x, customer_type: type } : x)));
+      toast.success(`${customerLabel(c)} is now ${type === "agent" ? "an agent (no store)" : "a client"}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error");
+    }
+  };
+
+  const savePricing = async () => {
+    if (!pricingTarget) return;
+    setSavingPricing(true);
+    try {
+      await tgAdmin("updatePeerRenewal", {
+        id: pricingTarget.id,
+        price: pricingPrice === "" ? null : Number(pricingPrice),
+        days: pricingDays === "" ? null : Number(pricingDays),
+      });
+      toast.success("Renewal pricing saved");
+      setPricingTarget(null);
+      await refreshPeers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error");
+    } finally {
+      setSavingPricing(false);
+    }
+  };
+
+  const assignPeer = async () => {
+    if (!peerDetail || !assignCustomerId || !saleRouterId || !Number(assignDays)) return;
+    await doAssignPeer(saleRouterId, peerDetail);
   };
 
   const handleLogout = async () => {
@@ -628,8 +717,53 @@ export default function AdminTelegramPage() {
               </div>
             )}
             {!saleRouterId && (
-              <div className="text-center py-12 text-muted-foreground text-sm">
-                Select a server to see its IPs.
+              <div className="space-y-2">
+                <p className="text-sm font-medium">All IPs currently for sale ({forSaleAll.length})</p>
+                <div className="rounded-xl border border-border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Server</TableHead>
+                        <TableHead>Public IP</TableHead>
+                        <TableHead>TG customers</TableHead>
+                        <TableHead className="text-right">For sale</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {forSaleAll.length === 0 && (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                            No IPs for sale yet — select a server above and flip the switch on the IPs you want to sell.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                      {forSaleAll.map((ip) => (
+                        <TableRow key={ip.id}>
+                          <TableCell>{ip.routers?.name || "—"}</TableCell>
+                          <TableCell className="font-mono">{ip.public_ip}</TableCell>
+                          <TableCell>
+                            {peers.filter((p) => p.public_ip === ip.public_ip && p.status === "active").length}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Switch
+                              checked
+                              onCheckedChange={async () => {
+                                try {
+                                  await tgAdmin("setIpForSale", { id: ip.id, forSale: false });
+                                  setForSaleAll((prev) => prev.filter((i) => i.id !== ip.id));
+                                  toast.success(`${ip.public_ip} reserved`);
+                                } catch (err) {
+                                  toast.error(err instanceof Error ? err.message : "Error");
+                                }
+                              }}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <p className="text-xs text-muted-foreground">Select a server above to manage all of its IPs.</p>
               </div>
             )}
           </TabsContent>
@@ -642,6 +776,7 @@ export default function AdminTelegramPage() {
                   <TableRow>
                     <TableHead>Customer</TableHead>
                     <TableHead>Telegram ID</TableHead>
+                    <TableHead>Type</TableHead>
                     <TableHead>Peers</TableHead>
                     <TableHead>Joined</TableHead>
                     <TableHead>Last seen</TableHead>
@@ -651,7 +786,7 @@ export default function AdminTelegramPage() {
                 <TableBody>
                   {customers.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
                         No customers yet. They appear automatically when they open the Mini App.
                       </TableCell>
                     </TableRow>
@@ -665,6 +800,17 @@ export default function AdminTelegramPage() {
                         )}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{c.telegram_id}</TableCell>
+                      <TableCell onClick={(e) => e.stopPropagation()}>
+                        <Select value={c.customer_type || "client"} onValueChange={(v) => setCustomerType(c, v as "client" | "agent")}>
+                          <SelectTrigger className="h-8 w-[110px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="client">Client</SelectItem>
+                            <SelectItem value="agent">Agent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
                       <TableCell>
                         {(c.tg_customer_peers || []).filter((p) => p.status === "active").length} active /{" "}
                         {(c.tg_customer_peers || []).length}
@@ -682,7 +828,20 @@ export default function AdminTelegramPage() {
           </TabsContent>
 
           {/* ============ PEERS ============ */}
-          <TabsContent value="peers">
+          <TabsContent value="peers" className="space-y-4">
+            <div className="flex justify-end">
+              <Button
+                size="sm"
+                onClick={() => {
+                  resetAssignForm();
+                  setAssignRouterId("");
+                  setAssignPeerKey("");
+                  setAssignDialogOpen(true);
+                }}
+              >
+                <Plus className="w-4 h-4 mr-2" /> Assign existing peer
+              </Button>
+            </div>
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
                 <TableHeader>
@@ -691,6 +850,7 @@ export default function AdminTelegramPage() {
                     <TableHead>Customer</TableHead>
                     <TableHead>Server</TableHead>
                     <TableHead>IP</TableHead>
+                    <TableHead>Renewal</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Expires</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -699,7 +859,7 @@ export default function AdminTelegramPage() {
                 <TableBody>
                   {peers.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                      <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                         No customer peers yet.
                       </TableCell>
                     </TableRow>
@@ -716,6 +876,11 @@ export default function AdminTelegramPage() {
                         {peer.public_ip}
                         <br />
                         <span className="text-muted-foreground">{peer.allowed_address}</span>
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {peer.renewal_price_usd != null
+                          ? `$${Number(peer.renewal_price_usd).toFixed(2)} / ${peer.renewal_duration_days || 30}d`
+                          : <span className="text-muted-foreground">store plans</span>}
                       </TableCell>
                       <TableCell>{statusBadge(peer.status)}</TableCell>
                       <TableCell>{fmtDate(peer.expires_at)}</TableCell>
@@ -735,6 +900,18 @@ export default function AdminTelegramPage() {
                               }}
                             >
                               <CalendarPlus className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              title="Renewal pricing"
+                              onClick={() => {
+                                setPricingTarget(peer);
+                                setPricingPrice(peer.renewal_price_usd != null ? String(peer.renewal_price_usd) : "");
+                                setPricingDays(peer.renewal_duration_days != null ? String(peer.renewal_duration_days) : "");
+                              }}
+                            >
+                              <DollarSign className="w-4 h-4" />
                             </Button>
                             {peer.status === "active" ? (
                               <Button variant="ghost" size="sm" title="Disable" onClick={() => peerAction(peer, "disableCustomerPeer")}>
@@ -824,10 +1001,8 @@ export default function AdminTelegramPage() {
                     <button
                       key={p["public-key"] || idx}
                       onClick={() => {
+                        resetAssignForm();
                         setPeerDetail(p);
-                        setAssignCustomerId("");
-                        setAssignDays("30");
-                        setAssignNotify(true);
                       }}
                       className="w-full flex items-center gap-3 rounded-xl border border-border bg-secondary/40 px-3 py-2 hover:bg-secondary transition-colors text-left"
                     >
@@ -849,6 +1024,139 @@ export default function AdminTelegramPage() {
                   );
                 })}
             </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Assign existing peer dialog (from Peers tab) */}
+        <Dialog open={assignDialogOpen} onOpenChange={setAssignDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Assign existing peer</DialogTitle>
+              <DialogDescription>
+                Link a peer that already exists on a server to a Telegram customer so they can manage and renew it.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3">
+              <div className="space-y-1.5">
+                <Label>Server</Label>
+                <Select value={assignRouterId} onValueChange={setAssignRouterId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a server" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {routers.map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name} ({r.host})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {assignRouterId && (
+                <div className="space-y-1.5">
+                  <Label>Peer {loadingAssignPeers && <Loader2 className="w-3 h-3 animate-spin inline-block ml-1" />}</Label>
+                  <Select value={assignPeerKey} onValueChange={setAssignPeerKey} disabled={loadingAssignPeers}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={loadingAssignPeers ? "Loading peers…" : "Select a peer"} />
+                    </SelectTrigger>
+                    <SelectContent className="max-h-72">
+                      {assignRouterPeers
+                        .filter((p) => p["public-key"] && !isTgCustomerPeer(p))
+                        .map((p) => (
+                          <SelectItem key={p["public-key"]} value={p["public-key"] as string}>
+                            {(p.name || "(unnamed)") + " — " + (p["allowed-address"]?.split(",")[0] || "")}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                <Label>Customer</Label>
+                <Select value={assignCustomerId} onValueChange={setAssignCustomerId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {customers.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {customerLabel(c)} ({c.telegram_id}) {c.customer_type === "agent" ? "· agent" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid grid-cols-2 gap-3 items-end">
+                <div className="space-y-1.5">
+                  <Label>Days until expiration</Label>
+                  <Input type="number" min="1" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} />
+                </div>
+                <div className="flex items-center gap-2 pb-2">
+                  <Checkbox checked={assignNotify} onCheckedChange={(v) => setAssignNotify(v === true)} id="assign2-notify" />
+                  <Label htmlFor="assign2-notify" className="text-xs">Notify on Telegram</Label>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Renewal price USD (optional)</Label>
+                  <Input type="number" min="0" step="0.01" placeholder="store plans" value={assignPrice} onChange={(e) => setAssignPrice(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Renewal days</Label>
+                  <Input type="number" min="1" placeholder="30" value={assignRenewDays} onChange={(e) => setAssignRenewDays(e.target.value)} />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                With a custom renewal price the customer renews THIS peer at that price with crypto —
+                it never shows as a store purchase. Leave empty to use the server's store plans.
+              </p>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setAssignDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  const rp = assignRouterPeers.find((p) => p["public-key"] === assignPeerKey);
+                  if (rp) doAssignPeer(assignRouterId, rp);
+                }}
+                disabled={assigning || !assignRouterId || !assignPeerKey || !assignCustomerId || !Number(assignDays)}
+              >
+                {assigning && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Assign
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Renewal pricing dialog */}
+        <Dialog open={!!pricingTarget} onOpenChange={(open) => !open && setPricingTarget(null)}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Renewal pricing — {pricingTarget?.peer_name}</DialogTitle>
+              <DialogDescription>
+                Custom price this customer pays to renew this peer with crypto. Leave both empty to use the store plans.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Price USD</Label>
+                <Input type="number" min="0" step="0.01" placeholder="empty = plans" value={pricingPrice} onChange={(e) => setPricingPrice(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Days per renewal</Label>
+                <Input type="number" min="1" placeholder="30" value={pricingDays} onChange={(e) => setPricingDays(e.target.value)} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPricingTarget(null)}>
+                Cancel
+              </Button>
+              <Button onClick={savePricing} disabled={savingPricing}>
+                {savingPricing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                Save
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
 
@@ -921,6 +1229,16 @@ export default function AdminTelegramPage() {
                       <div className="flex items-center gap-2 pb-2">
                         <Checkbox checked={assignNotify} onCheckedChange={(v) => setAssignNotify(v === true)} id="assign-notify" />
                         <Label htmlFor="assign-notify" className="text-xs">Notify on Telegram</Label>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Renewal price USD (optional)</Label>
+                        <Input type="number" min="0" step="0.01" placeholder="store plans" value={assignPrice} onChange={(e) => setAssignPrice(e.target.value)} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Renewal days</Label>
+                        <Input type="number" min="1" placeholder="30" value={assignRenewDays} onChange={(e) => setAssignRenewDays(e.target.value)} />
                       </div>
                     </div>
                     <Button className="w-full" onClick={assignPeer} disabled={assigning || !assignCustomerId || !Number(assignDays)}>

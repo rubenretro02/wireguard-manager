@@ -22,6 +22,9 @@ function serializePeer(peer: TgCustomerPeer) {
     expires_at: peer.expires_at,
     created_at: peer.created_at,
     plan_id: peer.plan_id,
+    // v19: si tiene precio propio, la renovación usa este precio (no planes)
+    renewal_price_usd: peer.renewal_price_usd,
+    renewal_duration_days: peer.renewal_duration_days,
     // Peers asignados desde el dashboard pueden no tener private key guardada:
     // el customer rota llaves desde la app para obtener una config completa.
     has_config: Boolean(peer.peer_private_key),

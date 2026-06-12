@@ -15,27 +15,26 @@ export const dynamic = "force-dynamic";
 
 /**
  * Crea una orden de compra (peer nuevo) o renovación (peerId existente).
- * Planes con precio 0 se aprovisionan al instante sin pasar por Cryptomus.
+ * Renovación: si el peer tiene precio propio (renewal_price_usd) se usa ese,
+ * sin plan; si no, requiere un plan del mismo server.
+ * Precio 0 = fulfill inmediato sin Cryptomus. Agents no pueden pagar.
  */
 export async function POST(request: Request) {
   const auth = await authenticateTgRequest(request);
   if ("error" in auth) return auth.error;
   const customer = auth.customer;
 
+  if (customer.customer_type === "agent") {
+    return NextResponse.json({ error: "Your account doesn't use payments — contact support" }, { status: 403 });
+  }
+
   const body = await request.json().catch(() => ({}));
   const { planId, peerId } = body as { planId?: string; peerId?: string };
-  if (!planId) return NextResponse.json({ error: "Missing planId" }, { status: 400 });
+  if (!planId && !peerId) return NextResponse.json({ error: "Missing planId" }, { status: 400 });
 
   const supabase = getServiceClient();
-  const { data: plan } = await supabase
-    .from("tg_plans")
-    .select("*")
-    .eq("id", planId)
-    .eq("enabled", true)
-    .single();
-  if (!plan) return NextResponse.json({ error: "Plan not found" }, { status: 404 });
 
-  // Renovación: el peer debe ser del customer y el plan del mismo server
+  // Renovación: el peer debe ser del customer
   let peer: TgCustomerPeer | null = null;
   if (peerId) {
     const { data } = await supabase
@@ -45,22 +44,43 @@ export async function POST(request: Request) {
       .eq("customer_id", customer.id)
       .single();
     if (!data) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
-    if (data.router_id !== plan.router_id) {
-      return NextResponse.json({ error: "Plan is for a different server" }, { status: 400 });
-    }
     peer = data as TgCustomerPeer;
   }
 
-  const type = peer ? "renewal" : "purchase";
-  const price = Number(plan.price_usd);
+  // Peer con precio de renovación propio → no necesita plan
+  const usesCustomRenewal = Boolean(peer && peer.renewal_price_usd != null);
 
-  // Plan gratis (trial): fulfill inmediato
+  let plan: TgPlan | null = null;
+  if (!usesCustomRenewal) {
+    if (!planId) return NextResponse.json({ error: "Missing planId" }, { status: 400 });
+    const { data } = await supabase
+      .from("tg_plans")
+      .select("*")
+      .eq("id", planId)
+      .eq("enabled", true)
+      .single();
+    if (!data) return NextResponse.json({ error: "Plan not found" }, { status: 404 });
+    if (peer && data.router_id !== peer.router_id) {
+      return NextResponse.json({ error: "Plan is for a different server" }, { status: 400 });
+    }
+    plan = data as TgPlan;
+  }
+
+  const type = peer ? "renewal" : "purchase";
+  const price = usesCustomRenewal
+    ? Number(peer?.renewal_price_usd)
+    : Number(plan?.price_usd);
+  const durationDays = usesCustomRenewal
+    ? peer?.renewal_duration_days || 30
+    : (plan?.duration_days as number);
+
+  // Gratis: fulfill inmediato
   if (price <= 0) {
     try {
       if (peer) {
-        await renewCustomerPeer({ supabase, peer, durationDays: plan.duration_days });
-      } else {
-        await provisionPeerForCustomer({ supabase, customer, plan: plan as TgPlan });
+        await renewCustomerPeer({ supabase, peer, durationDays });
+      } else if (plan) {
+        await provisionPeerForCustomer({ supabase, customer, plan });
       }
       return NextResponse.json({ free: true, fulfilled: true });
     } catch (err) {
@@ -85,7 +105,7 @@ export async function POST(request: Request) {
     .from("tg_payments")
     .insert({
       customer_id: customer.id,
-      plan_id: plan.id,
+      plan_id: plan?.id || null,
       customer_peer_id: peer?.id || null,
       type,
       order_id: orderId,

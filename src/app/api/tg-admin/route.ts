@@ -111,6 +111,19 @@ export async function POST(request: Request) {
         return NextResponse.json({ customers });
       }
 
+      case "setCustomerType": {
+        const { id, type } = data;
+        if (!id || !["client", "agent"].includes(type)) {
+          return NextResponse.json({ error: "Invalid customer type" }, { status: 400 });
+        }
+        const { error } = await supabase
+          .from("tg_customers")
+          .update({ customer_type: type })
+          .eq("id", id);
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
+      }
+
       case "setCustomerBan": {
         const { id, banned } = data;
         if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
@@ -163,6 +176,21 @@ export async function POST(request: Request) {
         return NextResponse.json({ peer: renewed });
       }
 
+      case "updatePeerRenewal": {
+        // Precio/duración de renovación propios de un peer (NULL = usa planes)
+        const { id, price, days } = data;
+        if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+        const { error } = await supabase
+          .from("tg_customer_peers")
+          .update({
+            renewal_price_usd: price === null || price === "" || price === undefined ? null : Number(price),
+            renewal_duration_days: days === null || days === "" || days === undefined ? null : Number(days),
+          })
+          .eq("id", id);
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
+      }
+
       case "disableCustomerPeer": {
         if (!data.id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
         const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", data.id).single();
@@ -187,7 +215,7 @@ export async function POST(request: Request) {
       case "assignPeerToCustomer": {
         // Vincula un peer YA existente en el servidor a un customer de Telegram.
         // El customer podrá verlo en la Mini App, ver su estado y renovarlo solo.
-        const { customerId, routerId, publicKey, name, allowedAddress, wgInterface, comment, days, notify } = data;
+        const { customerId, routerId, publicKey, name, allowedAddress, wgInterface, comment, days, notify, renewalPriceUsd, renewalDurationDays } = data;
         if (!customerId || !routerId || !publicKey || !allowedAddress || !days) {
           return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
@@ -275,6 +303,8 @@ export async function POST(request: Request) {
             listen_port: listenPort,
             status: "active",
             expires_at: expiresAt.toISOString(),
+            renewal_price_usd: renewalPriceUsd === undefined || renewalPriceUsd === null || renewalPriceUsd === "" ? null : Number(renewalPriceUsd),
+            renewal_duration_days: renewalDurationDays === undefined || renewalDurationDays === null || renewalDurationDays === "" ? null : Number(renewalDurationDays),
           })
           .select()
           .single();
@@ -349,6 +379,17 @@ export async function POST(request: Request) {
           .order("name");
         if (error) throw new Error(error.message);
         return NextResponse.json({ routers });
+      }
+
+      case "listForSaleIps": {
+        // Todas las IPs marcadas for sale, de todos los servers
+        const { data: ips, error } = await supabase
+          .from("public_ips")
+          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, for_sale, router_id, routers(name)")
+          .eq("for_sale", true)
+          .order("public_ip");
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ ips });
       }
 
       case "listPublicIps": {

@@ -25,7 +25,7 @@ export async function GET(request: Request) {
 
   const { data: expiredPeers, error } = await supabase
     .from("tg_customer_peers")
-    .select("*, tg_customers(telegram_id)")
+    .select("*, tg_customers(telegram_id, customer_type)")
     .eq("status", "active")
     .lt("expires_at", now.toISOString());
 
@@ -36,14 +36,17 @@ export async function GET(request: Request) {
   const results: { id: string; name: string; ok: boolean; error?: string }[] = [];
 
   for (const row of expiredPeers || []) {
-    const peer = row as TgCustomerPeer & { tg_customers?: { telegram_id: number } | null };
+    const peer = row as TgCustomerPeer & { tg_customers?: { telegram_id: number; customer_type?: string } | null };
     try {
       await deactivateCustomerPeer({ supabase, peer, status: "expired" });
       results.push({ id: peer.id, name: peer.peer_name, ok: true });
       if (peer.tg_customers?.telegram_id) {
+        const isAgent = peer.tg_customers.customer_type === "agent";
         await sendTelegramMessage(
           peer.tg_customers.telegram_id,
-          `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nYou can renew it from the app to reactivate it with the same configuration.`
+          isAgent
+            ? `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nContact support to extend it.`
+            : `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nYou can renew it from the app to reactivate it with the same configuration.`
         );
       }
     } catch (err) {
