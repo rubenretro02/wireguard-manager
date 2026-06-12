@@ -131,9 +131,9 @@ export default function TgMiniApp() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
 
-  // Búsqueda/filtro en My Peers
+  // Búsqueda/filtro en My Peers ("online" = conectado ahora; "inactive" = expired+disabled)
   const [peerSearch, setPeerSearch] = useState("");
-  const [peerFilter, setPeerFilter] = useState<"all" | "active" | "expired" | "disabled">("all");
+  const [peerFilter, setPeerFilter] = useState<"all" | "online" | "active" | "expired" | "disabled" | "inactive">("all");
 
   const [configPeer, setConfigPeer] = useState<Peer | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
@@ -448,7 +448,9 @@ export default function TgMiniApp() {
 
   // Filtro de My Peers
   const visiblePeers = peers.filter((p) => {
-    if (peerFilter !== "all" && p.status !== peerFilter) return false;
+    if (peerFilter === "online" && !p.live?.connected) return false;
+    if (peerFilter === "inactive" && p.status === "active") return false;
+    if (["active", "expired", "disabled"].includes(peerFilter) && p.status !== peerFilter) return false;
     const q = peerSearch.trim().toLowerCase();
     if (!q) return true;
     return (
@@ -511,24 +513,29 @@ export default function TgMiniApp() {
       <main className="px-4 space-y-3">
         {tab === "dashboard" && (
           <>
-            {/* Resumen de productos */}
+            {/* Resumen de productos — tarjetas clickeables: abren My Peers filtrado */}
             <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-2xl border border-border bg-card p-4">
-                <p className="text-2xl font-bold">{stats.total}</p>
-                <p className="text-xs text-muted-foreground">Total peers</p>
-              </div>
-              <div className="rounded-2xl border border-border bg-card p-4">
-                <p className="text-2xl font-bold text-emerald-400">{stats.online}</p>
-                <p className="text-xs text-muted-foreground">Online now</p>
-              </div>
-              <div className="rounded-2xl border border-border bg-card p-4">
-                <p className="text-2xl font-bold text-primary">{stats.active}</p>
-                <p className="text-xs text-muted-foreground">Active</p>
-              </div>
-              <div className="rounded-2xl border border-border bg-card p-4">
-                <p className="text-2xl font-bold text-red-400">{stats.inactive}</p>
-                <p className="text-xs text-muted-foreground">Expired / Disabled</p>
-              </div>
+              {(
+                [
+                  { value: stats.total, label: "Total peers", color: "", filter: "all" },
+                  { value: stats.online, label: "Online now", color: "text-emerald-400", filter: "online" },
+                  { value: stats.active, label: "Active", color: "text-primary", filter: "active" },
+                  { value: stats.inactive, label: "Expired / Disabled", color: "text-red-400", filter: "inactive" },
+                ] as const
+              ).map((card) => (
+                <button
+                  key={card.filter}
+                  onClick={() => {
+                    setPeerFilter(card.filter);
+                    setPeerSearch("");
+                    setTab("peers");
+                  }}
+                  className="rounded-2xl border border-border bg-card p-4 text-left hover:border-primary/50 hover:bg-secondary/30 transition-colors active:scale-[0.98]"
+                >
+                  <p className={`text-2xl font-bold ${card.color}`}>{card.value}</p>
+                  <p className="text-xs text-muted-foreground">{card.label}</p>
+                </button>
+              ))}
             </div>
 
             {nextExpiry && (
@@ -612,8 +619,8 @@ export default function TgMiniApp() {
                     className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-secondary/50 border border-border text-sm outline-none focus:border-primary"
                   />
                 </div>
-                <div className="flex gap-1.5">
-                  {(["all", "active", "expired", "disabled"] as const).map((f) => (
+                <div className="flex gap-1.5 flex-wrap">
+                  {(["all", "online", "active", "expired", "disabled", "inactive"] as const).map((f) => (
                     <button
                       key={f}
                       onClick={() => setPeerFilter(f)}
