@@ -47,7 +47,7 @@ export interface TgCustomerPeer {
   linux_peer_id: string | null;
   peer_name: string;
   peer_public_key: string;
-  peer_private_key: string;
+  peer_private_key: string | null;
   allowed_address: string;
   wg_interface: string;
   public_ip: string;
@@ -146,7 +146,7 @@ export function buildLinuxClient(router: Router, wgInterface?: string): LinuxWir
 export function buildClientConfig(peer: TgCustomerPeer): string {
   const address = peer.allowed_address.split(",")[0].split("/")[0];
   return `[Interface]
-PrivateKey = ${peer.peer_private_key}
+PrivateKey = ${peer.peer_private_key || "[YOUR_PRIVATE_KEY]"}
 Address = ${address}/32
 DNS = ${peer.dns}
 
@@ -464,6 +464,9 @@ export async function reactivateCustomerPeerOnServer(
     if (existing) {
       await client.enableWireGuardPeer(existing[".id"]);
     } else {
+      if (!peer.peer_private_key) {
+        throw new Error("Peer no longer exists on the router and has no stored key — rotate keys to recreate it");
+      }
       await client.createWireGuardPeer({
         interface: peer.wg_interface,
         name: peer.peer_name,
@@ -473,6 +476,67 @@ export async function reactivateCustomerPeerOnServer(
       });
     }
   }
+}
+
+/**
+ * Rota las llaves de un peer (lo pide el customer desde la Mini App).
+ * Genera un keypair nuevo, lo aplica en el servidor conservando IP/nombre,
+ * y lo persiste. La config vieja del cliente deja de funcionar.
+ */
+export async function rotateCustomerPeerKeys(
+  supabase: SupabaseClient,
+  peer: TgCustomerPeer
+): Promise<TgCustomerPeer> {
+  const { data: router } = await supabase
+    .from("routers")
+    .select("*")
+    .eq("id", peer.router_id)
+    .single();
+  if (!router) throw new Error("Server not found for peer");
+
+  const keyPair = generateKeyPair();
+
+  if (router.connection_type === "linux-ssh") {
+    const client = buildLinuxClient(router as Router, peer.wg_interface);
+    // best effort: sacar la llave vieja (puede ya no estar si está expirado)
+    await client.removePeer(peer.peer_public_key, peer.wg_interface).catch(() => {});
+    if (peer.status === "active") {
+      const added = await client.addPeer(keyPair.publicKey, peer.allowed_address, peer.wg_interface);
+      if (!added) throw new Error("Failed to apply new keys on the server");
+    }
+    if (peer.linux_peer_id) {
+      await supabase
+        .from("linux_peers")
+        .update({ public_key: keyPair.publicKey, private_key: keyPair.privateKey })
+        .eq("id", peer.linux_peer_id);
+    }
+  } else {
+    const client = buildMikroTikClient(router as Router);
+    const existing = await findMikroTikPeerByPublicKey(client, peer.peer_public_key);
+    if (existing) {
+      await client.updateWireGuardPeer(existing[".id"], {
+        "private-key": keyPair.privateKey,
+        "public-key": keyPair.publicKey,
+      });
+    } else if (peer.status === "active") {
+      await client.createWireGuardPeer({
+        interface: peer.wg_interface,
+        name: peer.peer_name,
+        "allowed-address": peer.allowed_address,
+        comment: peer.public_ip,
+        "private-key": keyPair.privateKey,
+      });
+    }
+  }
+
+  const { data: updated, error } = await supabase
+    .from("tg_customer_peers")
+    .update({ peer_public_key: keyPair.publicKey, peer_private_key: keyPair.privateKey })
+    .eq("id", peer.id)
+    .select()
+    .single();
+  if (error || !updated) throw new Error(`Failed to save new keys: ${error?.message}`);
+  return updated as TgCustomerPeer;
 }
 
 /** Saca un peer de WireGuard y lo marca con el estado dado (expired/disabled). */

@@ -9,6 +9,7 @@ import {
   Copy,
   Download,
   Globe,
+  KeyRound,
   Loader2,
   QrCode,
   RefreshCw,
@@ -58,7 +59,8 @@ interface Peer {
   expires_at: string;
   created_at: string;
   plan_id: string | null;
-  config: string;
+  has_config: boolean;
+  config: string | null;
 }
 interface Payment {
   id: string;
@@ -119,6 +121,8 @@ export default function TgMiniApp() {
 
   const [configPeer, setConfigPeer] = useState<Peer | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [rotateConfirm, setRotateConfirm] = useState(false);
+  const [rotating, setRotating] = useState(false);
   const [renewPeer, setRenewPeer] = useState<Peer | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LiveStatus | "loading">>({});
   const [buying, setBuying] = useState<string | null>(null); // planId en proceso
@@ -192,7 +196,8 @@ export default function TgMiniApp() {
 
   /* ============ QR del config ============ */
   useEffect(() => {
-    if (!configPeer) {
+    setRotateConfirm(false);
+    if (!configPeer?.config) {
       setQrDataUrl(null);
       return;
     }
@@ -203,6 +208,7 @@ export default function TgMiniApp() {
 
   /* ============ Acciones ============ */
   const copyConfig = async (peer: Peer) => {
+    if (!peer.config) return;
     try {
       await navigator.clipboard.writeText(peer.config);
       toast.success("Config copied");
@@ -211,7 +217,27 @@ export default function TgMiniApp() {
     }
   };
 
+  const rotateKeys = async (peer: Peer) => {
+    setRotating(true);
+    try {
+      const { peer: updated } = await tgFetch("/api/tg/peers", {
+        method: "POST",
+        body: JSON.stringify({ action: "rotateKeys", peerId: peer.id }),
+      });
+      setPeers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setConfigPeer(updated);
+      setRotateConfirm(false);
+      webApp?.HapticFeedback?.notificationOccurred("success");
+      toast.success("New keys generated — use the new config");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rotate keys");
+    } finally {
+      setRotating(false);
+    }
+  };
+
   const downloadConfig = (peer: Peer) => {
+    if (!peer.config) return;
     const blob = new Blob([peer.config], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -518,35 +544,83 @@ export default function TgMiniApp() {
               </button>
             </div>
 
-            {qrDataUrl && (
-              <div className="flex justify-center">
-                <div className="p-3 bg-white rounded-2xl">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={qrDataUrl} alt="WireGuard config QR code" className="w-56 h-56" />
+            {configPeer.config ? (
+              <>
+                {qrDataUrl && (
+                  <div className="flex justify-center">
+                    <div className="p-3 bg-white rounded-2xl">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={qrDataUrl} alt="WireGuard config QR code" className="w-56 h-56" />
+                    </div>
+                  </div>
+                )}
+                <p className="text-xs text-center text-muted-foreground">
+                  Scan the QR with the WireGuard app, or copy the config below.
+                </p>
+
+                <pre className="text-[10px] leading-relaxed bg-secondary/50 rounded-xl p-3 overflow-x-auto font-mono whitespace-pre">
+                  {configPeer.config}
+                </pre>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => copyConfig(configPeer)}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
+                  >
+                    <Copy className="w-4 h-4" /> Copy
+                  </button>
+                  <button
+                    onClick={() => downloadConfig(configPeer)}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium"
+                  >
+                    <Download className="w-4 h-4" /> Download .conf
+                  </button>
                 </div>
+              </>
+            ) : (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 space-y-2 text-sm">
+                <p className="font-medium text-amber-300">Config not available yet</p>
+                <p className="text-amber-300/80 text-xs">
+                  This peer was linked to your account by the admin, so its private key isn't stored here.
+                  If you already have a working config, keep using it. To get a fresh config + QR, generate
+                  new keys below.
+                </p>
               </div>
             )}
-            <p className="text-xs text-center text-muted-foreground">
-              Scan the QR with the WireGuard app, or copy the config below.
-            </p>
 
-            <pre className="text-[10px] leading-relaxed bg-secondary/50 rounded-xl p-3 overflow-x-auto font-mono whitespace-pre">
-              {configPeer.config}
-            </pre>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={() => copyConfig(configPeer)}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
-              >
-                <Copy className="w-4 h-4" /> Copy
-              </button>
-              <button
-                onClick={() => downloadConfig(configPeer)}
-                className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium"
-              >
-                <Download className="w-4 h-4" /> Download .conf
-              </button>
+            {/* Rotate keys */}
+            <div className="rounded-xl border border-border bg-secondary/30 p-3 space-y-2">
+              {!rotateConfirm ? (
+                <button
+                  onClick={() => setRotateConfirm(true)}
+                  className="w-full flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-secondary text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <KeyRound className="w-3.5 h-3.5" /> {configPeer.config ? "Regenerate keys" : "Generate new keys"}
+                </button>
+              ) : (
+                <>
+                  <p className="text-xs text-amber-400">
+                    ⚠️ Your current config will stop working immediately. You'll need to import the new
+                    config on your device. Continue?
+                  </p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => setRotateConfirm(false)}
+                      className="px-4 py-2 rounded-xl bg-secondary text-xs font-medium"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => rotateKeys(configPeer)}
+                      disabled={rotating}
+                      className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl bg-amber-500/20 text-amber-300 text-xs font-medium disabled:opacity-50"
+                    >
+                      {rotating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
+                      Yes, rotate keys
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>

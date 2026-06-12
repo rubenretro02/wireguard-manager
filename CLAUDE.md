@@ -89,6 +89,13 @@ El provisioning automático SOLO usa IPs `for_sale = true` (elige la menos carga
 activos); las demás quedan reservadas para uso propio/dedicated. Toggle en
 Admin → Telegram → "IPs en venta". Dedicated = fijar `public_ip_id` en el plan.
 
+**v18 — Peers asignados + rotación de llaves:** `scripts/migration-v18-assigned-peers.sql`
+hace `peer_private_key` nullable. El admin puede asignar peers YA existentes a un customer
+(IPs for Sale → click peer → Assign): el customer los ve en la app (estado, días restantes,
+renovar) pero sin enable/disable. Si no se conoce la private key (peers MikroTik manuales),
+la app no muestra config y ofrece "Generate new keys" (rotateKeys) que regenera el keypair
+en el servidor conservando IP/nombre. Customers también clickeables en el admin (peers+pagos).
+
 **Pendiente / TODO:**
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).

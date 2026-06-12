@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-logger";
 import { sendTelegramMessage } from "@/lib/telegram";
 import {
+  buildLinuxClient,
+  buildMikroTikClient,
   deactivateCustomerPeer,
   getServiceClient,
   reactivateCustomerPeerOnServer,
@@ -10,6 +12,8 @@ import {
   renewCustomerPeer,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
+import { getMiniAppUrl } from "@/lib/telegram";
+import type { Router } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -178,6 +182,126 @@ export async function POST(request: Request) {
         await reactivateCustomerPeerOnServer(supabase, peer as TgCustomerPeer);
         await supabase.from("tg_customer_peers").update({ status: "active" }).eq("id", peer.id);
         return NextResponse.json({ success: true });
+      }
+
+      case "assignPeerToCustomer": {
+        // Vincula un peer YA existente en el servidor a un customer de Telegram.
+        // El customer podrá verlo en la Mini App, ver su estado y renovarlo solo.
+        const { customerId, routerId, publicKey, name, allowedAddress, wgInterface, comment, days, notify } = data;
+        if (!customerId || !routerId || !publicKey || !allowedAddress || !days) {
+          return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+        }
+
+        const { data: customer } = await supabase.from("tg_customers").select("*").eq("id", customerId).single();
+        if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+
+        const { data: assignRouter } = await supabase.from("routers").select("*").eq("id", routerId).single();
+        if (!assignRouter) return NextResponse.json({ error: "Server not found" }, { status: 404 });
+
+        // Evitar doble asignación del mismo peer
+        const { data: existing } = await supabase
+          .from("tg_customer_peers")
+          .select("id")
+          .eq("router_id", routerId)
+          .eq("peer_public_key", publicKey)
+          .maybeSingle();
+        if (existing) {
+          return NextResponse.json({ error: "This peer is already assigned to a customer" }, { status: 400 });
+        }
+
+        const isLinux = assignRouter.connection_type === "linux-ssh";
+        const effectiveInterface = wgInterface || assignRouter.wg_interface || "wg0";
+
+        // Server pubkey + listen port para poder armar la config del cliente
+        let serverPublicKey = "";
+        let listenPort = 13231;
+        if (isLinux) {
+          const client = buildLinuxClient(assignRouter as Router, effectiveInterface);
+          const info = await client.getInterfaceInfo();
+          if (!info) throw new Error(`Could not read server info for ${effectiveInterface}`);
+          serverPublicKey = info.publicKey;
+          listenPort = info.listenPort;
+        } else {
+          const client = buildMikroTikClient(assignRouter as Router);
+          const interfaces = await client.getWireGuardInterfaces();
+          const iface = interfaces.find((i) => i.name === effectiveInterface);
+          if (!iface) throw new Error(`Interface ${effectiveInterface} not found on router`);
+          serverPublicKey = iface["public-key"];
+          listenPort = iface["listen-port"] || 13231;
+        }
+
+        // Private key si la conocemos (peers Linux creados por la app la guardan)
+        let privateKey: string | null = null;
+        if (isLinux) {
+          const { data: lp } = await supabase
+            .from("linux_peers")
+            .select("id, private_key")
+            .eq("router_id", routerId)
+            .eq("public_key", publicKey)
+            .maybeSingle();
+          privateKey = lp?.private_key || null;
+        }
+
+        // IP pública: comment si es una IP, si no por subnet, si no el host
+        const subnet = String(allowedAddress).split("/")[0].split(".").slice(0, 3).join(".");
+        let publicIpStr: string | null = null;
+        if (comment && /^\d+\.\d+\.\d+\.\d+$/.test(comment)) {
+          publicIpStr = comment;
+        } else {
+          const { data: ipRow } = await supabase
+            .from("public_ips")
+            .select("public_ip")
+            .eq("router_id", routerId)
+            .eq("internal_subnet", subnet)
+            .maybeSingle();
+          publicIpStr = ipRow?.public_ip || assignRouter.host;
+        }
+
+        const expiresAt = new Date(Date.now() + Number(days) * 24 * 60 * 60 * 1000);
+
+        const { data: assigned, error: assignError } = await supabase
+          .from("tg_customer_peers")
+          .insert({
+            customer_id: customerId,
+            plan_id: null,
+            router_id: routerId,
+            peer_name: name || `peer-${String(publicKey).substring(0, 6)}`,
+            peer_public_key: publicKey,
+            peer_private_key: privateKey,
+            allowed_address: allowedAddress,
+            wg_interface: effectiveInterface,
+            public_ip: publicIpStr,
+            server_public_key: serverPublicKey,
+            listen_port: listenPort,
+            status: "active",
+            expires_at: expiresAt.toISOString(),
+          })
+          .select()
+          .single();
+        if (assignError || !assigned) throw new Error(assignError?.message || "Failed to assign peer");
+
+        if (notify) {
+          let appUrl = "";
+          try { appUrl = getMiniAppUrl(); } catch { /* optional */ }
+          await sendTelegramMessage(
+            customer.telegram_id,
+            `🔗 The peer <b>${assigned.peer_name}</b> was linked to your account.\n\nYou can now check its status and renew it from the app.${privateKey ? "" : "\n\nNote: to download a fresh config, use <b>Rotate keys</b> in the app."}`,
+            appUrl ? { reply_markup: { inline_keyboard: [[{ text: "🚀 Open App", web_app: { url: appUrl } }]] } } : {}
+          );
+        }
+
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          routerId,
+          action: "update",
+          entityType: "peer",
+          entityId: assigned.id,
+          entityName: assigned.peer_name,
+          details: { assigned_to_telegram: customer.telegram_id, days },
+        });
+
+        return NextResponse.json({ peer: assigned });
       }
 
       case "deleteCustomerPeer": {

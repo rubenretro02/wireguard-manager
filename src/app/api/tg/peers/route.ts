@@ -4,6 +4,7 @@ import {
   buildClientConfig,
   getLivePeerStatus,
   getServiceClient,
+  rotateCustomerPeerKeys,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
 
@@ -21,7 +22,10 @@ function serializePeer(peer: TgCustomerPeer) {
     expires_at: peer.expires_at,
     created_at: peer.created_at,
     plan_id: peer.plan_id,
-    config: buildClientConfig(peer),
+    // Peers asignados desde el dashboard pueden no tener private key guardada:
+    // el customer rota llaves desde la app para obtener una config completa.
+    has_config: Boolean(peer.peer_private_key),
+    config: peer.peer_private_key ? buildClientConfig(peer) : null,
   };
 }
 
@@ -69,6 +73,15 @@ export async function POST(request: Request) {
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";
         return NextResponse.json({ error: `Failed to get status: ${msg}` }, { status: 500 });
+      }
+    }
+    case "rotateKeys": {
+      try {
+        const updated = await rotateCustomerPeerKeys(supabase, peer as TgCustomerPeer);
+        return NextResponse.json({ peer: serializePeer(updated) });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        return NextResponse.json({ error: `Failed to rotate keys: ${msg}` }, { status: 500 });
       }
     }
     default:
