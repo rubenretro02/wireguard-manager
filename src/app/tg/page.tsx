@@ -123,6 +123,7 @@ export default function TgMiniApp() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [rotateConfirm, setRotateConfirm] = useState(false);
   const [rotating, setRotating] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [renewPeer, setRenewPeer] = useState<Peer | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LiveStatus | "loading">>({});
   const [buying, setBuying] = useState<string | null>(null); // planId en proceso
@@ -157,6 +158,33 @@ export default function TgMiniApp() {
     const { payments } = await tgFetch("/api/tg/payments");
     setPayments(payments);
   }, [tgFetch]);
+
+  // Refresca los datos del tab actual (manual = botón, con spinner y toast de error)
+  const refreshCurrent = useCallback(
+    async (manual: boolean) => {
+      if (manual) setRefreshing(true);
+      try {
+        const jobs: Promise<unknown>[] = [refreshPeers()];
+        if (tab === "buy") jobs.push(tgFetch("/api/tg/plans").then((r) => setPlans(r.plans)));
+        if (tab === "payments") jobs.push(refreshPayments());
+        await Promise.all(jobs);
+      } catch (err) {
+        if (manual) toast.error(err instanceof Error ? err.message : "Failed to refresh");
+      } finally {
+        if (manual) setRefreshing(false);
+      }
+    },
+    [tab, refreshPeers, refreshPayments, tgFetch]
+  );
+
+  // Auto-refresh cada 10s
+  useEffect(() => {
+    if (!customer) return;
+    const interval = setInterval(() => {
+      refreshCurrent(false);
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [customer, refreshCurrent]);
 
   /* ============ Init: esperar el script de Telegram y autenticar ============ */
   useEffect(() => {
@@ -379,6 +407,14 @@ export default function TgMiniApp() {
             Hi, {customer?.first_name || customer?.username || "there"} 👋
           </p>
         </div>
+        <button
+          onClick={() => refreshCurrent(true)}
+          disabled={refreshing}
+          aria-label="Refresh"
+          className="p-2.5 rounded-xl bg-secondary text-muted-foreground hover:text-foreground transition-colors disabled:opacity-60"
+        >
+          <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+        </button>
       </header>
 
       {/* Pago pendiente */}
