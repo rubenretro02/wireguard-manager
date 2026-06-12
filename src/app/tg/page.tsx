@@ -5,6 +5,7 @@ import QRCode from "qrcode";
 import { toast } from "sonner";
 import {
   Activity,
+  Bell,
   Clock,
   Copy,
   Download,
@@ -25,9 +26,12 @@ interface TelegramWebApp {
   ready: () => void;
   expand: () => void;
   openLink: (url: string) => void;
+  openTelegramLink?: (url: string) => void;
   HapticFeedback?: { notificationOccurred: (type: "error" | "success" | "warning") => void };
   colorScheme?: "light" | "dark";
 }
+
+const SUPPORT_BOT = process.env.NEXT_PUBLIC_SUPPORT_BOT || "blackgoatsupport_bot";
 declare global {
   interface Window {
     Telegram?: { WebApp?: TelegramWebApp };
@@ -243,6 +247,13 @@ export default function TgMiniApp() {
   }, [configPeer]);
 
   /* ============ Acciones ============ */
+  const openSupport = () => {
+    const url = `https://t.me/${SUPPORT_BOT}`;
+    // openTelegramLink abre el chat dentro de Telegram (openLink iría al browser)
+    if (webApp?.openTelegramLink) webApp.openTelegramLink(url);
+    else window.open(url, "_blank");
+  };
+
   const copyConfig = async (peer: Peer) => {
     if (!peer.config) return;
     try {
@@ -391,6 +402,12 @@ export default function TgMiniApp() {
         <X className="w-12 h-12 text-red-400" />
         <h1 className="text-xl font-bold">Account suspended</h1>
         <p className="text-muted-foreground text-sm">Contact support for more information.</p>
+        <button
+          onClick={openSupport}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium"
+        >
+          <Bell className="w-4 h-4" /> Support
+        </button>
       </div>
     );
   }
@@ -419,6 +436,12 @@ export default function TgMiniApp() {
             Hi, {customer?.first_name || customer?.username || "there"} 👋
           </p>
         </div>
+        <button
+          onClick={openSupport}
+          className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-secondary text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+        >
+          <Bell className="w-4 h-4" /> Support
+        </button>
         <button
           onClick={() => refreshCurrent(true)}
           disabled={refreshing}
