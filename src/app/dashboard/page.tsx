@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
@@ -50,7 +51,9 @@ import {
   Signal,
   TrendingUp,
   TrendingDown,
-  Network
+  Network,
+  UserPlus,
+  Loader2
 } from "lucide-react";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities, TimeUnit, UserIpAccess } from "@/lib/types";
@@ -207,6 +210,26 @@ export default function DashboardPage() {
   const [editExpScheduledEnable, setEditExpScheduledEnable] = useState(false);
   const [editExpEnableDate, setEditExpEnableDate] = useState<string>("");
   const [savingExpiration, setSavingExpiration] = useState(false);
+
+  // ===== Bulk selection =====
+  const [selectedPeerIds, setSelectedPeerIds] = useState<Set<string>>(new Set());
+  const [bulkWorking, setBulkWorking] = useState(false);
+  // Bulk assign to Telegram customer
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number; username: string | null; first_name: string | null; customer_type?: string }[]>([]);
+  const [bulkAssignCustomerId, setBulkAssignCustomerId] = useState("");
+  const [bulkAssignDays, setBulkAssignDays] = useState("30");
+  const [bulkAssignPrice, setBulkAssignPrice] = useState("");
+  const [bulkAssignRenewDays, setBulkAssignRenewDays] = useState("");
+  const [bulkAssignNotify, setBulkAssignNotify] = useState(true);
+  // Bulk renew/expiration
+  const [bulkExpOpen, setBulkExpOpen] = useState(false);
+  const [bulkExpValue, setBulkExpValue] = useState(30);
+  const [bulkExpUnit, setBulkExpUnit] = useState<TimeUnit>("days");
+
+  // Clear bulk selection when switching routers
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => setSelectedPeerIds(new Set()), [selectedRouterId]);
 
   // Peers by IP modal (for viewing peers using a specific IP in the selector)
   const [ipPeersModalOpen, setIpPeersModalOpen] = useState(false);
@@ -1199,6 +1222,213 @@ export default function DashboardPage() {
     }
   };
 
+  // ===== Bulk actions =====
+  const getSelectedPeers = () => peers.filter((p) => selectedPeerIds.has(p[".id"]));
+
+  const clearSelection = () => setSelectedPeerIds(new Set());
+
+  const toggleSelectPeer = (id: string) => {
+    setSelectedPeerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedPeerIds((prev) => {
+      const allSelected = filteredPeers.length > 0 && filteredPeers.every((p) => prev.has(p[".id"]));
+      if (allSelected) return new Set();
+      return new Set(filteredPeers.map((p) => p[".id"]));
+    });
+  };
+
+  const bulkToggle = async (enable: boolean) => {
+    const selected = getSelectedPeers();
+    if (!selected.length) return;
+    setBulkWorking(true);
+    let ok = 0;
+    let fail = 0;
+    for (const peer of selected) {
+      try {
+        const res = await fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: enable ? "enablePeer" : "disablePeer",
+            routerId: selectedRouterId,
+            data: { id: peer[".id"], "public-key": peer["public-key"] },
+          }),
+        });
+        const data = await res.json();
+        if (data.success) ok++;
+        else fail++;
+      } catch {
+        fail++;
+      }
+    }
+    setBulkWorking(false);
+    toast[fail ? "warning" : "success"](`${enable ? "Enabled" : "Disabled"} ${ok} peer(s)${fail ? `, ${fail} failed` : ""}`);
+    clearSelection();
+    fetchWireGuardData();
+  };
+
+  const bulkDelete = async () => {
+    if (!canDelete) {
+      toast.error("You don't have permission to delete peers");
+      return;
+    }
+    const selected = getSelectedPeers();
+    if (!selected.length) return;
+    if (!confirm(`Delete ${selected.length} peer(s)? This cannot be undone.`)) return;
+    setBulkWorking(true);
+    let ok = 0;
+    let fail = 0;
+    const deletedKeys: string[] = [];
+    for (const peer of selected) {
+      try {
+        const res = await fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "deletePeer",
+            routerId: selectedRouterId,
+            data: { id: peer[".id"], "public-key": peer["public-key"], publicKey: peer["public-key"] },
+          }),
+        });
+        const data = await res.json();
+        if (data.success) {
+          ok++;
+          if (peer["public-key"]) deletedKeys.push(peer["public-key"]);
+        } else fail++;
+      } catch {
+        fail++;
+      }
+    }
+    if (deletedKeys.length) {
+      await supabase
+        .from("peer_metadata")
+        .delete()
+        .eq("router_id", selectedRouterId)
+        .in("peer_public_key", deletedKeys);
+    }
+    setBulkWorking(false);
+    toast[fail ? "warning" : "success"](`Deleted ${ok} peer(s)${fail ? `, ${fail} failed` : ""}`);
+    clearSelection();
+    fetchWireGuardData();
+  };
+
+  const bulkDownload = async () => {
+    const selected = getSelectedPeers();
+    for (const peer of selected) {
+      downloadConfig(peer);
+      // pequeña pausa para que el browser no bloquee descargas múltiples
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    toast.success(`Downloaded ${selected.length} config(s)`);
+  };
+
+  const bulkSetExpiration = async () => {
+    const selected = getSelectedPeers();
+    if (!selected.length || bulkExpValue <= 0) return;
+    setBulkWorking(true);
+    try {
+      const expDate = new Date(Date.now() + convertToMilliseconds(bulkExpValue, bulkExpUnit));
+      const rows = selected.map((peer) => ({
+        router_id: selectedRouterId,
+        peer_public_key: peer["public-key"],
+        peer_name: peer.name || null,
+        peer_interface: peer.interface || null,
+        allowed_address: peer["allowed-address"] || null,
+        created_by_email: profile?.email,
+        created_by_user_id: profile?.id,
+        expires_at: expDate.toISOString(),
+        auto_disable_enabled: true,
+        expiration_hours: convertToHours(bulkExpValue, bulkExpUnit),
+        expiration_value: bulkExpValue,
+        expiration_unit: bulkExpUnit,
+      }));
+      const { error } = await supabase
+        .from("peer_metadata")
+        .upsert(rows, { onConflict: "router_id,peer_public_key" });
+      if (error) throw new Error(error.message);
+      toast.success(`${selected.length} peer(s) expire in ${formatDuration(bulkExpValue, bulkExpUnit)}`);
+      setBulkExpOpen(false);
+      clearSelection();
+      fetchPeerMetadata();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to set expiration");
+    } finally {
+      setBulkWorking(false);
+    }
+  };
+
+  const openBulkAssign = async () => {
+    setBulkAssignCustomerId("");
+    setBulkAssignDays("30");
+    setBulkAssignPrice("");
+    setBulkAssignRenewDays("");
+    setBulkAssignNotify(true);
+    setBulkAssignOpen(true);
+    try {
+      const res = await fetch("/api/tg-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "listCustomers", data: {} }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load customers");
+      setBulkCustomers(json.customers || []);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to load Telegram customers");
+    }
+  };
+
+  const bulkAssign = async () => {
+    const selected = getSelectedPeers();
+    if (!selected.length || !bulkAssignCustomerId || !Number(bulkAssignDays)) return;
+    setBulkWorking(true);
+    let ok = 0;
+    const errors: string[] = [];
+    for (const peer of selected) {
+      try {
+        const res = await fetch("/api/tg-admin", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "assignPeerToCustomer",
+            data: {
+              customerId: bulkAssignCustomerId,
+              routerId: selectedRouterId,
+              publicKey: peer["public-key"],
+              name: peer.name,
+              allowedAddress: peer["allowed-address"]?.split(",")[0],
+              wgInterface: peer.interface,
+              comment: peer.comment,
+              days: Number(bulkAssignDays),
+              notify: bulkAssignNotify,
+              renewalPriceUsd: bulkAssignPrice === "" ? null : Number(bulkAssignPrice),
+              renewalDurationDays: bulkAssignRenewDays === "" ? null : Number(bulkAssignRenewDays),
+            },
+          }),
+        });
+        const json = await res.json();
+        if (res.ok) ok++;
+        else errors.push(`${peer.name || peer[".id"]}: ${json.error || res.status}`);
+      } catch (err) {
+        errors.push(`${peer.name || peer[".id"]}: ${err instanceof Error ? err.message : "error"}`);
+      }
+    }
+    setBulkWorking(false);
+    if (ok) toast.success(`Assigned ${ok} peer(s) to the customer`);
+    if (errors.length) toast.warning(`${errors.length} failed: ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more)` : ""}`);
+    if (ok) {
+      setBulkAssignOpen(false);
+      clearSelection();
+    }
+  };
+
   // Open edit expiration dialog
   const openEditExpiration = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
@@ -1823,6 +2053,46 @@ PersistentKeepalive = 25`;
           </div>
 
           {/* Table */}
+          {/* Bulk actions bar */}
+          {selectedPeerIds.size > 0 && (
+            <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-b border-border bg-primary/5">
+              <span className="text-sm font-medium">{selectedPeerIds.size} selected</span>
+              {bulkWorking ? (
+                <Loader2 className="w-4 h-4 animate-spin text-primary ml-2" />
+              ) : (
+                <>
+                  {isAdmin && (
+                    <Button size="sm" variant="outline" onClick={openBulkAssign}>
+                      <UserPlus className="w-4 h-4 mr-1.5" /> Assign to TG customer
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => bulkToggle(true)}>
+                    <Power className="w-4 h-4 mr-1.5" /> Enable
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => bulkToggle(false)}>
+                    <PowerOff className="w-4 h-4 mr-1.5" /> Disable
+                  </Button>
+                  {canAutoExpire && (
+                    <Button size="sm" variant="outline" onClick={() => setBulkExpOpen(true)}>
+                      <Timer className="w-4 h-4 mr-1.5" /> Renew / Timer
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={bulkDownload}>
+                    <Download className="w-4 h-4 mr-1.5" /> Download
+                  </Button>
+                  {canDelete && (
+                    <Button size="sm" variant="outline" className="text-destructive border-destructive/40 hover:bg-destructive/10" onClick={bulkDelete}>
+                      <Trash2 className="w-4 h-4 mr-1.5" /> Delete
+                    </Button>
+                  )}
+                </>
+              )}
+              <Button size="sm" variant="ghost" className="ml-auto" onClick={clearSelection}>
+                <X className="w-4 h-4 mr-1" /> Clear
+              </Button>
+            </div>
+          )}
+
           {filteredPeers.length === 0 ? (
             <div className="py-16 text-center text-muted-foreground">
               {searchQuery || statusFilter !== "all"
@@ -1833,6 +2103,13 @@ PersistentKeepalive = 25`;
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent border-border">
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={filteredPeers.length > 0 && filteredPeers.every((p) => selectedPeerIds.has(p[".id"]))}
+                      onCheckedChange={toggleSelectAll}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
                   <TableHead className="text-muted-foreground">Name</TableHead>
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
@@ -1873,8 +2150,17 @@ PersistentKeepalive = 25`;
                   return (
                     <TableRow
                       key={peer[".id"]}
-                      className={`table-row-hover border-border ${expired ? "opacity-60" : ""}`}
+                      className={`table-row-hover border-border ${expired ? "opacity-60" : ""} ${selectedPeerIds.has(peer[".id"]) ? "bg-primary/5" : ""}`}
                     >
+                      {/* Select Column */}
+                      <TableCell className="w-10">
+                        <Checkbox
+                          checked={selectedPeerIds.has(peer[".id"])}
+                          onCheckedChange={() => toggleSelectPeer(peer[".id"])}
+                          aria-label={`Select ${peer.name || "peer"}`}
+                        />
+                      </TableCell>
+
                       {/* Name Column */}
                       <TableCell>
                         {isEditing ? (
@@ -2992,6 +3278,107 @@ PersistentKeepalive = 25"
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIpPeersModalOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk assign to Telegram customer */}
+      <Dialog open={bulkAssignOpen} onOpenChange={setBulkAssignOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Assign {selectedPeerIds.size} peer(s) to a Telegram customer</DialogTitle>
+            <DialogDescription>
+              The customer will see them in the Mini App: live status, time left and self-renewal.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label>Customer</Label>
+              <Select value={bulkAssignCustomerId} onValueChange={setBulkAssignCustomerId}>
+                <SelectTrigger>
+                  <SelectValue placeholder={bulkCustomers.length ? "Select a customer" : "Loading customers…"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {bulkCustomers.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.username ? `@${c.username}` : c.first_name || c.telegram_id} ({c.telegram_id})
+                      {c.customer_type === "agent" ? " · agent" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid grid-cols-2 gap-3 items-end">
+              <div className="space-y-1.5">
+                <Label>Days until expiration</Label>
+                <Input type="number" min="1" value={bulkAssignDays} onChange={(e) => setBulkAssignDays(e.target.value)} />
+              </div>
+              <div className="flex items-center gap-2 pb-2">
+                <Checkbox checked={bulkAssignNotify} onCheckedChange={(v) => setBulkAssignNotify(v === true)} id="bulk-assign-notify" />
+                <Label htmlFor="bulk-assign-notify" className="text-xs">Notify on Telegram</Label>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Renewal price USD (optional)</Label>
+                <Input type="number" min="0" step="0.01" placeholder="store plans" value={bulkAssignPrice} onChange={(e) => setBulkAssignPrice(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Renewal days</Label>
+                <Input type="number" min="1" placeholder="30" value={bulkAssignRenewDays} onChange={(e) => setBulkAssignRenewDays(e.target.value)} />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkAssignOpen(false)}>Cancel</Button>
+            <Button onClick={bulkAssign} disabled={bulkWorking || !bulkAssignCustomerId || !Number(bulkAssignDays)}>
+              {bulkWorking && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Assign {selectedPeerIds.size} peer(s)
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk renew / expiration */}
+      <Dialog open={bulkExpOpen} onOpenChange={setBulkExpOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Renew {selectedPeerIds.size} peer(s)</DialogTitle>
+            <DialogDescription>
+              Sets a new expiration counting from now, with auto-disable enabled.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Duration</Label>
+              <Input
+                type="number"
+                min="1"
+                value={bulkExpValue}
+                onChange={(e) => setBulkExpValue(Number.parseInt(e.target.value, 10) || 0)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Unit</Label>
+              <Select value={bulkExpUnit} onValueChange={(v) => setBulkExpUnit(v as TimeUnit)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="hours">Hours</SelectItem>
+                  <SelectItem value="days">Days</SelectItem>
+                  <SelectItem value="weeks">Weeks</SelectItem>
+                  <SelectItem value="months">Months</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkExpOpen(false)}>Cancel</Button>
+            <Button onClick={bulkSetExpiration} disabled={bulkWorking || bulkExpValue <= 0}>
+              {bulkWorking && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Apply
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
