@@ -43,7 +43,7 @@ export async function GET(request: Request) {
       if (peer.tg_customers?.telegram_id) {
         await sendTelegramMessage(
           peer.tg_customers.telegram_id,
-          `⛔ Tu peer <b>${peer.peer_name}</b> expiró y fue desactivado.\n\nPuedes renovarlo desde la app para reactivarlo con la misma configuración.`
+          `⛔ Your peer <b>${peer.peer_name}</b> expired and was deactivated.\n\nYou can renew it from the app to reactivate it with the same configuration.`
         );
       }
     } catch (err) {

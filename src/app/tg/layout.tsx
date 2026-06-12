@@ -3,7 +3,7 @@ import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
   title: "VPN Store",
-  description: "Compra y administra tu acceso WireGuard",
+  description: "Buy and manage your WireGuard access",
 };
 
 export const viewport: Viewport = {

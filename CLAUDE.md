@@ -75,7 +75,10 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 `CRYPTOMUS_MERCHANT_ID`, `CRYPTOMUS_PAYMENT_API_KEY`, `CRON_SECRET` (ver `.env.example`).
 
 **Gotchas:**
-- Solo routers `linux-ssh` se aprovisionan automáticamente (MikroTik pendiente).
+- Provisioning soporta `linux-ssh` Y MikroTik (api/api-ssl/rest). Linux: add/remove por SSH +
+  espejo en `linux_peers`. MikroTik: createWireGuardPeer con private-key propia (la public key
+  se calcula local), disable/enable nativo, used-IPs desde el propio router (los disabled siguen
+  visibles). Identificación de peers MikroTik por public key (no se guarda el .id del router).
 - La miniapp necesita HTTPS público — para probar en local usar un túnel (ngrok/cloudflared)
   y apuntar `NEXT_PUBLIC_APP_URL` + el bot ahí.
 - El QR se genera client-side con `qrcode` (nueva dep) — nunca mandar la config a servicios externos.
@@ -87,7 +90,6 @@ activos); las demás quedan reservadas para uso propio/dedicated. Toggle en
 Admin → Telegram → "IPs en venta". Dedicated = fijar `public_ip_id` en el plan.
 
 **Pendiente / TODO:**
-- Soporte MikroTik en provisioning.
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).
 

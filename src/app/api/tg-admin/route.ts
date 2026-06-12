@@ -3,13 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-logger";
 import { sendTelegramMessage } from "@/lib/telegram";
 import {
-  buildLinuxClient,
   deactivateCustomerPeer,
   getServiceClient,
+  reactivateCustomerPeerOnServer,
+  removeCustomerPeerFromServer,
   renewCustomerPeer,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
-import type { Router } from "@/lib/types";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -152,7 +152,7 @@ export async function POST(request: Request) {
           if (customer) {
             await sendTelegramMessage(
               customer.telegram_id,
-              `🎁 Tu peer <b>${renewed.peer_name}</b> fue extendido hasta el <b>${new Date(renewed.expires_at).toLocaleDateString("es-ES")}</b>.`
+              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`
             );
           }
         }
@@ -174,16 +174,9 @@ export async function POST(request: Request) {
         if (new Date(peer.expires_at).getTime() < Date.now()) {
           return NextResponse.json({ error: "Peer is expired — use Extend instead" }, { status: 400 });
         }
-        // re-agrega a WG sin tocar la fecha de expiración
-        const { data: router } = await supabase.from("routers").select("*").eq("id", peer.router_id).single();
-        if (!router) return NextResponse.json({ error: "Server not found" }, { status: 404 });
-        const client = buildLinuxClient(router as Router, peer.wg_interface);
-        const added = await client.addPeer(peer.peer_public_key, peer.allowed_address, peer.wg_interface);
-        if (!added) throw new Error("Failed to add peer to WireGuard");
+        // re-agrega/enable-a en el servidor sin tocar la fecha de expiración
+        await reactivateCustomerPeerOnServer(supabase, peer as TgCustomerPeer);
         await supabase.from("tg_customer_peers").update({ status: "active" }).eq("id", peer.id);
-        if (peer.linux_peer_id) {
-          await supabase.from("linux_peers").update({ disabled: false }).eq("id", peer.linux_peer_id);
-        }
         return NextResponse.json({ success: true });
       }
 
@@ -192,12 +185,8 @@ export async function POST(request: Request) {
         const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", data.id).single();
         if (!peer) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
 
-        // sacar de WireGuard
-        const { data: router } = await supabase.from("routers").select("*").eq("id", peer.router_id).single();
-        if (router) {
-          const client = buildLinuxClient(router as Router, peer.wg_interface);
-          await client.removePeer(peer.peer_public_key, peer.wg_interface).catch(() => {});
-        }
+        // sacar del servidor (Linux: remove SSH, MikroTik: delete)
+        await removeCustomerPeerFromServer(supabase, peer as TgCustomerPeer);
         if (peer.linux_peer_id) {
           await supabase.from("linux_peers").delete().eq("id", peer.linux_peer_id);
         }
@@ -233,7 +222,6 @@ export async function POST(request: Request) {
         const { data: routers, error } = await supabase
           .from("routers")
           .select("id, name, host, connection_type, wg_interface")
-          .eq("connection_type", "linux-ssh")
           .order("name");
         if (error) throw new Error(error.message);
         return NextResponse.json({ routers });
@@ -243,7 +231,7 @@ export async function POST(request: Request) {
         if (!data.routerId) return NextResponse.json({ error: "Missing routerId" }, { status: 400 });
         const { data: ips, error } = await supabase
           .from("public_ips")
-          .select("id, public_ip, ip_number, enabled, restricted, wg_interface, for_sale")
+          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, wg_interface, for_sale")
           .eq("router_id", data.routerId)
           .order("ip_number");
         if (error) throw new Error(error.message);

@@ -23,10 +23,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { CalendarPlus, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2 } from "lucide-react";
+import { CalendarPlus, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, Users } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
-/* ============ Tipos (respuestas del API admin, con joins) ============ */
+/* ============ Types (tg-admin API responses, with joins) ============ */
 interface AdminPlan {
   id: string;
   name: string;
@@ -54,6 +54,7 @@ interface AdminCustomer {
 interface AdminPeer {
   id: string;
   peer_name: string;
+  peer_public_key: string;
   allowed_address: string;
   public_ip: string;
   wg_interface: string;
@@ -79,15 +80,25 @@ interface RouterOption {
   id: string;
   name: string;
   host: string;
+  connection_type: string;
   wg_interface: string | null;
 }
 interface IpOption {
   id: string;
   public_ip: string;
   ip_number: number;
+  internal_subnet: string;
   enabled: boolean;
   restricted: boolean;
   for_sale?: boolean;
+}
+/* Live peer from the router (via /api/wireguard getPeers) */
+interface RouterPeer {
+  name?: string;
+  "allowed-address"?: string;
+  "public-key"?: string;
+  disabled?: boolean;
+  comment?: string;
 }
 
 const emptyPlanForm = {
@@ -108,7 +119,7 @@ function customerLabel(c?: { telegram_id: number; username: string | null; first
 }
 
 function fmtDate(iso: string | null): string {
-  return iso ? new Date(iso).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  return iso ? new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
 export default function AdminTelegramPage() {
@@ -124,10 +135,13 @@ export default function AdminTelegramPage() {
   const [routers, setRouters] = useState<RouterOption[]>([]);
   const [ips, setIps] = useState<IpOption[]>([]);
 
-  // Tab "IPs en venta"
+  // "IPs for Sale" tab
   const [saleRouterId, setSaleRouterId] = useState<string>("");
   const [saleIps, setSaleIps] = useState<IpOption[]>([]);
   const [loadingSaleIps, setLoadingSaleIps] = useState(false);
+  const [routerPeers, setRouterPeers] = useState<RouterPeer[]>([]);
+  const [loadingRouterPeers, setLoadingRouterPeers] = useState(false);
+  const [ipPeersDialog, setIpPeersDialog] = useState<IpOption | null>(null);
 
   // Plan dialog
   const [planDialogOpen, setPlanDialogOpen] = useState(false);
@@ -184,7 +198,7 @@ export default function AdminTelegramPage() {
       try {
         await loadAll();
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Error cargando datos");
+        toast.error(err instanceof Error ? err.message : "Failed to load data");
       } finally {
         setLoading(false);
       }
@@ -192,7 +206,7 @@ export default function AdminTelegramPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // IPs del router elegido en el form de plan
+  // IPs for the router selected in the plan form
   useEffect(() => {
     if (!planForm.router_id) {
       setIps([]);
@@ -203,24 +217,48 @@ export default function AdminTelegramPage() {
       .catch(() => setIps([]));
   }, [planForm.router_id, tgAdmin]);
 
-  // Cargar IPs del router seleccionado en la pestaña "IPs en venta"
+  // Load IPs + live peers for the router selected in the "IPs for Sale" tab
   useEffect(() => {
     if (!saleRouterId) {
       setSaleIps([]);
+      setRouterPeers([]);
       return;
     }
     setLoadingSaleIps(true);
     tgAdmin("listPublicIps", { routerId: saleRouterId })
       .then((r) => setSaleIps(r.ips || []))
-      .catch((err) => toast.error(err instanceof Error ? err.message : "Error cargando IPs"))
+      .catch((err) => toast.error(err instanceof Error ? err.message : "Failed to load IPs"))
       .finally(() => setLoadingSaleIps(false));
+
+    setLoadingRouterPeers(true);
+    fetch("/api/wireguard", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "getPeers", routerId: saleRouterId }),
+    })
+      .then((res) => res.json())
+      .then((json) => setRouterPeers(json.peers || []))
+      .catch(() => setRouterPeers([]))
+      .finally(() => setLoadingRouterPeers(false));
   }, [saleRouterId, tgAdmin]);
+
+  const peersForIp = useCallback(
+    (ip: IpOption): RouterPeer[] =>
+      routerPeers.filter((p) => p["allowed-address"]?.split(",")[0]?.startsWith(`${ip.internal_subnet}.`)),
+    [routerPeers]
+  );
+
+  const isTgCustomerPeer = useCallback(
+    (p: RouterPeer): AdminPeer | undefined =>
+      peers.find((cp) => cp.peer_public_key && cp.peer_public_key === p["public-key"]),
+    [peers]
+  );
 
   const toggleForSale = async (ip: IpOption) => {
     try {
       await tgAdmin("setIpForSale", { id: ip.id, forSale: !ip.for_sale });
       setSaleIps((prev) => prev.map((i) => (i.id === ip.id ? { ...i, for_sale: !ip.for_sale } : i)));
-      toast.success(!ip.for_sale ? `${ip.public_ip} abierta a ventas` : `${ip.public_ip} reservada`);
+      toast.success(!ip.for_sale ? `${ip.public_ip} is now for sale` : `${ip.public_ip} reserved`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error");
     }
@@ -231,7 +269,7 @@ export default function AdminTelegramPage() {
     router.push("/login");
   };
 
-  /* ============ Planes ============ */
+  /* ============ Plans ============ */
   const openNewPlan = () => {
     setPlanForm({ ...emptyPlanForm });
     setPlanDialogOpen(true);
@@ -254,7 +292,7 @@ export default function AdminTelegramPage() {
 
   const savePlan = async () => {
     if (!planForm.name || planForm.price_usd === "" || !planForm.duration_days || !planForm.router_id) {
-      toast.error("Completa nombre, precio, duración y servidor");
+      toast.error("Fill in name, price, duration and server");
       return;
     }
     setSavingPlan(true);
@@ -271,15 +309,15 @@ export default function AdminTelegramPage() {
       };
       if (planForm.id) {
         await tgAdmin("updatePlan", { id: planForm.id, ...payload });
-        toast.success("Plan actualizado");
+        toast.success("Plan updated");
       } else {
         await tgAdmin("createPlan", payload);
-        toast.success("Plan creado");
+        toast.success("Plan created");
       }
       setPlanDialogOpen(false);
       setPlans((await tgAdmin("listPlans")).plans || []);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error guardando plan");
+      toast.error(err instanceof Error ? err.message : "Failed to save plan");
     } finally {
       setSavingPlan(false);
     }
@@ -295,30 +333,30 @@ export default function AdminTelegramPage() {
   };
 
   const deletePlan = async (plan: AdminPlan) => {
-    if (!confirm(`¿Eliminar el plan "${plan.name}"?`)) return;
+    if (!confirm(`Delete plan "${plan.name}"?`)) return;
     try {
       await tgAdmin("deletePlan", { id: plan.id });
       setPlans((prev) => prev.filter((p) => p.id !== plan.id));
-      toast.success("Plan eliminado");
+      toast.success("Plan deleted");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error");
     }
   };
 
-  /* ============ Clientes ============ */
+  /* ============ Customers ============ */
   const toggleBan = async (customer: AdminCustomer) => {
     try {
       await tgAdmin("setCustomerBan", { id: customer.id, banned: !customer.is_banned });
       setCustomers((prev) =>
         prev.map((c) => (c.id === customer.id ? { ...c, is_banned: !customer.is_banned } : c))
       );
-      toast.success(customer.is_banned ? "Cliente desbloqueado" : "Cliente bloqueado");
+      toast.success(customer.is_banned ? "Customer unbanned" : "Customer banned");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error");
     }
   };
 
-  /* ============ Peers ============ */
+  /* ============ Customer peers ============ */
   const refreshPeers = async () => {
     try {
       setPeers((await tgAdmin("listCustomerPeers")).peers || []);
@@ -332,7 +370,7 @@ export default function AdminTelegramPage() {
     setExtending(true);
     try {
       await tgAdmin("extendPeer", { id: extendPeerTarget.id, days: Number(extendDays), notify: extendNotify });
-      toast.success(`Extendido ${extendDays} días`);
+      toast.success(`Extended ${extendDays} days`);
       setExtendPeerTarget(null);
       await refreshPeers();
     } catch (err) {
@@ -343,11 +381,11 @@ export default function AdminTelegramPage() {
   };
 
   const peerAction = async (peer: AdminPeer, action: "disableCustomerPeer" | "enableCustomerPeer" | "deleteCustomerPeer") => {
-    if (action === "deleteCustomerPeer" && !confirm(`¿Eliminar el peer "${peer.peer_name}"? Se quita del servidor y del cliente.`)) return;
+    if (action === "deleteCustomerPeer" && !confirm(`Delete peer "${peer.peer_name}"? It will be removed from the server and the customer.`)) return;
     setBusyPeerId(peer.id);
     try {
       await tgAdmin(action, { id: peer.id });
-      toast.success("Listo");
+      toast.success("Done");
       await refreshPeers();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error");
@@ -379,48 +417,48 @@ export default function AdminTelegramPage() {
 
   return (
     <DashboardLayout userRole={profile.role} userEmail={profile.email} userCapabilities={profile.capabilities} onLogout={handleLogout}>
-      <PageHeader title="Telegram Store" description="Planes, clientes y pagos de la Mini App">
+      <PageHeader title="Telegram Store" description="Plans, customers and payments for the Mini App">
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => loadAll().catch(() => toast.error("Error al refrescar"))}>
-            <RefreshCw className="w-4 h-4 mr-2" /> Refrescar
+          <Button variant="outline" size="sm" onClick={() => loadAll().catch(() => toast.error("Failed to refresh"))}>
+            <RefreshCw className="w-4 h-4 mr-2" /> Refresh
           </Button>
         </div>
       </PageHeader>
       <PageContent>
         <Tabs defaultValue="plans">
           <TabsList>
-            <TabsTrigger value="plans">Planes ({plans.length})</TabsTrigger>
-            <TabsTrigger value="ips">IPs en venta</TabsTrigger>
-            <TabsTrigger value="customers">Clientes ({customers.length})</TabsTrigger>
+            <TabsTrigger value="plans">Plans ({plans.length})</TabsTrigger>
+            <TabsTrigger value="ips">IPs for Sale</TabsTrigger>
+            <TabsTrigger value="customers">Customers ({customers.length})</TabsTrigger>
             <TabsTrigger value="peers">Peers ({peers.length})</TabsTrigger>
-            <TabsTrigger value="payments">Pagos ({payments.length})</TabsTrigger>
+            <TabsTrigger value="payments">Payments ({payments.length})</TabsTrigger>
           </TabsList>
 
-          {/* ============ PLANES ============ */}
+          {/* ============ PLANS ============ */}
           <TabsContent value="plans" className="space-y-4">
             <div className="flex justify-end">
               <Button size="sm" onClick={openNewPlan}>
-                <Plus className="w-4 h-4 mr-2" /> Nuevo Plan
+                <Plus className="w-4 h-4 mr-2" /> New Plan
               </Button>
             </div>
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Nombre</TableHead>
-                    <TableHead>Servidor</TableHead>
-                    <TableHead>Precio</TableHead>
-                    <TableHead>Duración</TableHead>
-                    <TableHead>IP fija</TableHead>
-                    <TableHead>Activo</TableHead>
-                    <TableHead className="text-right">Acciones</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Server</TableHead>
+                    <TableHead>Price</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Pinned IP</TableHead>
+                    <TableHead>Active</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {plans.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                        Sin planes. Crea el primero para que aparezca en la Mini App.
+                        No plans yet. Create one to make it appear in the Mini App.
                       </TableCell>
                     </TableRow>
                   )}
@@ -428,8 +466,8 @@ export default function AdminTelegramPage() {
                     <TableRow key={plan.id}>
                       <TableCell className="font-medium">{plan.name}</TableCell>
                       <TableCell>{plan.routers?.name || "—"}</TableCell>
-                      <TableCell>{Number(plan.price_usd) <= 0 ? "Gratis" : `$${Number(plan.price_usd).toFixed(2)}`}</TableCell>
-                      <TableCell>{plan.duration_days} días</TableCell>
+                      <TableCell>{Number(plan.price_usd) <= 0 ? "Free" : `$${Number(plan.price_usd).toFixed(2)}`}</TableCell>
+                      <TableCell>{plan.duration_days} days</TableCell>
                       <TableCell className="font-mono text-xs">{plan.public_ips?.public_ip || "auto"}</TableCell>
                       <TableCell>
                         <Switch checked={plan.enabled} onCheckedChange={() => togglePlanEnabled(plan)} />
@@ -449,17 +487,17 @@ export default function AdminTelegramPage() {
             </div>
           </TabsContent>
 
-          {/* ============ IPs EN VENTA ============ */}
+          {/* ============ IPs FOR SALE ============ */}
           <TabsContent value="ips" className="space-y-4">
             <div className="flex items-center justify-between gap-4">
               <p className="text-sm text-muted-foreground">
-                Las órdenes automáticas SOLO usan IPs marcadas <b>en venta</b> (se elige la menos cargada).
-                Las demás quedan reservadas para tu uso o clientes con IP dedicada (esas se asignan fijándolas en un plan).
+                Automatic orders ONLY use IPs marked <b>for sale</b> (least-loaded first). The rest stay
+                reserved for your own use or dedicated-IP customers (assign those by pinning the IP in a plan).
               </p>
               <div className="w-64 shrink-0">
                 <Select value={saleRouterId} onValueChange={setSaleRouterId}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecciona un servidor" />
+                    <SelectValue placeholder="Select a server" />
                   </SelectTrigger>
                   <SelectContent>
                     {routers.map((r) => (
@@ -476,36 +514,55 @@ export default function AdminTelegramPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>IP pública</TableHead>
-                      <TableHead>Clientes activos</TableHead>
-                      <TableHead>Estado</TableHead>
-                      <TableHead className="text-right">En venta</TableHead>
+                      <TableHead>Public IP</TableHead>
+                      <TableHead>Peers using it</TableHead>
+                      <TableHead>TG customers</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead className="text-right">For sale</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loadingSaleIps && (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center py-8">
+                        <TableCell colSpan={5} className="text-center py-8">
                           <Loader2 className="w-5 h-5 animate-spin inline-block" />
                         </TableCell>
                       </TableRow>
                     )}
                     {!loadingSaleIps && saleIps.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
-                          Este servidor no tiene IPs públicas configuradas.
+                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                          This server has no public IPs configured.
                         </TableCell>
                       </TableRow>
                     )}
                     {!loadingSaleIps &&
                       saleIps.map((ip) => {
-                        const activeCount = peers.filter(
+                        const ipPeers = peersForIp(ip);
+                        const tgCount = peers.filter(
                           (p) => p.public_ip === ip.public_ip && p.status === "active"
                         ).length;
                         return (
                           <TableRow key={ip.id}>
                             <TableCell className="font-mono">{ip.public_ip}</TableCell>
-                            <TableCell>{activeCount}</TableCell>
+                            <TableCell>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 gap-1.5"
+                                onClick={() => setIpPeersDialog(ip)}
+                                disabled={loadingRouterPeers}
+                              >
+                                {loadingRouterPeers ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <Users className="w-3.5 h-3.5" />
+                                )}
+                                {loadingRouterPeers ? "" : ipPeers.length}
+                                <Eye className="w-3.5 h-3.5 text-muted-foreground" />
+                              </Button>
+                            </TableCell>
+                            <TableCell>{tgCount}</TableCell>
                             <TableCell className="space-x-1.5">
                               {!ip.enabled && (
                                 <Badge variant="outline" className="bg-red-500/15 text-red-400 border-red-500/30">disabled</Badge>
@@ -514,9 +571,9 @@ export default function AdminTelegramPage() {
                                 <Badge variant="outline" className="bg-amber-500/15 text-amber-400 border-amber-500/30">restricted</Badge>
                               )}
                               {ip.for_sale ? (
-                                <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">en venta</Badge>
+                                <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">for sale</Badge>
                               ) : (
-                                <Badge variant="outline" className="bg-zinc-500/15 text-zinc-400 border-zinc-500/30">reservada</Badge>
+                                <Badge variant="outline" className="bg-zinc-500/15 text-zinc-400 border-zinc-500/30">reserved</Badge>
                               )}
                             </TableCell>
                             <TableCell className="text-right">
@@ -531,30 +588,30 @@ export default function AdminTelegramPage() {
             )}
             {!saleRouterId && (
               <div className="text-center py-12 text-muted-foreground text-sm">
-                Selecciona un servidor para ver sus IPs.
+                Select a server to see its IPs.
               </div>
             )}
           </TabsContent>
 
-          {/* ============ CLIENTES ============ */}
+          {/* ============ CUSTOMERS ============ */}
           <TabsContent value="customers">
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Cliente</TableHead>
+                    <TableHead>Customer</TableHead>
                     <TableHead>Telegram ID</TableHead>
                     <TableHead>Peers</TableHead>
-                    <TableHead>Registrado</TableHead>
-                    <TableHead>Última vez</TableHead>
-                    <TableHead>Bloqueado</TableHead>
+                    <TableHead>Joined</TableHead>
+                    <TableHead>Last seen</TableHead>
+                    <TableHead>Banned</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {customers.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        Sin clientes aún. Aparecen automáticamente al abrir la Mini App.
+                        No customers yet. They appear automatically when they open the Mini App.
                       </TableCell>
                     </TableRow>
                   )}
@@ -568,7 +625,7 @@ export default function AdminTelegramPage() {
                       </TableCell>
                       <TableCell className="font-mono text-xs">{c.telegram_id}</TableCell>
                       <TableCell>
-                        {(c.tg_customer_peers || []).filter((p) => p.status === "active").length} activos /{" "}
+                        {(c.tg_customer_peers || []).filter((p) => p.status === "active").length} active /{" "}
                         {(c.tg_customer_peers || []).length}
                       </TableCell>
                       <TableCell>{fmtDate(c.created_at)}</TableCell>
@@ -590,19 +647,19 @@ export default function AdminTelegramPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Peer</TableHead>
-                    <TableHead>Cliente</TableHead>
-                    <TableHead>Servidor</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Server</TableHead>
                     <TableHead>IP</TableHead>
-                    <TableHead>Estado</TableHead>
-                    <TableHead>Vence</TableHead>
-                    <TableHead className="text-right">Acciones</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Expires</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {peers.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                        Sin peers de clientes.
+                        No customer peers yet.
                       </TableCell>
                     </TableRow>
                   )}
@@ -629,7 +686,7 @@ export default function AdminTelegramPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              title="Extender"
+                              title="Extend"
                               onClick={() => {
                                 setExtendPeerTarget(peer);
                                 setExtendDays("30");
@@ -639,11 +696,11 @@ export default function AdminTelegramPage() {
                               <CalendarPlus className="w-4 h-4" />
                             </Button>
                             {peer.status === "active" ? (
-                              <Button variant="ghost" size="sm" title="Deshabilitar" onClick={() => peerAction(peer, "disableCustomerPeer")}>
+                              <Button variant="ghost" size="sm" title="Disable" onClick={() => peerAction(peer, "disableCustomerPeer")}>
                                 <PowerOff className="w-4 h-4" />
                               </Button>
                             ) : (
-                              <Button variant="ghost" size="sm" title="Habilitar" onClick={() => peerAction(peer, "enableCustomerPeer")}>
+                              <Button variant="ghost" size="sm" title="Enable" onClick={() => peerAction(peer, "enableCustomerPeer")}>
                                 <Power className="w-4 h-4" />
                               </Button>
                             )}
@@ -651,7 +708,7 @@ export default function AdminTelegramPage() {
                               variant="ghost"
                               size="sm"
                               className="text-destructive"
-                              title="Eliminar"
+                              title="Delete"
                               onClick={() => peerAction(peer, "deleteCustomerPeer")}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -666,25 +723,25 @@ export default function AdminTelegramPage() {
             </div>
           </TabsContent>
 
-          {/* ============ PAGOS ============ */}
+          {/* ============ PAYMENTS ============ */}
           <TabsContent value="payments">
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Fecha</TableHead>
-                    <TableHead>Cliente</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Customer</TableHead>
                     <TableHead>Plan</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Monto</TableHead>
-                    <TableHead>Estado</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Amount</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {payments.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                        Sin pagos registrados.
+                        No payments recorded yet.
                       </TableCell>
                     </TableRow>
                   )}
@@ -693,7 +750,7 @@ export default function AdminTelegramPage() {
                       <TableCell>{fmtDate(p.created_at)}</TableCell>
                       <TableCell>{customerLabel(p.tg_customers)}</TableCell>
                       <TableCell>{p.tg_plans?.name || "—"}</TableCell>
-                      <TableCell>{p.type === "purchase" ? "Compra" : "Renovación"}</TableCell>
+                      <TableCell>{p.type === "purchase" ? "Purchase" : "Renewal"}</TableCell>
                       <TableCell>${Number(p.amount_usd).toFixed(2)}</TableCell>
                       <TableCell>{statusBadge(p.status)}</TableCell>
                     </TableRow>
@@ -704,30 +761,74 @@ export default function AdminTelegramPage() {
           </TabsContent>
         </Tabs>
 
-        {/* Dialog plan */}
+        {/* Peers-per-IP dialog */}
+        <Dialog open={!!ipPeersDialog} onOpenChange={(open) => !open && setIpPeersDialog(null)}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Peers using {ipPeersDialog?.public_ip}</DialogTitle>
+              <DialogDescription>
+                {ipPeersDialog ? peersForIp(ipPeersDialog).length : 0} peer(s) on subnet {ipPeersDialog?.internal_subnet}.x
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+              {ipPeersDialog && peersForIp(ipPeersDialog).length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-6">
+                  No peers on this IP — safe to put it for sale.
+                </p>
+              )}
+              {ipPeersDialog &&
+                peersForIp(ipPeersDialog).map((p, idx) => {
+                  const tgPeer = isTgCustomerPeer(p);
+                  return (
+                    <div
+                      key={p["public-key"] || idx}
+                      className="flex items-center gap-3 rounded-xl border border-border bg-secondary/40 px-3 py-2"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{p.name || "(unnamed)"}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{p["allowed-address"]}</p>
+                      </div>
+                      {tgPeer && (
+                        <Badge variant="outline" className="bg-sky-500/15 text-sky-400 border-sky-500/30">
+                          TG: {customerLabel(tgPeer.tg_customers)}
+                        </Badge>
+                      )}
+                      {p.disabled ? (
+                        <Badge variant="outline" className="bg-zinc-500/15 text-zinc-400 border-zinc-500/30">disabled</Badge>
+                      ) : (
+                        <Badge variant="outline" className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30">enabled</Badge>
+                      )}
+                    </div>
+                  );
+                })}
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        {/* Plan dialog */}
         <Dialog open={planDialogOpen} onOpenChange={setPlanDialogOpen}>
           <DialogContent className="max-w-md">
             <DialogHeader>
-              <DialogTitle>{planForm.id ? "Editar plan" : "Nuevo plan"}</DialogTitle>
-              <DialogDescription>Los planes activos se muestran en la Mini App.</DialogDescription>
+              <DialogTitle>{planForm.id ? "Edit plan" : "New plan"}</DialogTitle>
+              <DialogDescription>Active plans are shown in the Mini App.</DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label>Nombre</Label>
-                <Input value={planForm.name} onChange={(e) => setPlanForm((f) => ({ ...f, name: e.target.value }))} placeholder="VPN 1 Mes" />
+                <Label>Name</Label>
+                <Input value={planForm.name} onChange={(e) => setPlanForm((f) => ({ ...f, name: e.target.value }))} placeholder="VPN 1 Month" />
               </div>
               <div className="space-y-1.5">
-                <Label>Descripción (opcional)</Label>
+                <Label>Description (optional)</Label>
                 <Textarea
                   value={planForm.description}
                   onChange={(e) => setPlanForm((f) => ({ ...f, description: e.target.value }))}
-                  placeholder="IP dedicada, tráfico ilimitado…"
+                  placeholder="Dedicated IP, unlimited traffic…"
                   rows={2}
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <Label>Precio USD</Label>
+                  <Label>Price USD</Label>
                   <Input
                     type="number"
                     min="0"
@@ -738,7 +839,7 @@ export default function AdminTelegramPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Duración (días)</Label>
+                  <Label>Duration (days)</Label>
                   <Input
                     type="number"
                     min="1"
@@ -748,15 +849,15 @@ export default function AdminTelegramPage() {
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label>Servidor (linux-ssh)</Label>
+                <Label>Server</Label>
                 <Select value={planForm.router_id} onValueChange={(v) => setPlanForm((f) => ({ ...f, router_id: v, public_ip_id: "" }))}>
                   <SelectTrigger>
-                    <SelectValue placeholder="Selecciona un servidor" />
+                    <SelectValue placeholder="Select a server" />
                   </SelectTrigger>
                   <SelectContent>
                     {routers.map((r) => (
                       <SelectItem key={r.id} value={r.id}>
-                        {r.name} ({r.host})
+                        {r.name} ({r.host}) — {r.connection_type === "linux-ssh" ? "Linux" : "MikroTik"}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -764,16 +865,16 @@ export default function AdminTelegramPage() {
               </div>
               {planForm.router_id && (
                 <div className="space-y-1.5">
-                  <Label>IP pública fija (opcional)</Label>
+                  <Label>Pinned public IP (optional, for dedicated-IP plans)</Label>
                   <Select
                     value={planForm.public_ip_id || "__auto__"}
                     onValueChange={(v) => setPlanForm((f) => ({ ...f, public_ip_id: v === "__auto__" ? "" : v }))}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Auto (primera IP disponible)" />
+                      <SelectValue placeholder="Auto (least-loaded IP for sale)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__auto__">Auto (primera IP disponible)</SelectItem>
+                      <SelectItem value="__auto__">Auto (least-loaded IP for sale)</SelectItem>
                       {ips
                         .filter((ip) => ip.enabled)
                         .map((ip) => (
@@ -788,7 +889,7 @@ export default function AdminTelegramPage() {
               )}
               <div className="grid grid-cols-2 gap-3 items-end">
                 <div className="space-y-1.5">
-                  <Label>Orden</Label>
+                  <Label>Sort order</Label>
                   <Input
                     type="number"
                     value={planForm.sort_order}
@@ -797,50 +898,50 @@ export default function AdminTelegramPage() {
                 </div>
                 <div className="flex items-center gap-2 pb-2">
                   <Switch checked={planForm.enabled} onCheckedChange={(v) => setPlanForm((f) => ({ ...f, enabled: v }))} />
-                  <Label>Visible en la app</Label>
+                  <Label>Visible in the app</Label>
                 </div>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setPlanDialogOpen(false)}>
-                Cancelar
+                Cancel
               </Button>
               <Button onClick={savePlan} disabled={savingPlan}>
                 {savingPlan && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Guardar
+                Save
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Dialog extender */}
+        {/* Extend dialog */}
         <Dialog open={!!extendPeerTarget} onOpenChange={(open) => !open && setExtendPeerTarget(null)}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
-              <DialogTitle>Extender {extendPeerTarget?.peer_name}</DialogTitle>
+              <DialogTitle>Extend {extendPeerTarget?.peer_name}</DialogTitle>
               <DialogDescription>
-                Suma días a la expiración. Si está expirado/deshabilitado, se reactiva en el servidor.
+                Adds days to the expiration. If expired/disabled, it gets reactivated on the server.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
               <div className="space-y-1.5">
-                <Label>Días</Label>
+                <Label>Days</Label>
                 <Input type="number" min="1" value={extendDays} onChange={(e) => setExtendDays(e.target.value)} />
               </div>
               <div className="flex items-center gap-2">
                 <Checkbox checked={extendNotify} onCheckedChange={(v) => setExtendNotify(v === true)} id="notify" />
                 <Label htmlFor="notify" className="flex items-center gap-1.5">
-                  <Send className="w-3.5 h-3.5" /> Notificar al cliente por Telegram
+                  <Send className="w-3.5 h-3.5" /> Notify customer on Telegram
                 </Label>
               </div>
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setExtendPeerTarget(null)}>
-                Cancelar
+                Cancel
               </Button>
               <Button onClick={doExtend} disabled={extending || !Number(extendDays)}>
                 {extending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Extender
+                Extend
               </Button>
             </DialogFooter>
           </DialogContent>

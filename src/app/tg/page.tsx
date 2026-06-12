@@ -91,13 +91,13 @@ function daysLeft(expiresAt: string): number {
 }
 
 function fmtDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("es-ES", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
 }
 
 const STATUS_LABEL: Record<Peer["status"], string> = {
-  active: "Activo",
-  expired: "Expirado",
-  disabled: "Deshabilitado",
+  active: "Active",
+  expired: "Expired",
+  disabled: "Disabled",
 };
 const STATUS_STYLE: Record<Peer["status"], string> = {
   active: "bg-emerald-500/15 text-emerald-400",
@@ -183,7 +183,7 @@ export default function TgMiniApp() {
         setCustomer(customer);
         await Promise.all([refreshPeers(), tgFetch("/api/tg/plans").then((r) => setPlans(r.plans))]);
       } catch (err) {
-        if (!banned) toast.error(err instanceof Error ? err.message : "Error de conexión");
+        if (!banned) toast.error(err instanceof Error ? err.message : "Connection error");
       } finally {
         setLoading(false);
       }
@@ -205,9 +205,9 @@ export default function TgMiniApp() {
   const copyConfig = async (peer: Peer) => {
     try {
       await navigator.clipboard.writeText(peer.config);
-      toast.success("Config copiada");
+      toast.success("Config copied");
     } catch {
-      toast.error("No se pudo copiar");
+      toast.error("Copy failed");
     }
   };
 
@@ -235,7 +235,7 @@ export default function TgMiniApp() {
         delete next[peer.id];
         return next;
       });
-      toast.error(err instanceof Error ? err.message : "Error al consultar estado");
+      toast.error(err instanceof Error ? err.message : "Failed to get status");
     }
   };
 
@@ -256,13 +256,13 @@ export default function TgMiniApp() {
             if (pollRef.current) clearInterval(pollRef.current);
             setPendingPayment(null);
             webApp?.HapticFeedback?.notificationOccurred("success");
-            toast.success("¡Pago confirmado! Tu servicio está listo 🎉");
+            toast.success("Payment confirmed! Your service is ready 🎉");
             await refreshPeers();
             setTab("peers");
           } else if (["failed", "cancelled", "expired"].includes(payment.status)) {
             if (pollRef.current) clearInterval(pollRef.current);
             setPendingPayment(null);
-            toast.error("El pago no se completó");
+            toast.error("Payment was not completed");
           }
         } catch {
           /* reintenta en el próximo tick */
@@ -285,7 +285,7 @@ export default function TgMiniApp() {
       });
       setRenewPeer(null);
       if (res.free && res.fulfilled) {
-        toast.success(peer ? "Peer renovado 🎉" : "Peer creado 🎉");
+        toast.success(peer ? "Peer renewed 🎉" : "Peer created 🎉");
         await refreshPeers();
         setTab("peers");
         return;
@@ -301,7 +301,7 @@ export default function TgMiniApp() {
       startPaymentPolling(res.paymentId);
       webApp?.openLink(res.paymentUrl);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error al crear la orden");
+      toast.error(err instanceof Error ? err.message : "Failed to create order");
     } finally {
       setBuying(null);
     }
@@ -314,9 +314,9 @@ export default function TgMiniApp() {
         <Shield className="w-12 h-12 text-primary" />
         <h1 className="text-xl font-bold">VPN Store</h1>
         <p className="text-muted-foreground text-sm">
-          Esta aplicación solo funciona dentro de Telegram.
+          This app only works inside Telegram.
           <br />
-          Ábrela desde el bot.
+          Open it from the bot.
         </p>
       </div>
     );
@@ -326,8 +326,8 @@ export default function TgMiniApp() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 p-8 text-center">
         <X className="w-12 h-12 text-red-400" />
-        <h1 className="text-xl font-bold">Cuenta suspendida</h1>
-        <p className="text-muted-foreground text-sm">Contacta al soporte para más información.</p>
+        <h1 className="text-xl font-bold">Account suspended</h1>
+        <p className="text-muted-foreground text-sm">Contact support for more information.</p>
       </div>
     );
   }
@@ -350,7 +350,7 @@ export default function TgMiniApp() {
         <div className="flex-1 min-w-0">
           <h1 className="font-bold leading-tight">VPN Store</h1>
           <p className="text-xs text-muted-foreground truncate">
-            Hola, {customer?.first_name || customer?.username || "usuario"} 👋
+            Hi, {customer?.first_name || customer?.username || "there"} 👋
           </p>
         </div>
       </header>
@@ -360,15 +360,15 @@ export default function TgMiniApp() {
         <div className="mx-4 mb-3 p-3 rounded-xl border border-amber-500/30 bg-amber-500/10 flex items-center gap-3">
           <Loader2 className="w-4 h-4 animate-spin text-amber-400 shrink-0" />
           <div className="flex-1 text-sm">
-            <p className="font-medium text-amber-300">Esperando pago de ${Number(pendingPayment.amount_usd).toFixed(2)}…</p>
-            <p className="text-xs text-amber-300/70">Se confirma automáticamente al recibirse.</p>
+            <p className="font-medium text-amber-300">Waiting for ${Number(pendingPayment.amount_usd).toFixed(2)} payment…</p>
+            <p className="text-xs text-amber-300/70">It confirms automatically once received.</p>
           </div>
           {pendingPayment.payment_url && (
             <button
               onClick={() => webApp?.openLink(pendingPayment.payment_url as string)}
               className="text-xs px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-300 font-medium"
             >
-              Reabrir
+              Reopen
             </button>
           )}
         </div>
@@ -381,12 +381,12 @@ export default function TgMiniApp() {
             {peers.length === 0 ? (
               <div className="text-center py-16 space-y-3">
                 <Globe className="w-10 h-10 text-muted-foreground mx-auto" />
-                <p className="text-sm text-muted-foreground">Aún no tienes ningún peer.</p>
+                <p className="text-sm text-muted-foreground">You don't have any peers yet.</p>
                 <button
                   onClick={() => setTab("buy")}
                   className="px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
                 >
-                  Comprar mi primer acceso
+                  Buy my first access
                 </button>
               </div>
             ) : (
@@ -410,21 +410,21 @@ export default function TgMiniApp() {
                       {peer.status === "active" ? (
                         days > 0 ? (
                           <span>
-                            Vence el {fmtDate(peer.expires_at)} ·{" "}
-                            <span className={days <= 3 ? "text-amber-400 font-medium" : ""}>{days} día{days === 1 ? "" : "s"}</span>
+                            Expires {fmtDate(peer.expires_at)} ·{" "}
+                            <span className={days <= 3 ? "text-amber-400 font-medium" : ""}>{days} day{days === 1 ? "" : "s"} left</span>
                           </span>
                         ) : (
-                          <span className="text-amber-400">Vence hoy</span>
+                          <span className="text-amber-400">Expires today</span>
                         )
                       ) : (
-                        <span>Venció el {fmtDate(peer.expires_at)}</span>
+                        <span>Expired {fmtDate(peer.expires_at)}</span>
                       )}
                     </div>
 
                     {live && live !== "loading" && (
                       <div className="flex items-center gap-3 text-xs rounded-xl bg-secondary/50 px-3 py-2">
                         <span className={`w-2 h-2 rounded-full ${live.connected ? "bg-emerald-400" : "bg-zinc-500"}`} />
-                        <span className="text-muted-foreground">{live.connected ? "Conectado" : "Sin conexión"}</span>
+                        <span className="text-muted-foreground">{live.connected ? "Connected" : "Not connected"}</span>
                         <span className="ml-auto text-muted-foreground font-mono">
                           ↓{formatBytes(live.rx)} ↑{formatBytes(live.tx)}
                         </span>
@@ -448,13 +448,13 @@ export default function TgMiniApp() {
                         ) : (
                           <Activity className="w-3.5 h-3.5" />
                         )}{" "}
-                        Estado
+                        Status
                       </button>
                       <button
                         onClick={() => setRenewPeer(peer)}
                         className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl bg-primary/15 text-primary text-xs font-medium hover:bg-primary/25 transition-colors"
                       >
-                        <RefreshCw className="w-3.5 h-3.5" /> Renovar
+                        <RefreshCw className="w-3.5 h-3.5" /> Renew
                       </button>
                     </div>
                   </div>
@@ -468,7 +468,7 @@ export default function TgMiniApp() {
           <>
             {plans.length === 0 ? (
               <div className="text-center py-16">
-                <p className="text-sm text-muted-foreground">No hay planes disponibles por ahora.</p>
+                <p className="text-sm text-muted-foreground">No plans available right now.</p>
               </div>
             ) : (
               plans.map((plan) => (
@@ -480,9 +480,9 @@ export default function TgMiniApp() {
                     </div>
                     <div className="text-right shrink-0">
                       <p className="font-bold text-lg text-primary">
-                        {Number(plan.price_usd) <= 0 ? "Gratis" : `$${Number(plan.price_usd).toFixed(2)}`}
+                        {Number(plan.price_usd) <= 0 ? "Free" : `$${Number(plan.price_usd).toFixed(2)}`}
                       </p>
-                      <p className="text-xs text-muted-foreground">{plan.duration_days} días</p>
+                      <p className="text-xs text-muted-foreground">{plan.duration_days} days</p>
                     </div>
                   </div>
                   <button
@@ -491,7 +491,7 @@ export default function TgMiniApp() {
                     className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
                   >
                     {buying === plan.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShoppingCart className="w-4 h-4" />}
-                    {Number(plan.price_usd) <= 0 ? "Activar" : "Pagar con cripto"}
+                    {Number(plan.price_usd) <= 0 ? "Activate" : "Pay with crypto"}
                   </button>
                 </div>
               ))
@@ -522,12 +522,12 @@ export default function TgMiniApp() {
               <div className="flex justify-center">
                 <div className="p-3 bg-white rounded-2xl">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={qrDataUrl} alt="QR de configuración WireGuard" className="w-56 h-56" />
+                  <img src={qrDataUrl} alt="WireGuard config QR code" className="w-56 h-56" />
                 </div>
               </div>
             )}
             <p className="text-xs text-center text-muted-foreground">
-              Escanea el QR desde la app de WireGuard, o copia la configuración.
+              Scan the QR with the WireGuard app, or copy the config below.
             </p>
 
             <pre className="text-[10px] leading-relaxed bg-secondary/50 rounded-xl p-3 overflow-x-auto font-mono whitespace-pre">
@@ -539,13 +539,13 @@ export default function TgMiniApp() {
                 onClick={() => copyConfig(configPeer)}
                 className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium"
               >
-                <Copy className="w-4 h-4" /> Copiar
+                <Copy className="w-4 h-4" /> Copy
               </button>
               <button
                 onClick={() => downloadConfig(configPeer)}
                 className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-secondary text-sm font-medium"
               >
-                <Download className="w-4 h-4" /> Descargar .conf
+                <Download className="w-4 h-4" /> Download .conf
               </button>
             </div>
           </div>
@@ -560,14 +560,14 @@ export default function TgMiniApp() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
-              <h2 className="font-semibold">Renovar {renewPeer.name}</h2>
+              <h2 className="font-semibold">Renew {renewPeer.name}</h2>
               <button onClick={() => setRenewPeer(null)} className="p-1.5 rounded-lg hover:bg-secondary">
                 <X className="w-4 h-4" />
               </button>
             </div>
             {plans.filter((p) => p.router_id === renewPeer.router_id).length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
-                No hay planes de renovación para este servidor.
+                No renewal plans available for this server.
               </p>
             ) : (
               plans
@@ -580,13 +580,13 @@ export default function TgMiniApp() {
                     className="w-full flex items-center justify-between px-4 py-3 rounded-xl border border-border bg-secondary/40 hover:bg-secondary transition-colors disabled:opacity-50"
                   >
                     <span className="text-sm font-medium">
-                      {plan.name} · {plan.duration_days} días
+                      {plan.name} · {plan.duration_days} days
                     </span>
                     <span className="text-sm font-bold text-primary">
                       {buying === plan.id ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : Number(plan.price_usd) <= 0 ? (
-                        "Gratis"
+                        "Free"
                       ) : (
                         `$${Number(plan.price_usd).toFixed(2)}`
                       )}
@@ -603,9 +603,9 @@ export default function TgMiniApp() {
         <div className="max-w-lg mx-auto grid grid-cols-3">
           {(
             [
-              { key: "peers", label: "Mis Peers", icon: Globe },
-              { key: "buy", label: "Comprar", icon: ShoppingCart },
-              { key: "payments", label: "Pagos", icon: Wallet },
+              { key: "peers", label: "My Peers", icon: Globe },
+              { key: "buy", label: "Buy", icon: ShoppingCart },
+              { key: "payments", label: "Payments", icon: Wallet },
             ] as const
           ).map((item) => (
             <button
@@ -655,7 +655,7 @@ function PaymentsTab({
     return (
       <div className="text-center py-16">
         <Wallet className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
-        <p className="text-sm text-muted-foreground">Sin pagos todavía.</p>
+        <p className="text-sm text-muted-foreground">No payments yet.</p>
       </div>
     );
   }
@@ -666,7 +666,7 @@ function PaymentsTab({
         <div key={p.id} className="rounded-2xl border border-border bg-card px-4 py-3 flex items-center gap-3">
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium">
-              {p.type === "purchase" ? "Compra" : "Renovación"} · ${Number(p.amount_usd).toFixed(2)}
+              {p.type === "purchase" ? "Purchase" : "Renewal"} · ${Number(p.amount_usd).toFixed(2)}
             </p>
             <p className="text-xs text-muted-foreground">{fmtDate(p.created_at)}</p>
           </div>
@@ -675,7 +675,7 @@ function PaymentsTab({
               onClick={() => webApp?.openLink(p.payment_url as string)}
               className="text-xs px-2.5 py-1.5 rounded-lg bg-primary/15 text-primary font-medium"
             >
-              Pagar
+              Pay
             </button>
           )}
           <span className={`text-xs px-2 py-1 rounded-lg font-medium ${PAYMENT_STATUS_STYLE[p.status] || "bg-secondary"}`}>

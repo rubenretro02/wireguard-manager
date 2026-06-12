@@ -31,10 +31,10 @@ export async function POST(request: Request) {
     const firstName = message?.from?.first_name || "";
     await sendTelegramMessage(
       chatId,
-      `👋 Hola${firstName ? ` <b>${firstName}</b>` : ""}!\n\nDesde la app puedes <b>comprar tu acceso VPN</b>, ver el estado de tus peers, descargar tu configuración WireGuard y renovar tu servicio pagando con cripto.`,
+      `👋 Hi${firstName ? ` <b>${firstName}</b>` : ""}!\n\nFrom the app you can <b>buy your VPN access</b>, check your peers' status, download your WireGuard config and renew your service paying with crypto.`,
       {
         reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Abrir App", web_app: { url: appUrl } }]],
+          inline_keyboard: [[{ text: "🚀 Open App", web_app: { url: appUrl } }]],
         },
       }
     );
