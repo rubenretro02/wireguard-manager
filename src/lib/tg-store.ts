@@ -124,6 +124,11 @@ async function findMikroTikPeerByPublicKey(
   return peers.find((p) => p["public-key"] === publicKey) || null;
 }
 
+/** MikroTik REST devuelve disabled como string "true"/"false"; el API clásico como boolean. */
+export function isMikroTikDisabled(value: unknown): boolean {
+  return value === true || String(value) === "true";
+}
+
 /** "1m30s" / "55s" / "2h3m" de MikroTik → segundos. */
 function parseMikroTikDuration(value?: string): number | null {
   if (!value) return null;
@@ -646,21 +651,24 @@ export interface LivePeerStatus {
 /**
  * Estados en vivo para VARIOS peers de un customer, agrupando por router para
  * hacer una sola consulta por interface (Linux) o por router (MikroTik).
- * Devuelve un Map por peer.id; los routers que fallen se omiten.
+ * Además SINCRONIZA el status guardado con la realidad del servidor (si el
+ * admin lo deshabilitó/habilitó desde el dashboard, la app lo refleja).
+ * Los routers que fallen se omiten (sin live ni sync para sus peers).
  */
 export async function getLiveStatusesForPeers(
   supabase: SupabaseClient,
   peers: TgCustomerPeer[]
-): Promise<Map<string, LivePeerStatus>> {
-  const result = new Map<string, LivePeerStatus>();
+): Promise<{ live: Map<string, LivePeerStatus>; statusChanges: Map<string, TgPeerStatus> }> {
+  const live = new Map<string, LivePeerStatus>();
+  const statusChanges = new Map<string, TgPeerStatus>();
+
   const byRouter = new Map<string, TgCustomerPeer[]>();
   for (const p of peers) {
-    if (p.status !== "active") continue; // expired/disabled no están en el server
     const list = byRouter.get(p.router_id) || [];
     list.push(p);
     byRouter.set(p.router_id, list);
   }
-  if (!byRouter.size) return result;
+  if (!byRouter.size) return { live, statusChanges };
 
   const { data: routers } = await supabase
     .from("routers")
@@ -668,6 +676,15 @@ export async function getLiveStatusesForPeers(
     .in("id", Array.from(byRouter.keys()));
 
   const now = Date.now();
+
+  // status guardado vs. realidad del router (enabled = presente y habilitado)
+  const sync = (p: TgCustomerPeer, enabledOnServer: boolean) => {
+    const notExpired = new Date(p.expires_at).getTime() > now;
+    if (p.status === "active" && !enabledOnServer) statusChanges.set(p.id, "disabled");
+    else if (p.status === "disabled" && enabledOnServer) statusChanges.set(p.id, "active");
+    else if (p.status === "expired" && enabledOnServer && notExpired) statusChanges.set(p.id, "active");
+  };
+
   for (const router of routers || []) {
     const routerPeers = byRouter.get(router.id) || [];
     try {
@@ -678,17 +695,18 @@ export async function getLiveStatusesForPeers(
           const livePeers = await client.getPeersForInterface(iface);
           const byKey = new Map(livePeers.map((lp) => [lp.publicKey, lp]));
           for (const p of routerPeers.filter((x) => x.wg_interface === iface)) {
-            const live = byKey.get(p.peer_public_key);
-            if (!live) {
-              result.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
+            const lp = byKey.get(p.peer_public_key);
+            sync(p, Boolean(lp)); // en Linux, presente en wg = habilitado
+            if (!lp) {
+              live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
               continue;
             }
-            const handshakeEpoch = Number.parseInt(live.latestHandshake || "0", 10);
-            result.set(p.id, {
+            const handshakeEpoch = Number.parseInt(lp.latestHandshake || "0", 10);
+            live.set(p.id, {
               connected: handshakeEpoch > 0 && now / 1000 - handshakeEpoch < 180,
               latestHandshake: handshakeEpoch > 0 ? new Date(handshakeEpoch * 1000).toISOString() : null,
-              rx: live.transfer?.rx || 0,
-              tx: live.transfer?.tx || 0,
+              rx: lp.transfer?.rx || 0,
+              tx: lp.transfer?.tx || 0,
             });
           }
         }
@@ -697,17 +715,19 @@ export async function getLiveStatusesForPeers(
         const livePeers = await client.getWireGuardPeers();
         const byKey = new Map(livePeers.map((lp) => [lp["public-key"], lp]));
         for (const p of routerPeers) {
-          const live = byKey.get(p.peer_public_key);
-          if (!live || live.disabled) {
-            result.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
+          const rp = byKey.get(p.peer_public_key);
+          const enabled = Boolean(rp) && !isMikroTikDisabled(rp?.disabled);
+          sync(p, enabled);
+          if (!rp || !enabled) {
+            live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
             continue;
           }
-          const secondsAgo = parseMikroTikDuration(live["last-handshake"]);
-          result.set(p.id, {
+          const secondsAgo = parseMikroTikDuration(rp["last-handshake"]);
+          live.set(p.id, {
             connected: secondsAgo !== null && secondsAgo < 180,
             latestHandshake: secondsAgo !== null ? new Date(now - secondsAgo * 1000).toISOString() : null,
-            rx: Number(live.rx) || 0,
-            tx: Number(live.tx) || 0,
+            rx: Number(rp.rx) || 0,
+            tx: Number(rp.tx) || 0,
           });
         }
       }
@@ -715,7 +735,18 @@ export async function getLiveStatusesForPeers(
       console.warn(`[TgStore] live status failed for router ${router.id}:`, err instanceof Error ? err.message : err);
     }
   }
-  return result;
+
+  // Persistir las correcciones de status (agrupadas por valor)
+  for (const status of ["active", "disabled", "expired"] as TgPeerStatus[]) {
+    const ids = Array.from(statusChanges.entries())
+      .filter(([, s]) => s === status)
+      .map(([id]) => id);
+    if (ids.length) {
+      await supabase.from("tg_customer_peers").update({ status }).in("id", ids);
+    }
+  }
+
+  return { live, statusChanges };
 }
 
 /** Estado en vivo de un peer (handshake + tráfico). Linux por SSH, MikroTik por API. */
@@ -752,7 +783,7 @@ export async function getLivePeerStatus(peer: TgCustomerPeer): Promise<{
 
   const client = buildMikroTikClient(router as Router);
   const live = await findMikroTikPeerByPublicKey(client, peer.peer_public_key);
-  if (!live || live.disabled) return { connected: false, latestHandshake: null, rx: 0, tx: 0 };
+  if (!live || isMikroTikDisabled(live.disabled)) return { connected: false, latestHandshake: null, rx: 0, tx: 0 };
 
   const secondsAgo = parseMikroTikDuration(live["last-handshake"]);
   const connected = secondsAgo !== null && secondsAgo < 180;

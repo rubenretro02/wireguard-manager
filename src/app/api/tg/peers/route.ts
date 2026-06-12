@@ -57,16 +57,24 @@ export async function GET(request: Request) {
 
   const wantLive = new URL(request.url).searchParams.get("live") === "1";
   let liveMap = new Map<string, LivePeerStatus>();
+  let statusChanges = new Map<string, string>();
   if (wantLive && peers?.length) {
     try {
-      liveMap = await getLiveStatusesForPeers(supabase, peers as TgCustomerPeer[]);
+      const result = await getLiveStatusesForPeers(supabase, peers as TgCustomerPeer[]);
+      liveMap = result.live;
+      statusChanges = result.statusChanges;
     } catch (err) {
       console.warn("[TgPeers] live statuses failed:", err instanceof Error ? err.message : err);
     }
   }
 
   return NextResponse.json({
-    peers: (peers || []).map((p) => serializePeer(p as TgCustomerPeer, liveMap.get(p.id) || null)),
+    peers: (peers || []).map((p) => {
+      // aplicar el status sincronizado con el servidor en esta misma respuesta
+      const corrected = statusChanges.get(p.id);
+      const peer = corrected ? { ...p, status: corrected } : p;
+      return serializePeer(peer as TgCustomerPeer, liveMap.get(p.id) || null);
+    }),
   });
 }
 

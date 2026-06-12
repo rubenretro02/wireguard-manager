@@ -249,6 +249,9 @@ export async function POST(request: Request) {
         let serverPublicKey = "";
         let listenPort = 13231;
         let privateKey: string | null = null;
+        let linuxPeerId: string | null = null;
+        // estado real del peer en el servidor al momento de asignar
+        let enabledOnServer = true;
         if (isLinux) {
           const client = buildLinuxClient(assignRouter as Router, effectiveInterface);
           const info = await client.getInterfaceInfo();
@@ -258,11 +261,13 @@ export async function POST(request: Request) {
 
           const { data: lp } = await supabase
             .from("linux_peers")
-            .select("id, private_key")
+            .select("id, private_key, disabled")
             .eq("router_id", routerId)
             .eq("public_key", publicKey)
             .maybeSingle();
           privateKey = lp?.private_key || null;
+          linuxPeerId = lp?.id || null;
+          if (lp?.disabled) enabledOnServer = false;
         } else {
           const client = buildMikroTikClient(assignRouter as Router);
           const interfaces = await client.getWireGuardInterfaces();
@@ -271,9 +276,11 @@ export async function POST(request: Request) {
           serverPublicKey = iface["public-key"];
           listenPort = iface["listen-port"] || 13231;
 
+          // private-key solo viene si el usuario API del router tiene policy "sensitive"
           const routerPeers = await client.getWireGuardPeers();
           const rp = routerPeers.find((p) => p["public-key"] === publicKey);
           privateKey = rp?.["private-key"] || null;
+          enabledOnServer = Boolean(rp) && !(rp?.disabled === true || String(rp?.disabled) === "true");
         }
 
         // IP pública: comment si es una IP, si no por subnet, si no el host
@@ -304,6 +311,7 @@ export async function POST(request: Request) {
             customer_id: customerId,
             plan_id: null,
             router_id: routerId,
+            linux_peer_id: linuxPeerId,
             peer_name: name || `peer-${String(publicKey).substring(0, 6)}`,
             display_name: `Peer ${(peerCount || 0) + 1}`,
             peer_public_key: publicKey,
@@ -313,7 +321,8 @@ export async function POST(request: Request) {
             public_ip: publicIpStr,
             server_public_key: serverPublicKey,
             listen_port: listenPort,
-            status: "active",
+            // refleja la realidad del server: si está disabled, se asigna disabled
+            status: enabledOnServer ? "active" : "disabled",
             expires_at: expiresAt.toISOString(),
             renewal_price_usd: renewalPriceUsd === undefined || renewalPriceUsd === null || renewalPriceUsd === "" ? null : Number(renewalPriceUsd),
             renewal_duration_days: renewalDurationDays === undefined || renewalDurationDays === null || renewalDurationDays === "" ? null : Number(renewalDurationDays),
