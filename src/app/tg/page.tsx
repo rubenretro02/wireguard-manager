@@ -12,6 +12,7 @@ import {
   Globe,
   KeyRound,
   Loader2,
+  Pencil,
   QrCode,
   RefreshCw,
   Shield,
@@ -53,6 +54,7 @@ interface Plan {
   price_usd: number;
   duration_days: number;
   router_id: string;
+  is_dedicated_ip?: boolean;
 }
 interface Peer {
   id: string;
@@ -131,6 +133,9 @@ export default function TgMiniApp() {
   const [rotateConfirm, setRotateConfirm] = useState(false);
   const [rotating, setRotating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<Peer | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [renaming, setRenaming] = useState(false);
   const [renewPeer, setRenewPeer] = useState<Peer | null>(null);
   const [statuses, setStatuses] = useState<Record<string, LiveStatus | "loading">>({});
   const [buying, setBuying] = useState<string | null>(null); // planId en proceso
@@ -247,6 +252,24 @@ export default function TgMiniApp() {
   }, [configPeer]);
 
   /* ============ Acciones ============ */
+  const renamePeer = async () => {
+    if (!renameTarget || !renameValue.trim()) return;
+    setRenaming(true);
+    try {
+      const { peer: updated } = await tgFetch("/api/tg/peers", {
+        method: "POST",
+        body: JSON.stringify({ action: "rename", peerId: renameTarget.id, name: renameValue.trim() }),
+      });
+      setPeers((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+      setRenameTarget(null);
+      toast.success("Name updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rename");
+    } finally {
+      setRenaming(false);
+    }
+  };
+
   const openSupport = () => {
     const url = `https://t.me/${SUPPORT_BOT}`;
     // openTelegramLink abre el chat dentro de Telegram (openLink iría al browser)
@@ -497,9 +520,21 @@ export default function TgMiniApp() {
                 return (
                   <div key={peer.id} className="rounded-2xl border border-border bg-card p-4 space-y-3">
                     <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-semibold text-sm truncate">{peer.name}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{peer.public_ip}</p>
+                      <div className="min-w-0 flex items-center gap-1.5">
+                        <div className="min-w-0">
+                          <p className="font-semibold text-sm truncate">{peer.name}</p>
+                          <p className="text-xs text-muted-foreground font-mono">{peer.public_ip}</p>
+                        </div>
+                        <button
+                          onClick={() => {
+                            setRenameTarget(peer);
+                            setRenameValue(peer.name);
+                          }}
+                          aria-label="Rename"
+                          className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors shrink-0"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                       <span className={`text-xs px-2 py-1 rounded-lg font-medium shrink-0 ${STATUS_STYLE[peer.status]}`}>
                         {STATUS_LABEL[peer.status]}
@@ -569,16 +604,24 @@ export default function TgMiniApp() {
 
         {tab === "buy" && (
           <>
-            {plans.length === 0 ? (
+            {plans.length === 0 && (
               <div className="text-center py-16">
                 <p className="text-sm text-muted-foreground">No plans available right now.</p>
               </div>
-            ) : (
+            )}
+            {plans.length > 0 && (
               plans.map((plan) => (
                 <div key={plan.id} className="rounded-2xl border border-border bg-card p-4 space-y-3">
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <p className="font-semibold">{plan.name}</p>
+                      <p className="font-semibold">
+                        {plan.name}
+                        {plan.is_dedicated_ip && (
+                          <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-md bg-violet-500/15 text-violet-400 font-medium align-middle">
+                            Dedicated IP
+                          </span>
+                        )}
+                      </p>
                       {plan.description && <p className="text-xs text-muted-foreground mt-0.5">{plan.description}</p>}
                     </div>
                     <div className="text-right shrink-0">
@@ -599,6 +642,15 @@ export default function TgMiniApp() {
                 </div>
               ))
             )}
+            <button
+              onClick={openSupport}
+              className="w-full rounded-2xl border border-dashed border-border px-4 py-3 text-xs text-muted-foreground hover:text-foreground transition-colors text-left flex items-center gap-2.5"
+            >
+              <Bell className="w-4 h-4 shrink-0" />
+              <span>
+                Need a <b>dedicated IP</b> (not shared), or more dedicated IPs? Contact support.
+              </span>
+            </button>
           </>
         )}
 
@@ -765,6 +817,38 @@ export default function TgMiniApp() {
                   </button>
                 ))
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal rename */}
+      {renameTarget && (
+        <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center" onClick={() => setRenameTarget(null)}>
+          <div
+            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-semibold">Rename peer</h2>
+              <button onClick={() => setRenameTarget(null)} className="p-1.5 rounded-lg hover:bg-secondary">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              maxLength={32}
+              placeholder="My phone, Office PC…"
+              className="w-full px-4 py-2.5 rounded-xl bg-secondary/50 border border-border text-sm outline-none focus:border-primary"
+            />
+            <button
+              onClick={renamePeer}
+              disabled={renaming || !renameValue.trim()}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+            >
+              {renaming ? <Loader2 className="w-4 h-4 animate-spin" /> : <Pencil className="w-4 h-4" />}
+              Save name
+            </button>
           </div>
         </div>
       )}

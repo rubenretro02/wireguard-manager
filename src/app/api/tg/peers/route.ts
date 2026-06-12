@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
 function serializePeer(peer: TgCustomerPeer) {
   return {
     id: peer.id,
-    name: peer.peer_name,
+    // El customer ve su display_name editable, nunca el nombre del sistema
+    name: peer.display_name || "Peer",
     router_id: peer.router_id,
     public_ip: peer.public_ip,
     allowed_address: peer.allowed_address,
@@ -78,6 +79,21 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Failed to get status: ${msg}` }, { status: 500 });
       }
     }
+    case "rename": {
+      const name = String(body.name || "").trim();
+      if (!name || name.length > 32) {
+        return NextResponse.json({ error: "Name must be 1-32 characters" }, { status: 400 });
+      }
+      const { data: updated, error } = await supabase
+        .from("tg_customer_peers")
+        .update({ display_name: name })
+        .eq("id", peer.id)
+        .select()
+        .single();
+      if (error || !updated) return NextResponse.json({ error: "Failed to rename" }, { status: 500 });
+      return NextResponse.json({ peer: serializePeer(updated as TgCustomerPeer) });
+    }
+
     case "rotateKeys": {
       try {
         const updated = await rotateCustomerPeerKeys(supabase, peer as TgCustomerPeer);

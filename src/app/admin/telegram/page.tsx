@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, Users } from "lucide-react";
+import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, UserMinus, Users } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
 /* ============ Types (tg-admin API responses, with joins) ============ */
@@ -35,6 +35,7 @@ interface AdminPlan {
   duration_days: number;
   router_id: string;
   public_ip_id: string | null;
+  is_dedicated_ip: boolean;
   enabled: boolean;
   sort_order: number;
   routers?: { name: string } | null;
@@ -96,6 +97,7 @@ interface IpOption {
   enabled: boolean;
   restricted: boolean;
   for_sale?: boolean;
+  sale_dedicated?: boolean;
   router_id?: string;
   routers?: { name: string } | null;
 }
@@ -117,6 +119,7 @@ const emptyPlanForm = {
   duration_days: "30",
   router_id: "",
   public_ip_id: "",
+  is_dedicated_ip: false,
   enabled: true,
   sort_order: "0",
 };
@@ -389,6 +392,34 @@ export default function AdminTelegramPage() {
     }
   };
 
+  const toggleDedicated = async (ip: IpOption) => {
+    const next = !ip.sale_dedicated;
+    setSaleIps((prev) => prev.map((i) => (i.id === ip.id ? { ...i, sale_dedicated: next } : i)));
+    setForSaleAll((prev) => prev.map((i) => (i.id === ip.id ? { ...i, sale_dedicated: next } : i)));
+    try {
+      await tgAdmin("setIpDedicated", { id: ip.id, dedicated: next });
+      toast.success(next ? `${ip.public_ip} sells as dedicated (1 customer)` : `${ip.public_ip} sells as shared`);
+    } catch (err) {
+      setSaleIps((prev) => prev.map((i) => (i.id === ip.id ? { ...i, sale_dedicated: !next } : i)));
+      setForSaleAll((prev) => prev.map((i) => (i.id === ip.id ? { ...i, sale_dedicated: !next } : i)));
+      toast.error(err instanceof Error ? err.message : "Error");
+    }
+  };
+
+  const unassignPeer = async (peer: AdminPeer) => {
+    if (!confirm(`Unassign "${peer.peer_name}" from ${customerLabel(peer.tg_customers)}? The peer stays on the server untouched.`)) return;
+    setBusyPeerId(peer.id);
+    try {
+      await tgAdmin("unassignPeer", { id: peer.id });
+      toast.success("Peer unassigned — you can now assign it to another customer");
+      await refreshPeers();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error");
+    } finally {
+      setBusyPeerId(null);
+    }
+  };
+
   const assignPeer = async () => {
     if (!peerDetail || !assignCustomerId || !saleRouterId || !Number(assignDays)) return;
     await doAssignPeer(saleRouterId, peerDetail);
@@ -414,6 +445,7 @@ export default function AdminTelegramPage() {
       duration_days: String(plan.duration_days),
       router_id: plan.router_id,
       public_ip_id: plan.public_ip_id || "",
+      is_dedicated_ip: Boolean(plan.is_dedicated_ip),
       enabled: plan.enabled,
       sort_order: String(plan.sort_order),
     });
@@ -434,6 +466,7 @@ export default function AdminTelegramPage() {
         duration_days: Number(planForm.duration_days),
         router_id: planForm.router_id,
         public_ip_id: planForm.public_ip_id || null,
+        is_dedicated_ip: planForm.is_dedicated_ip,
         enabled: planForm.enabled,
         sort_order: Number(planForm.sort_order) || 0,
       };
@@ -594,7 +627,12 @@ export default function AdminTelegramPage() {
                   )}
                   {plans.map((plan) => (
                     <TableRow key={plan.id}>
-                      <TableCell className="font-medium">{plan.name}</TableCell>
+                      <TableCell className="font-medium">
+                        {plan.name}
+                        {plan.is_dedicated_ip && (
+                          <Badge variant="outline" className="ml-2 bg-violet-500/15 text-violet-400 border-violet-500/30">dedicated IP</Badge>
+                        )}
+                      </TableCell>
                       <TableCell>{plan.routers?.name || "—"}</TableCell>
                       <TableCell>{Number(plan.price_usd) <= 0 ? "Free" : `$${Number(plan.price_usd).toFixed(2)}`}</TableCell>
                       <TableCell>{plan.duration_days} days</TableCell>
@@ -648,20 +686,21 @@ export default function AdminTelegramPage() {
                       <TableHead>Peers using it</TableHead>
                       <TableHead>TG customers</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead className="text-right">For sale</TableHead>
+                      <TableHead>For sale</TableHead>
+                      <TableHead className="text-right">Dedicated</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {loadingSaleIps && (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8">
+                        <TableCell colSpan={6} className="text-center py-8">
                           <Loader2 className="w-5 h-5 animate-spin inline-block" />
                         </TableCell>
                       </TableRow>
                     )}
                     {!loadingSaleIps && saleIps.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                           This server has no public IPs configured.
                         </TableCell>
                       </TableRow>
@@ -705,9 +744,19 @@ export default function AdminTelegramPage() {
                               ) : (
                                 <Badge variant="outline" className="bg-zinc-500/15 text-zinc-400 border-zinc-500/30">reserved</Badge>
                               )}
+                              {ip.for_sale && ip.sale_dedicated && (
+                                <Badge variant="outline" className="bg-violet-500/15 text-violet-400 border-violet-500/30">dedicated</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <Switch checked={Boolean(ip.for_sale)} onCheckedChange={() => toggleForSale(ip)} disabled={!ip.enabled} />
                             </TableCell>
                             <TableCell className="text-right">
-                              <Switch checked={Boolean(ip.for_sale)} onCheckedChange={() => toggleForSale(ip)} disabled={!ip.enabled} />
+                              <Switch
+                                checked={Boolean(ip.sale_dedicated)}
+                                onCheckedChange={() => toggleDedicated(ip)}
+                                disabled={!ip.enabled || !ip.for_sale}
+                              />
                             </TableCell>
                           </TableRow>
                         );
@@ -726,13 +775,14 @@ export default function AdminTelegramPage() {
                         <TableHead>Server</TableHead>
                         <TableHead>Public IP</TableHead>
                         <TableHead>TG customers</TableHead>
+                        <TableHead>Mode</TableHead>
                         <TableHead className="text-right">For sale</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {forSaleAll.length === 0 && (
                         <TableRow>
-                          <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
+                          <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
                             No IPs for sale yet — select a server above and flip the switch on the IPs you want to sell.
                           </TableCell>
                         </TableRow>
@@ -743,6 +793,12 @@ export default function AdminTelegramPage() {
                           <TableCell className="font-mono">{ip.public_ip}</TableCell>
                           <TableCell>
                             {peers.filter((p) => p.public_ip === ip.public_ip && p.status === "active").length}
+                          </TableCell>
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center gap-2">
+                              <Switch checked={Boolean(ip.sale_dedicated)} onCheckedChange={() => toggleDedicated(ip)} />
+                              <span className="text-xs text-muted-foreground">{ip.sale_dedicated ? "dedicated" : "shared"}</span>
+                            </div>
                           </TableCell>
                           <TableCell className="text-right">
                             <Switch
@@ -925,8 +981,16 @@ export default function AdminTelegramPage() {
                             <Button
                               variant="ghost"
                               size="sm"
+                              title="Unassign (keep peer on server)"
+                              onClick={() => unassignPeer(peer)}
+                            >
+                              <UserMinus className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
                               className="text-destructive"
-                              title="Delete"
+                              title="Delete (removes from server too)"
                               onClick={() => peerAction(peer, "deleteCustomerPeer")}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -1409,6 +1473,16 @@ export default function AdminTelegramPage() {
                   </Select>
                 </div>
               )}
+              <div className="flex items-center gap-2 rounded-xl border border-border bg-secondary/30 px-3 py-2.5">
+                <Switch checked={planForm.is_dedicated_ip} onCheckedChange={(v) => setPlanForm((f) => ({ ...f, is_dedicated_ip: v }))} />
+                <div>
+                  <Label>Dedicated IP plan</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Provisions only on IPs marked <b>Dedicated</b> in IPs for Sale — one customer per IP.
+                    Off = shared IPs pool.
+                  </p>
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3 items-end">
                 <div className="space-y-1.5">
                   <Label>Sort order</Label>

@@ -54,7 +54,7 @@ export async function POST(request: Request) {
       }
 
       case "createPlan": {
-        const { name, description, price_usd, duration_days, router_id, public_ip_id, enabled, sort_order } = data;
+        const { name, description, price_usd, duration_days, router_id, public_ip_id, enabled, sort_order, is_dedicated_ip } = data;
         if (!name || price_usd == null || !duration_days || !router_id) {
           return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
         }
@@ -67,6 +67,7 @@ export async function POST(request: Request) {
             duration_days,
             router_id,
             public_ip_id: public_ip_id || null,
+            is_dedicated_ip: Boolean(is_dedicated_ip),
             enabled: enabled ?? true,
             sort_order: sort_order ?? 0,
           })
@@ -79,7 +80,7 @@ export async function POST(request: Request) {
       case "updatePlan": {
         const { id, ...fields } = data;
         if (!id) return NextResponse.json({ error: "Missing plan id" }, { status: 400 });
-        const allowed = ["name", "description", "price_usd", "duration_days", "router_id", "public_ip_id", "enabled", "sort_order"];
+        const allowed = ["name", "description", "price_usd", "duration_days", "router_id", "public_ip_id", "enabled", "sort_order", "is_dedicated_ip"];
         const updates: Record<string, unknown> = {};
         for (const key of allowed) {
           if (key in fields) updates[key] = fields[key] === "" ? null : fields[key];
@@ -289,6 +290,11 @@ export async function POST(request: Request) {
 
         const expiresAt = new Date(Date.now() + Number(days) * 24 * 60 * 60 * 1000);
 
+        const { count: peerCount } = await supabase
+          .from("tg_customer_peers")
+          .select("id", { count: "exact", head: true })
+          .eq("customer_id", customerId);
+
         const { data: assigned, error: assignError } = await supabase
           .from("tg_customer_peers")
           .insert({
@@ -296,6 +302,7 @@ export async function POST(request: Request) {
             plan_id: null,
             router_id: routerId,
             peer_name: name || `peer-${String(publicKey).substring(0, 6)}`,
+            display_name: `Peer ${(peerCount || 0) + 1}`,
             peer_public_key: publicKey,
             peer_private_key: privateKey,
             allowed_address: allowedAddress,
@@ -389,7 +396,7 @@ export async function POST(request: Request) {
         // Todas las IPs marcadas for sale, de todos los servers
         const { data: ips, error } = await supabase
           .from("public_ips")
-          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, for_sale, router_id, routers(name)")
+          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, for_sale, sale_dedicated, router_id, routers(name)")
           .eq("for_sale", true)
           .order("public_ip");
         if (error) throw new Error(error.message);
@@ -400,7 +407,7 @@ export async function POST(request: Request) {
         if (!data.routerId) return NextResponse.json({ error: "Missing routerId" }, { status: 400 });
         const { data: ips, error } = await supabase
           .from("public_ips")
-          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, wg_interface, for_sale")
+          .select("id, public_ip, ip_number, internal_subnet, enabled, restricted, wg_interface, for_sale, sale_dedicated")
           .eq("router_id", data.routerId)
           .order("ip_number");
         if (error) throw new Error(error.message);
@@ -415,6 +422,37 @@ export async function POST(request: Request) {
           .update({ for_sale: Boolean(forSale) })
           .eq("id", id);
         if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
+      }
+
+      case "setIpDedicated": {
+        const { id, dedicated } = data;
+        if (!id) return NextResponse.json({ error: "Missing ip id" }, { status: 400 });
+        const { error } = await supabase
+          .from("public_ips")
+          .update({ sale_dedicated: Boolean(dedicated) })
+          .eq("id", id);
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
+      }
+
+      case "unassignPeer": {
+        // Quita la asignación al customer SIN tocar el peer en el servidor
+        if (!data.id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+        const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", data.id).single();
+        if (!peer) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
+        const { error } = await supabase.from("tg_customer_peers").delete().eq("id", peer.id);
+        if (error) throw new Error(error.message);
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          routerId: peer.router_id,
+          action: "update",
+          entityType: "peer",
+          entityId: peer.id,
+          entityName: peer.peer_name,
+          details: { telegram_unassigned: true },
+        });
         return NextResponse.json({ success: true });
       }
 

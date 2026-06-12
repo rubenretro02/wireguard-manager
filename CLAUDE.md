@@ -111,6 +111,15 @@ Webhook compartido: `/api/telegram/webhook` (store) y `?bot=agent` (agent), mism
 Notificaciones salen por el bot del tipo del customer (`botForCustomerType`). El setup script
 configura ambos bots si el token agent está presente.
 
+**v20 — Display names + dedicated IPs:** `scripts/migration-v20-display-names-dedicated.sql`.
+`tg_customer_peers.display_name`: el customer ve/edita "Peer N" (acción `rename` en /api/tg/peers);
+el admin sigue viendo `peer_name` del sistema. `tg_plans.is_dedicated_ip` + `public_ips.sale_dedicated`:
+planes dedicated aprovisionan SOLO en IPs for-sale dedicated y cada una admite UN customer activo;
+planes normales solo usan las shared. Admin: switch Dedicated en IPs for Sale (per-server y global),
+toggle en el plan, acción `unassignPeer` (quita la asignación sin tocar el peer del server, botón
+UserMinus en Peers). Mini App: lápiz para renombrar, badge "Dedicated IP" en planes, nota de
+soporte para pedir dedicated IPs.
+
 **Pendiente / TODO:**
 - Recordatorio de renovación (N días antes de vencer) — requiere tracking de último aviso.
 - Límite de peers por customer / anti-abuso de planes gratis (hoy: un trial por click).

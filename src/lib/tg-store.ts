@@ -36,6 +36,8 @@ export interface TgPlan {
   duration_days: number;
   router_id: string;
   public_ip_id: string | null;
+  // v20: true = aprovisiona solo en IPs sale_dedicated (1 customer por IP)
+  is_dedicated_ip: boolean;
   enabled: boolean;
   sort_order: number;
   created_at: string;
@@ -50,6 +52,8 @@ export interface TgCustomerPeer {
   router_id: string;
   linux_peer_id: string | null;
   peer_name: string;
+  // v20: nombre que ve/edita el customer ("Peer 1"...). El admin ve peer_name.
+  display_name: string | null;
   peer_public_key: string;
   peer_private_key: string | null;
   allowed_address: string;
@@ -180,17 +184,24 @@ async function pickPublicIp(
     return data as PublicIP;
   }
 
-  // Auto: SOLO IPs marcadas "for sale" por el admin (v17). Las demás quedan
-  // reservadas para uso propio o dedicated. Se elige la menos cargada.
+  // Auto: SOLO IPs marcadas "for sale" por el admin (v17). v20: los planes
+  // dedicated usan solo IPs sale_dedicated (1 customer por IP); los planes
+  // normales usan solo las shared y se elige la menos cargada.
+  const dedicated = Boolean(plan.is_dedicated_ip);
   const { data, error } = await supabase
     .from("public_ips")
     .select("*")
     .eq("router_id", plan.router_id)
     .eq("enabled", true)
     .eq("for_sale", true)
+    .eq("sale_dedicated", dedicated)
     .order("ip_number", { ascending: true });
   if (error || !data?.length) {
-    throw new Error("No public IPs marked for sale on this server — mark some in Admin → Telegram → IPs for Sale");
+    throw new Error(
+      dedicated
+        ? "No dedicated IPs available on this server — mark some as Dedicated in Admin → Telegram → IPs for Sale"
+        : "No public IPs marked for sale on this server — mark some in Admin → Telegram → IPs for Sale"
+    );
   }
 
   const { data: activePeers } = await supabase
@@ -203,6 +214,13 @@ async function pickPublicIp(
     load.set(p.public_ip, (load.get(p.public_ip) || 0) + 1);
   }
 
+  if (dedicated) {
+    // Una IP dedicada se vende a UN solo customer: solo IPs sin peers activos
+    const free = (data as PublicIP[]).find((ip) => !load.get(ip.public_ip));
+    if (!free) throw new Error("All dedicated IPs are taken — contact support");
+    return free;
+  }
+
   let best = data[0] as PublicIP;
   let bestLoad = load.get(best.public_ip) || 0;
   for (const ip of data as PublicIP[]) {
@@ -213,6 +231,15 @@ async function pickPublicIp(
     }
   }
   return best;
+}
+
+/** Siguiente "Peer N" para el customer (nombre que ve el cliente). */
+export async function nextDisplayName(supabase: SupabaseClient, customerId: string): Promise<string> {
+  const { count } = await supabase
+    .from("tg_customer_peers")
+    .select("id", { count: "exact", head: true })
+    .eq("customer_id", customerId);
+  return `Peer ${(count || 0) + 1}`;
 }
 
 /**
@@ -375,6 +402,8 @@ export async function provisionPeerForCustomer(params: {
 
   const expiresAt = new Date(Date.now() + plan.duration_days * 24 * 60 * 60 * 1000);
 
+  const displayName = await nextDisplayName(supabase, customer.id);
+
   const { data: tgPeer, error: tgPeerError } = await supabase
     .from("tg_customer_peers")
     .insert({
@@ -383,6 +412,7 @@ export async function provisionPeerForCustomer(params: {
       router_id: plan.router_id,
       linux_peer_id: storedLinuxPeerId,
       peer_name: peerName,
+      display_name: displayName,
       peer_public_key: keyPair.publicKey,
       peer_private_key: keyPair.privateKey,
       allowed_address: allowedAddress,

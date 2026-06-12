@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   const supabase = getServiceClient();
   const { data: plans, error } = await supabase
     .from("tg_plans")
-    .select("id, name, description, price_usd, duration_days, router_id, sort_order")
+    .select("id, name, description, price_usd, duration_days, router_id, sort_order, is_dedicated_ip")
     .eq("enabled", true)
     .order("sort_order", { ascending: true })
     .order("price_usd", { ascending: true });
