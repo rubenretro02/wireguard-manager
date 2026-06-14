@@ -2492,7 +2492,7 @@ PersistentKeepalive = 25`;
             </div>
             <div className="space-y-2">
               <Label>Public IP</Label>
-              <Popover open={ipComboboxOpen} onOpenChange={setIpComboboxOpen}>
+              <Popover open={ipComboboxOpen} onOpenChange={setIpComboboxOpen} modal>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"

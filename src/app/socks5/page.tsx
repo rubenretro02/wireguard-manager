@@ -1765,7 +1765,7 @@ export default function Socks5Page() {
 
             <div className="space-y-2">
               <Label>Public IP (Host & Outgoing)</Label>
-              <Popover open={ipComboboxOpen} onOpenChange={setIpComboboxOpen}>
+              <Popover open={ipComboboxOpen} onOpenChange={setIpComboboxOpen} modal>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
