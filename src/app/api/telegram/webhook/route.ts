@@ -74,7 +74,7 @@ async function handleLinkCommand(
   if (!claimed) {
     await sendTelegramMessage(
       chatId,
-      "⚠️ Ese enlace de vinculación expiró o ya se usó. Generá uno nuevo desde <b>Perfil</b> en el panel.",
+      "⚠️ This link expired or was already used. Generate a new one from <b>Profile</b> in the panel.",
       {},
       bot
     );
@@ -92,7 +92,7 @@ async function handleLinkCommand(
 
   await sendTelegramMessage(
     chatId,
-    "✅ <b>Cuenta vinculada.</b>\n\nTu botón de menú ahora abre el <b>Panel Admin</b>. También podés usar /admin para un enlace de acceso al navegador.",
+    "✅ <b>Account linked.</b>\n\nYour menu button now opens the <b>Admin Panel</b>. You can also use /admin to get a browser login link.",
     { reply_markup: { inline_keyboard: adminButtons() } },
     bot
   );
@@ -104,7 +104,7 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
   if (!profile) {
     await sendTelegramMessage(
       chatId,
-      "🔒 Tu Telegram no está vinculado a ninguna cuenta del panel.\n\nIniciá sesión en el panel desde la web → <b>Perfil</b> → <b>Conectar Telegram</b>.",
+      "🔒 Your Telegram isn't linked to any panel account.\n\nSign in on the web → <b>Profile</b> → <b>Connect Telegram</b>.",
       {},
       bot
     );
@@ -119,22 +119,22 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
     token = await issueToken("login", profile.id);
   } catch (err) {
     console.error("[TelegramWebhook] issue login token failed:", err instanceof Error ? err.message : err);
-    await sendTelegramMessage(chatId, "⚠️ No se pudo generar el enlace. Probá de nuevo.", {}, bot);
+    await sendTelegramMessage(chatId, "⚠️ Couldn't generate the link. Please try again.", {}, bot);
     return;
   }
 
   const base = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
   if (!base) {
-    await sendTelegramMessage(chatId, "⚠️ El servidor no está configurado (NEXT_PUBLIC_APP_URL).", {}, bot);
+    await sendTelegramMessage(chatId, "⚠️ Server is not configured (NEXT_PUBLIC_APP_URL).", {}, bot);
     return;
   }
 
   await sendTelegramMessage(
     chatId,
-    "🔐 Tu enlace de acceso (válido por 60 segundos):",
+    "🔐 Your access link (valid for 60 seconds):",
     {
       reply_markup: {
-        inline_keyboard: [[{ text: "🔐 Abrir panel →", url: `${base}/api/auth/tg-login?token=${token}` }]],
+        inline_keyboard: [[{ text: "🔐 Open panel →", url: `${base}/api/auth/tg-login?token=${token}` }]],
       },
     },
     bot
@@ -144,7 +144,7 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
 /** Botones de admin: panel embebido (web_app). El link de acceso va por /admin. */
 function adminButtons(): Array<Array<Record<string, unknown>>> {
   try {
-    return [[{ text: "🖥 Panel admin", web_app: { url: getAdminMiniAppUrl() } }]];
+    return [[{ text: "🖥 Admin Panel", web_app: { url: getAdminMiniAppUrl() } }]];
   } catch {
     return [];
   }

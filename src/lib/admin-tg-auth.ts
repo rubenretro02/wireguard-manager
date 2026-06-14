@@ -113,7 +113,7 @@ export async function linkTelegramToProfile(
   // ¿Ese Telegram ya está vinculado a otro perfil?
   const existing = await getProfileByTelegramId(tgUser.id, supabase);
   if (existing && existing.id !== userId) {
-    return { ok: false, reason: "Ese Telegram ya está vinculado a otra cuenta." };
+    return { ok: false, reason: "That Telegram is already linked to another account." };
   }
 
   const { error } = await supabase
@@ -126,7 +126,7 @@ export async function linkTelegramToProfile(
     .eq("id", userId);
   if (error) {
     console.error("[AdminTgAuth] linkTelegramToProfile error:", error.message);
-    return { ok: false, reason: "No se pudo vincular la cuenta." };
+    return { ok: false, reason: "Could not link the account." };
   }
   return { ok: true };
 }
@@ -172,7 +172,7 @@ export async function mintSession(
   const email = userRes?.user?.email;
   if (getUserErr || !email) {
     console.error("[AdminTgAuth] getUserById failed:", getUserErr?.message);
-    return { ok: false, reason: "No se encontró el usuario." };
+    return { ok: false, reason: "User not found." };
   }
 
   // Generar un magic link (no se envía email: solo queremos el token_hash).
@@ -183,7 +183,7 @@ export async function mintSession(
   const tokenHash = linkData?.properties?.hashed_token;
   if (linkErr || !tokenHash) {
     console.error("[AdminTgAuth] generateLink failed:", linkErr?.message);
-    return { ok: false, reason: "No se pudo iniciar sesión." };
+    return { ok: false, reason: "Could not sign in." };
   }
 
   // Verificar el token_hash en el cookie client -> setea las cookies de sesión.
@@ -193,7 +193,7 @@ export async function mintSession(
   });
   if (verifyErr) {
     console.error("[AdminTgAuth] verifyOtp failed:", verifyErr.message);
-    return { ok: false, reason: "No se pudo iniciar sesión." };
+    return { ok: false, reason: "Could not sign in." };
   }
 
   return { ok: true };

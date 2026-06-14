@@ -29,6 +29,8 @@ interface SidebarProps {
   userCapabilities?: UserCapabilities;
   hasSocks5Access?: boolean; // New prop to indicate if user has access to SOCKS5 servers
   onLogout?: () => void;
+  mobileOpen?: boolean; // Drawer open state on mobile (md and below)
+  onMobileClose?: () => void; // Called to close the drawer (link tap / backdrop)
 }
 
 const navigation = [
@@ -49,7 +51,7 @@ const adminSubMenu = [
 ];
 
 // Inner component that uses useSearchParams
-function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSocks5Access, onLogout }: SidebarProps) {
+function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSocks5Access, onLogout, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [collapsed, setCollapsed] = useState(false);
@@ -68,12 +70,24 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
   const currentTab = searchParams.get("tab");
 
   return (
-    <aside
-      className={cn(
-        "fixed left-0 top-0 z-40 h-screen bg-card border-r border-border transition-all duration-300 flex flex-col",
-        collapsed ? "w-[70px]" : "w-[240px]"
+    <>
+      {/* Backdrop (mobile only) */}
+      {mobileOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-40 bg-black/50 backdrop-blur-sm"
+          onClick={onMobileClose}
+          aria-hidden
+        />
       )}
-    >
+      <aside
+        className={cn(
+          "fixed left-0 top-0 z-50 h-screen bg-card border-r border-border transition-all duration-300 flex flex-col",
+          collapsed ? "w-[70px]" : "w-[240px]",
+          // En móvil es un drawer: oculto fuera de pantalla salvo cuando está abierto.
+          mobileOpen ? "translate-x-0" : "-translate-x-full",
+          "md:translate-x-0"
+        )}
+      >
       {/* Logo */}
       <div className="h-16 flex items-center justify-between px-4 border-b border-border">
         {!collapsed && (
@@ -107,6 +121,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
             <Link
               key={item.name}
               href={item.href}
+              onClick={onMobileClose}
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg transition-all duration-200",
                 isActive
@@ -128,6 +143,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
             {collapsed ? (
               <Link
                 href="/admin"
+                onClick={onMobileClose}
                 className={cn(
                   "flex items-center justify-center px-2 py-2.5 rounded-lg transition-all duration-200",
                   isAdminPage
@@ -171,6 +187,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
                         <Link
                           key={subItem.name}
                           href={subItem.href}
+                          onClick={onMobileClose}
                           className={cn(
                             "flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200",
                             isSubActive
@@ -223,6 +240,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
         )}
       </div>
     </aside>
+    </>
   );
 }
 
@@ -230,7 +248,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
 export function Sidebar(props: SidebarProps) {
   return (
     <Suspense fallback={
-      <aside className="fixed left-0 top-0 z-40 h-screen w-[240px] bg-card border-r border-border" />
+      <aside className="hidden md:flex fixed left-0 top-0 z-40 h-screen w-[240px] bg-card border-r border-border" />
     }>
       <SidebarContent {...props} />
     </Suspense>

@@ -1,6 +1,7 @@
 "use client";
 
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
+import { Menu } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { cn } from "@/lib/utils";
 import type { UserCapabilities } from "@/lib/types";
@@ -15,6 +16,8 @@ interface DashboardLayoutProps {
 }
 
 export function DashboardLayout({ children, userRole, userEmail, userCapabilities, hasSocks5Access, onLogout }: DashboardLayoutProps) {
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
   return (
     <div className="min-h-screen bg-background">
       <Sidebar
@@ -23,9 +26,22 @@ export function DashboardLayout({ children, userRole, userEmail, userCapabilitie
         userCapabilities={userCapabilities}
         hasSocks5Access={hasSocks5Access}
         onLogout={onLogout}
+        mobileOpen={mobileNavOpen}
+        onMobileClose={() => setMobileNavOpen(false)}
       />
+
+      {/* Hamburger (mobile only) — opens the nav drawer */}
+      <button
+        type="button"
+        onClick={() => setMobileNavOpen(true)}
+        aria-label="Open menu"
+        className="md:hidden fixed top-3 left-3 z-40 p-2 rounded-lg bg-card border border-border text-foreground shadow-sm"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
+
       <main className={cn(
-        "transition-all duration-300 ml-[240px]",
+        "transition-all duration-300 ml-0 md:ml-[240px]",
         "min-h-screen"
       )}>
         {children}
@@ -43,7 +59,7 @@ interface PageHeaderProps {
 export function PageHeader({ title, description, children }: PageHeaderProps) {
   return (
     <div className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-30">
-      <div className="px-8 py-6 flex items-center justify-between">
+      <div className="px-4 md:px-8 py-6 pl-16 md:pl-8 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>
           {description && (
@@ -67,7 +83,7 @@ interface PageContentProps {
 
 export function PageContent({ children, className }: PageContentProps) {
   return (
-    <div className={cn("p-8", className)}>
+    <div className={cn("p-4 md:p-8", className)}>
       {children}
     </div>
   );

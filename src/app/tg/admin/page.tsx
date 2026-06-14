@@ -29,7 +29,7 @@ export default function TgAdminLoginPage() {
       if (!tg || !tg.initData) {
         attempts += 1;
         if (attempts > 40) {
-          setState({ kind: "error", message: "Abrí esta página desde el bot de Telegram." });
+          setState({ kind: "error", message: "Open this page from the Telegram bot." });
           return;
         }
         setTimeout(tryLogin, 100);
@@ -50,14 +50,14 @@ export default function TgAdminLoginPage() {
         });
         const json = await res.json().catch(() => ({}));
         if (!res.ok) {
-          setState({ kind: "error", message: json.error || "No se pudo iniciar sesión." });
+          setState({ kind: "error", message: json.error || "Could not sign in." });
           return;
         }
         setState({ kind: "ok" });
         // La cookie de sesión ya está seteada: cargar el panel en el webview.
         window.location.replace("/dashboard");
       } catch {
-        setState({ kind: "error", message: "Error de red. Probá de nuevo." });
+        setState({ kind: "error", message: "Network error. Please try again." });
       }
     };
 
@@ -70,19 +70,19 @@ export default function TgAdminLoginPage() {
         {state.kind === "loading" && (
           <>
             <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
-            <p className="text-sm text-muted-foreground">Iniciando sesión…</p>
+            <p className="text-sm text-muted-foreground">Signing in…</p>
           </>
         )}
         {state.kind === "ok" && (
           <>
             <ShieldCheck className="w-8 h-8 mx-auto text-green-500" />
-            <p className="text-sm text-muted-foreground">Listo, abriendo el panel…</p>
+            <p className="text-sm text-muted-foreground">Done, opening the panel…</p>
           </>
         )}
         {state.kind === "error" && (
           <>
             <ShieldAlert className="w-8 h-8 mx-auto text-destructive" />
-            <p className="text-sm font-medium">No se pudo entrar</p>
+            <p className="text-sm font-medium">Couldn't sign in</p>
             <p className="text-sm text-muted-foreground">{state.message}</p>
           </>
         )}

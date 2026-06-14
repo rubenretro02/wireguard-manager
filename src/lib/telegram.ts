@@ -195,7 +195,7 @@ export async function setAdminMenuButton(chatId: number | string, bot: BotKind =
   } catch {
     return;
   }
-  await setChatMenuButtonWebApp(chatId, "Panel Admin", url, bot);
+  await setChatMenuButtonWebApp(chatId, "Admin Panel", url, bot);
 }
 
 /** Botón de menú del chat → tienda/manager (Mini App /tg). Usado al desvincular. */

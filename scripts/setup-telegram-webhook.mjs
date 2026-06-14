@@ -74,7 +74,7 @@ if (agentToken) {
   await configureBot(agentToken, "agent", `${base}/api/telegram/webhook?bot=agent`, "VPN Manager");
   // El bot agent también sirve de login al panel para admins/semi-admins vinculados.
   await setCommands(agentToken, "agent", [
-    { command: "admin", description: "Iniciar sesión en el panel" },
+    { command: "admin", description: "Sign in to the admin panel" },
   ]);
 } else {
   console.log("[agent] TELEGRAM_AGENT_BOT_TOKEN no configurado — bot de agents omitido");

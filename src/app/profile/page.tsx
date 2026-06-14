@@ -54,7 +54,7 @@ export default function ProfilePage() {
       const res = await fetch("/api/profile/telegram", { method: "POST" });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(json.error || "No se pudo generar el enlace");
+        toast.error(json.error || "Couldn't generate the link");
         return;
       }
       setDeepLink(json.deepLink);
@@ -65,7 +65,7 @@ export default function ProfilePage() {
       });
       setQrDataUrl(qr);
     } catch {
-      toast.error("Error de red");
+      toast.error("Network error");
     } finally {
       setGenerating(false);
     }
@@ -77,15 +77,15 @@ export default function ProfilePage() {
       const res = await fetch("/api/profile/telegram", { method: "DELETE" });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
-        toast.error(json.error || "No se pudo desvincular");
+        toast.error(json.error || "Couldn't unlink");
         return;
       }
-      toast.success("Telegram desvinculado");
+      toast.success("Telegram unlinked");
       setDeepLink(null);
       setQrDataUrl(null);
       await loadProfile();
     } catch {
-      toast.error("Error de red");
+      toast.error("Network error");
     } finally {
       setUnlinking(false);
     }
@@ -99,7 +99,7 @@ export default function ProfilePage() {
   const copyLink = () => {
     if (!deepLink) return;
     navigator.clipboard.writeText(deepLink);
-    toast.success("Enlace copiado");
+    toast.success("Link copied");
   };
 
   const isLinked = !!profile?.telegram_id;
@@ -112,18 +112,18 @@ export default function ProfilePage() {
       hasSocks5Access={hasSocks5Access}
       onLogout={handleLogout}
     >
-      <PageHeader title="Profile" description="Tu cuenta y acceso desde Telegram" />
+      <PageHeader title="Profile" description="Your account and Telegram access" />
       <PageContent>
         {loading ? (
           <div className="flex items-center justify-center py-20 text-muted-foreground">
-            <Loader2 className="w-5 h-5 animate-spin mr-2" /> Cargando…
+            <Loader2 className="w-5 h-5 animate-spin mr-2" /> Loading…
           </div>
         ) : (
           <div className="max-w-2xl space-y-6">
-            {/* Datos de la cuenta */}
+            {/* Account details */}
             <Card>
               <CardHeader>
-                <CardTitle className="text-lg">Cuenta</CardTitle>
+                <CardTitle className="text-lg">Account</CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <div className="flex justify-between">
@@ -131,13 +131,13 @@ export default function ProfilePage() {
                   <span className="font-medium">{profile?.email}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Rol</span>
+                  <span className="text-muted-foreground">Role</span>
                   <span className="font-medium capitalize">{profile?.role}</span>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Acceso por Telegram */}
+            {/* Telegram access */}
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
@@ -145,9 +145,9 @@ export default function ProfilePage() {
                     <Send className="w-4 h-4 text-primary" />
                   </div>
                   <div>
-                    <CardTitle className="text-lg">Acceso desde Telegram</CardTitle>
+                    <CardTitle className="text-lg">Telegram access</CardTitle>
                     <CardDescription>
-                      Entrá al panel desde el bot sin escribir contraseña.
+                      Sign in to the panel from the bot without typing a password.
                     </CardDescription>
                   </div>
                 </div>
@@ -158,19 +158,19 @@ export default function ProfilePage() {
                     <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 p-3">
                       <CheckCircle2 className="w-5 h-5 text-green-500" />
                       <div className="text-sm">
-                        <span className="font-medium">Telegram vinculado</span>
+                        <span className="font-medium">Telegram linked</span>
                         {profile?.telegram_username && (
                           <span className="text-muted-foreground"> · @{profile.telegram_username}</span>
                         )}
                       </div>
                     </div>
                     <div className="text-sm text-muted-foreground">
-                      En el bot escribí <Badge variant="secondary">/admin</Badge> para recibir un enlace
-                      de acceso, o usá el botón <span className="font-medium">🖥 Panel admin</span>.
+                      In the bot, send <Badge variant="secondary">/admin</Badge> to get an access link,
+                      or use the <span className="font-medium">🖥 Admin Panel</span> button.
                     </div>
                     <Button variant="destructive" onClick={handleUnlink} disabled={unlinking}>
                       {unlinking ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Unlink className="w-4 h-4 mr-2" />}
-                      Desvincular Telegram
+                      Unlink Telegram
                     </Button>
                   </>
                 ) : (
@@ -178,18 +178,18 @@ export default function ProfilePage() {
                     {!deepLink ? (
                       <Button onClick={handleConnect} disabled={generating}>
                         {generating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
-                        Conectar Telegram
+                        Connect Telegram
                       </Button>
                     ) : (
                       <div className="space-y-4">
                         <p className="text-sm text-muted-foreground">
-                          Abrí este enlace en Telegram (o escaneá el QR desde tu teléfono) y enviá el
-                          mensaje para vincular tu cuenta. El enlace vence en 10 minutos.
+                          Open this link in Telegram (or scan the QR from your phone) and send the
+                          message to link your account. The link expires in 10 minutes.
                         </p>
                         {qrDataUrl && (
                           <img
                             src={qrDataUrl}
-                            alt="QR de vinculación"
+                            alt="Linking QR"
                             className="rounded-lg border border-border bg-white p-2"
                             width={240}
                             height={240}
@@ -198,14 +198,14 @@ export default function ProfilePage() {
                         <div className="flex flex-wrap gap-2">
                           <Button asChild>
                             <a href={deepLink} target="_blank" rel="noopener noreferrer">
-                              <ExternalLink className="w-4 h-4 mr-2" /> Abrir Telegram
+                              <ExternalLink className="w-4 h-4 mr-2" /> Open Telegram
                             </a>
                           </Button>
                           <Button variant="secondary" onClick={copyLink}>
-                            <Copy className="w-4 h-4 mr-2" /> Copiar enlace
+                            <Copy className="w-4 h-4 mr-2" /> Copy link
                           </Button>
                           <Button variant="outline" onClick={loadProfile}>
-                            <RefreshCw className="w-4 h-4 mr-2" /> Ya vinculé
+                            <RefreshCw className="w-4 h-4 mr-2" /> I've linked it
                           </Button>
                         </div>
                       </div>

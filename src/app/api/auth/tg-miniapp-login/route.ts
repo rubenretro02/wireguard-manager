@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   const profile = await getProfileByTelegramId(validated.user.id);
   if (!profile) {
     return NextResponse.json(
-      { error: "Tu Telegram no está vinculado a una cuenta. Vinculalo desde Perfil en el panel." },
+      { error: "Your Telegram isn't linked to an account. Link it from Profile in the panel." },
       { status: 403 }
     );
   }
