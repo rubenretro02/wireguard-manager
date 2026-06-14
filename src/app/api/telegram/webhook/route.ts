@@ -3,6 +3,7 @@ import {
   getAdminMiniAppUrl,
   getMiniAppUrl,
   sendTelegramMessage,
+  setAdminMenuButton,
   type BotKind,
   type TelegramUser,
 } from "@/lib/telegram";
@@ -86,9 +87,12 @@ async function handleLinkCommand(
     return;
   }
 
+  // El botón de menú de este chat ahora abre el panel admin (no la tienda).
+  await setAdminMenuButton(chatId, bot);
+
   await sendTelegramMessage(
     chatId,
-    "✅ <b>Cuenta vinculada.</b>\n\nYa podés entrar al panel desde acá: usá /admin para un enlace de acceso o abrí el panel embebido.",
+    "✅ <b>Cuenta vinculada.</b>\n\nTu botón de menú ahora abre el <b>Panel Admin</b>. También podés usar /admin para un enlace de acceso al navegador.",
     { reply_markup: { inline_keyboard: adminButtons() } },
     bot
   );
@@ -106,6 +110,9 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
     );
     return;
   }
+
+  // Idempotente: asegura que el botón de menú de admins ya vinculados abra el panel.
+  await setAdminMenuButton(chatId, bot);
 
   let token: string;
   try {
@@ -168,9 +175,11 @@ async function sendDefaultWelcome(
     [{ text: "🚀 Open App", web_app: { url: appUrl } }],
   ];
 
-  // Si el usuario del bot agent es un admin vinculado, ofrecerle también el panel.
+  // Si el usuario del bot agent es un admin vinculado, ofrecerle también el panel
+  // y dejar su botón de menú apuntando al panel (no a la tienda).
   if (bot === "agent" && from && (await getProfileByTelegramId(from.id))) {
     keyboard.push(...adminButtons());
+    await setAdminMenuButton(chatId, bot);
   }
 
   await sendTelegramMessage(chatId, text, { reply_markup: { inline_keyboard: keyboard } }, bot);

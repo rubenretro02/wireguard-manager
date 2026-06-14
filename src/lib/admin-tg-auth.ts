@@ -131,15 +131,26 @@ export async function linkTelegramToProfile(
   return { ok: true };
 }
 
-/** Quita el vínculo de Telegram de un perfil. */
+/**
+ * Quita el vínculo de Telegram de un perfil. Devuelve el telegram_id que tenía
+ * (o null) para poder restaurar su botón de menú a la tienda.
+ */
 export async function unlinkTelegram(
   userId: string,
   supabase: SupabaseClient = getServiceClient()
-): Promise<void> {
+): Promise<number | null> {
+  const { data: prev } = await supabase
+    .from("profiles")
+    .select("telegram_id")
+    .eq("id", userId)
+    .maybeSingle();
+
   await supabase
     .from("profiles")
     .update({ telegram_id: null, telegram_username: null, telegram_linked_at: null })
     .eq("id", userId);
+
+  return (prev?.telegram_id as number | null) ?? null;
 }
 
 /**

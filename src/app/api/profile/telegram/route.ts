@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { issueToken, unlinkTelegram } from "@/lib/admin-tg-auth";
-import { getAdminBotUsername } from "@/lib/telegram";
+import { getAdminBotUsername, setStoreMenuButton } from "@/lib/telegram";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,7 +40,9 @@ export async function DELETE() {
   }
 
   try {
-    await unlinkTelegram(user.id);
+    const prevTelegramId = await unlinkTelegram(user.id);
+    // Restaurar su botón de menú a la tienda/manager.
+    if (prevTelegramId) await setStoreMenuButton(prevTelegramId);
   } catch (err) {
     console.error("[Profile/Telegram] unlink failed:", err instanceof Error ? err.message : err);
     return NextResponse.json({ error: "No se pudo desvincular." }, { status: 500 });

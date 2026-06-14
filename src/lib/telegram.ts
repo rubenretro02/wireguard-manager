@@ -164,3 +164,47 @@ export async function getAdminBotUsername(): Promise<string> {
   cachedAdminBotUsername = me.username;
   return me.username;
 }
+
+/**
+ * Setea el botón de menú (Mini App) SOLO para un chat. Lo usamos para que, una
+ * vez vinculado, el botón de menú del admin abra el panel en vez de la tienda.
+ * No lanza: loguea y sigue (no debe romper el flujo del webhook).
+ */
+async function setChatMenuButtonWebApp(
+  chatId: number | string,
+  text: string,
+  url: string,
+  bot: BotKind = ADMIN_BOT
+): Promise<void> {
+  try {
+    await tgApi(
+      "setChatMenuButton",
+      { chat_id: chatId, menu_button: { type: "web_app", text, web_app: { url } } },
+      bot
+    );
+  } catch (err) {
+    console.error("[Telegram] setChatMenuButton failed:", err instanceof Error ? err.message : err);
+  }
+}
+
+/** Botón de menú del chat → Panel admin (Mini App /tg/admin). */
+export async function setAdminMenuButton(chatId: number | string, bot: BotKind = ADMIN_BOT): Promise<void> {
+  let url: string;
+  try {
+    url = getAdminMiniAppUrl();
+  } catch {
+    return;
+  }
+  await setChatMenuButtonWebApp(chatId, "Panel Admin", url, bot);
+}
+
+/** Botón de menú del chat → tienda/manager (Mini App /tg). Usado al desvincular. */
+export async function setStoreMenuButton(chatId: number | string, bot: BotKind = ADMIN_BOT): Promise<void> {
+  let url: string;
+  try {
+    url = getMiniAppUrl();
+  } catch {
+    return;
+  }
+  await setChatMenuButtonWebApp(chatId, "VPN Manager", url, bot);
+}
