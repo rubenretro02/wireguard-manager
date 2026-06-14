@@ -59,10 +59,23 @@ async function configureBot(botToken, label, webhookUrl, menuText) {
   console.log(`[${label}] setChatMenuButton:`, JSON.stringify(await menuRes.json()));
 }
 
+async function setCommands(botToken, label, commands) {
+  const res = await fetch(`https://api.telegram.org/bot${botToken}/setMyCommands`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ commands, scope: { type: "all_private_chats" } }),
+  });
+  console.log(`[${label}] setMyCommands:`, JSON.stringify(await res.json()));
+}
+
 await configureBot(token, "store", `${base}/api/telegram/webhook`, "VPN Store");
 
 if (agentToken) {
   await configureBot(agentToken, "agent", `${base}/api/telegram/webhook?bot=agent`, "VPN Manager");
+  // El bot agent también sirve de login al panel para admins/semi-admins vinculados.
+  await setCommands(agentToken, "agent", [
+    { command: "admin", description: "Iniciar sesión en el panel" },
+  ]);
 } else {
   console.log("[agent] TELEGRAM_AGENT_BOT_TOKEN no configurado — bot de agents omitido");
 }

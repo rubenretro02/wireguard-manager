@@ -41,6 +41,52 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-06-14 — Login de admin/semi-admin desde Telegram (v22)
+
+**Qué es:** los admins y semi-admins (cuentas de `profiles` / Supabase Auth, NO `tg_customers`)
+pueden vincular su Telegram y entrar al panel desde el bot, sin escribir contraseña. Reusa el
+bot de agents `@Wireguardvpnmanagerbot`; el acceso solo se ofrece a perfiles vinculados (se
+chequea `from.id`), así clientes/agents normales nunca lo ven.
+
+**Migración SQL:** `scripts/migration-v22-admin-telegram-login.sql` — agrega
+`profiles.telegram_id` (UNIQUE) + `telegram_username` + `telegram_linked_at`, y la tabla
+`admin_tg_tokens` (tokens de un solo uso, `purpose 'link'|'login'`, TTL link 10m / login 60s,
+single-use vía `used_at`; RLS admin-only, la app usa service role).
+
+**Arquitectura (`src/lib/admin-tg-auth.ts`):**
+- `issueToken`/`consumeToken` (claim atómico: UPDATE con `used_at IS NULL AND expires_at > now`).
+- `linkTelegramToProfile`/`unlinkTelegram`/`getProfileByTelegramId`.
+- `mintSession(cookieClient, userId)`: acuña la sesión sin contraseña — `auth.admin.generateLink({type:'magiclink'})`
+  (service role) → `cookieClient.auth.verifyOtp({type:'email', token_hash})` que escribe las cookies
+  (mismo mecanismo que `exchangeCodeForSession` en `/api/auth/callback`). La sesión resultante es la
+  del propio usuario → RLS/rol/capabilities sin cambios.
+
+**Flujos:**
+- *Vincular:* `/profile` (nueva, en el Sidebar, todos los roles) → `POST /api/profile/telegram`
+  emite token `link` y devuelve deep link `t.me/<bot>?start=link_<token>` (+ QR con `qrcode`).
+  El webhook agent maneja `/start link_<token>` → `linkTelegramToProfile(from)`.
+- *Login (link a navegador real):* en el bot `/admin` → webhook emite token `login` (solo si el
+  `from.id` está vinculado) → botón url `…/api/auth/tg-login?token=…` → `GET` valida, mintea sesión,
+  redirige a `/dashboard`.
+- *Login (Mini App):* botón web_app "🖥 Panel admin" → `/tg/admin` lee `initData` → `POST
+  /api/auth/tg-miniapp-login` (valida HMAC con `validateInitData`, busca perfil, mintea) →
+  `window.location.replace('/dashboard')` dentro del webview.
+
+**Webhook (`/api/telegram/webhook`):** reordenado solo para el bot agent (store intacto):
+`/start link_*` → vínculo; `/admin` → login link; default → "Open App" (y si el `from.id` es admin
+vinculado, además agrega el botón del panel).
+
+**Setup:** `node scripts/setup-telegram-webhook.mjs` ahora también hace `setMyCommands` del bot
+agent con `/admin`. Sin env nuevas (reusa `TELEGRAM_AGENT_BOT_TOKEN` + `NEXT_PUBLIC_APP_URL`).
+El deep link usa `getMe` (cacheado) para el username del bot.
+
+**Gotchas / pendiente:**
+- No se puede probar en local (sin `.env.local`, Supabase da exception y el bot necesita HTTPS
+  público): probar en Vercel o con túnel.
+- Confirmar el `type` de `verifyOtp` para magic links en la versión de supabase-js (se usó `'email'`;
+  fallback `'magiclink'` si rechaza).
+- TODO: rate-limit de `/admin` y de generación de tokens (hoy: solo TTL + single-use).
+
 ### 2026-06-11 — Telegram Mini App + tienda con Cryptomus
 
 **Qué es:** Mini App de Telegram (`/tg`) donde los customers finales se registran solos

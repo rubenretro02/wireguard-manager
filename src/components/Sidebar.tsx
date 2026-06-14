@@ -16,7 +16,8 @@ import {
   Network,
   UserCog,
   Key,
-  Send
+  Send,
+  UserCircle
 } from "lucide-react";
 import { useState, Suspense } from "react";
 import { cn } from "@/lib/utils";
@@ -35,6 +36,7 @@ const navigation = [
   { name: "Public IPs", href: "/public-ips", icon: Globe, adminOnly: false, requiresCapability: null as keyof UserCapabilities | null, requiresSocks5Access: false },
   { name: "SOCKS5", href: "/socks5", icon: Network, adminOnly: false, requiresCapability: null as keyof UserCapabilities | null, requiresSocks5Access: true },
   { name: "My Users", href: "/my-users", icon: Users, adminOnly: false, requiresCapability: "can_create_users" as keyof UserCapabilities | null, requiresSocks5Access: false },
+  { name: "Profile", href: "/profile", icon: UserCircle, adminOnly: false, requiresCapability: null as keyof UserCapabilities | null, requiresSocks5Access: false },
 ];
 
 const adminSubMenu = [

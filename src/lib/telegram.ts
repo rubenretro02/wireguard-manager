@@ -141,3 +141,26 @@ export function getMiniAppUrl(): string {
   if (!base) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
   return `${base.replace(/\/$/, "")}/tg`;
 }
+
+/** URL de la Mini App de login de admin (botón web_app del bot agent). */
+export function getAdminMiniAppUrl(): string {
+  const base = process.env.NEXT_PUBLIC_APP_URL;
+  if (!base) throw new Error("NEXT_PUBLIC_APP_URL is not configured");
+  return `${base.replace(/\/$/, "")}/tg/admin`;
+}
+
+/**
+ * Bot que se usa para el login de admins. Reusa el bot de agents
+ * (@Wireguardvpnmanagerbot); si no está configurado, cae al store.
+ */
+export const ADMIN_BOT: BotKind = "agent";
+
+let cachedAdminBotUsername: string | null = null;
+
+/** Username del bot admin (vía getMe, cacheado) para armar deep links t.me. */
+export async function getAdminBotUsername(): Promise<string> {
+  if (cachedAdminBotUsername) return cachedAdminBotUsername;
+  const me = await tgApi<{ username: string }>("getMe", {}, ADMIN_BOT);
+  cachedAdminBotUsername = me.username;
+  return me.username;
+}
