@@ -147,6 +147,8 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
     // La URL va también como texto: si el botón no abre, se puede tocar/copiar.
     `🔐 <b>Single sign-on</b>\n\nYour access link (valid for 5 minutes):\n\n${loginUrl}`,
     {
+      // Sin la tarjeta de vista previa del enlace (el recuadro con el sitio).
+      disable_web_page_preview: true,
       reply_markup: {
         inline_keyboard: [[{ text: "🔐 Open panel →", url: loginUrl }]],
       },
