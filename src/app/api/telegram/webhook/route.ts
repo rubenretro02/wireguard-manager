@@ -141,12 +141,14 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
     return;
   }
 
+  const loginUrl = `${base}/api/auth/tg-login?token=${token}`;
   await sendTelegramMessage(
     chatId,
-    "🔐 <b>Single sign-on</b>\n\nYour access link (valid for 5 minutes):\n\n<i>The panel session lasts ~2 hours — when it expires, send /sso for a fresh link.</i>",
+    // La URL va también como texto: si el botón no abre, se puede tocar/copiar.
+    `🔐 <b>Single sign-on</b>\n\nYour access link (valid for 5 minutes):\n\n${loginUrl}`,
     {
       reply_markup: {
-        inline_keyboard: [[{ text: "🔐 Open panel →", url: `${base}/api/auth/tg-login?token=${token}` }]],
+        inline_keyboard: [[{ text: "🔐 Open panel →", url: loginUrl }]],
       },
     },
     bot

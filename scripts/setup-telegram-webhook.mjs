@@ -39,7 +39,8 @@ async function configureBot(botToken, label, webhookUrl, menuText) {
     body: JSON.stringify({
       url: webhookUrl,
       secret_token: secret || undefined,
-      allowed_updates: ["message"],
+      // callback_query: necesario para el botón inline "Single Sign On".
+      allowed_updates: ["message", "callback_query"],
     }),
   });
   console.log(`[${label}] setWebhook:`, JSON.stringify(await res.json()));
@@ -73,8 +74,11 @@ await configureBot(token, "store", `${base}/api/telegram/webhook`, "VPN Store");
 if (agentToken) {
   await configureBot(agentToken, "agent", `${base}/api/telegram/webhook?bot=agent`, "VPN Manager");
   // El bot agent también sirve de login al panel para admins/semi-admins vinculados.
+  // Nota: los comandos del menú solo admiten [a-z0-9_]; "/single-sign-on" no se
+  // puede registrar (lo maneja el webhook si se teclea), pero "/sso" sí.
   await setCommands(agentToken, "agent", [
-    { command: "admin", description: "Sign in to the admin panel" },
+    { command: "sso", description: "Single sign-on to the admin panel" },
+    { command: "admin", description: "Sign in to the admin panel (alias of /sso)" },
   ]);
 } else {
   console.log("[agent] TELEGRAM_AGENT_BOT_TOKEN no configurado — bot de agents omitido");
