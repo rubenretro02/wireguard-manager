@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,18 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+
+  // Surface redirect reasons (e.g. an expired SSO session) sent as ?error=...
+  useEffect(() => {
+    const err = new URLSearchParams(window.location.search).get("error");
+    if (!err) return;
+    const messages: Record<string, string> = {
+      sso_expired: "Your single sign-on session expired. Send /sso to the bot for a fresh link.",
+      tg_link_expired: "That login link expired. Send /sso to the bot for a new one.",
+      tg_login_failed: "Telegram sign-in failed. Please try again.",
+    };
+    toast.error(messages[err] || "Please sign in again.");
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

@@ -37,7 +37,7 @@ export interface LinkedProfile {
 }
 
 const LINK_TOKEN_TTL_SECONDS = 10 * 60; // 10 min para escanear/abrir el deep link
-const LOGIN_TOKEN_TTL_SECONDS = 60; // 60s: token fresco por cada /admin
+const LOGIN_TOKEN_TTL_SECONDS = 5 * 60; // 5 min: token fresco por cada /sso
 
 /** Token URL-safe aleatorio (no adivinable). */
 function randomToken(): string {

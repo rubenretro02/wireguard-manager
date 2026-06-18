@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { validateInitData } from "@/lib/telegram";
 import { getProfileByTelegramId, mintSession } from "@/lib/admin-tg-auth";
+import { SSO_COOKIE } from "@/lib/sso-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -42,5 +43,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: minted.reason }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  // Stamp the SSO login time so the middleware can force a re-login after the
+  // max age (see lib/sso-session.ts).
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set(SSO_COOKIE, String(Date.now()), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    path: "/",
+  });
+  return res;
 }

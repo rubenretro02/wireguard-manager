@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  answerCallbackQuery,
   getAdminMiniAppUrl,
   getMiniAppUrl,
   sendTelegramMessage,
@@ -24,8 +25,9 @@ export const dynamic = "force-dynamic";
  *
  * El bot agent además maneja el login de admins al panel:
  *   - /start link_<token>  → vincula el Telegram al perfil que generó el token
- *   - /admin               → emite un link de un solo uso para entrar al panel
- * El comando /admin solo responde a perfiles ya vinculados.
+ *   - /sso, /single-sign-on, /admin → emite un link de un solo uso para el panel
+ *   - botón inline "Single Sign On" (callback_data "sso") → mismo link
+ * El login solo responde a perfiles ya vinculados.
  */
 export async function POST(request: Request) {
   const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -36,6 +38,14 @@ export async function POST(request: Request) {
   const bot: BotKind = new URL(request.url).searchParams.get("bot") === "agent" ? "agent" : "store";
 
   const update = await request.json().catch(() => null);
+
+  // ---- Botones inline (callback_query): "Single Sign On" ----
+  const callback = update?.callback_query;
+  if (callback) {
+    await handleCallbackQuery(callback, bot);
+    return NextResponse.json({ ok: true });
+  }
+
   const message = update?.message;
   const chatId = message?.chat?.id;
 
@@ -45,6 +55,8 @@ export async function POST(request: Request) {
 
   const text: string = (message?.text || "").trim();
   const from = message?.from as TelegramUser | undefined;
+  // Comando base sin args ni "@botname": /sso, /single-sign-on, /admin
+  const command = text.split(/\s+/)[0].split("@")[0].toLowerCase();
 
   // ---- Login de admin (solo bot agent) ----
   if (bot === "agent" && from) {
@@ -52,7 +64,7 @@ export async function POST(request: Request) {
       await handleLinkCommand(chatId, text.slice("/start link_".length), from, bot);
       return NextResponse.json({ ok: true });
     }
-    if (text === "/admin" || text.startsWith("/admin")) {
+    if (command === "/sso" || command === "/single-sign-on" || command === "/admin") {
       await handleAdminLogin(chatId, from, bot);
       return NextResponse.json({ ok: true });
     }
@@ -92,7 +104,7 @@ async function handleLinkCommand(
 
   await sendTelegramMessage(
     chatId,
-    "✅ <b>Account linked.</b>\n\nYour menu button now opens the <b>Admin Panel</b>. You can also use /admin to get a browser login link.",
+    "✅ <b>Account linked.</b>\n\nYour menu button now opens the <b>Admin Panel</b>. You can also use /sso (single sign-on) to get a browser login link.",
     { reply_markup: { inline_keyboard: adminButtons() } },
     bot
   );
@@ -131,7 +143,7 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
 
   await sendTelegramMessage(
     chatId,
-    "🔐 Your access link (valid for 60 seconds):",
+    "🔐 <b>Single sign-on</b>\n\nYour access link (valid for 5 minutes):\n\n<i>The panel session lasts ~2 hours — when it expires, send /sso for a fresh link.</i>",
     {
       reply_markup: {
         inline_keyboard: [[{ text: "🔐 Open panel →", url: `${base}/api/auth/tg-login?token=${token}` }]],
@@ -141,12 +153,33 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
   );
 }
 
-/** Botones de admin: panel embebido (web_app). El link de acceso va por /admin. */
+/**
+ * Botones de admin: panel embebido (web_app) + "Single Sign On" (callback que
+ * genera un link de login nuevo, manejado en handleCallbackQuery).
+ */
 function adminButtons(): Array<Array<Record<string, unknown>>> {
   try {
-    return [[{ text: "🖥 Admin Panel", web_app: { url: getAdminMiniAppUrl() } }]];
+    return [
+      [{ text: "🖥 Admin Panel", web_app: { url: getAdminMiniAppUrl() } }],
+      [{ text: "🔐 Single Sign On", callback_data: "sso" }],
+    ];
   } catch {
     return [];
+  }
+}
+
+/** Maneja los botones inline. "sso" → emite un link de login fresco. */
+async function handleCallbackQuery(
+  // biome-ignore lint/suspicious/noExplicitAny: Telegram update shape
+  callback: any,
+  bot: BotKind
+): Promise<void> {
+  await answerCallbackQuery(callback?.id, bot);
+  const chatId = callback?.message?.chat?.id;
+  const from = callback?.from as TelegramUser | undefined;
+  if (!chatId || !from) return;
+  if (bot === "agent" && callback?.data === "sso") {
+    await handleAdminLogin(chatId, from, bot);
   }
 }
 

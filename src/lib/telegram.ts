@@ -130,6 +130,23 @@ export async function sendTelegramMessage(
   }
 }
 
+/** Responde a un callback_query (quita el "reloj" de carga del botón inline). */
+export async function answerCallbackQuery(
+  callbackQueryId: string,
+  bot: BotKind = "store",
+  text?: string
+): Promise<void> {
+  try {
+    await tgApi(
+      "answerCallbackQuery",
+      { callback_query_id: callbackQueryId, ...(text ? { text } : {}) },
+      bot
+    );
+  } catch (err) {
+    console.error("[Telegram] answerCallbackQuery failed:", err instanceof Error ? err.message : err);
+  }
+}
+
 /** Bot a usar para notificar a un customer según su tipo (agents usan el bot manager). */
 export function botForCustomerType(customerType?: string | null): BotKind {
   return customerType === "agent" && process.env.TELEGRAM_AGENT_BOT_TOKEN ? "agent" : "store";
