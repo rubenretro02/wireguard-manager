@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import { toast } from "sonner";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import {
   Bell,
   Clock,
@@ -24,14 +25,23 @@ import {
 } from "lucide-react";
 
 /* ============ Telegram WebApp types (mínimas) ============ */
+interface TelegramBackButton {
+  show: () => void;
+  hide: () => void;
+  onClick: (cb: () => void) => void;
+  offClick: (cb: () => void) => void;
+}
 interface TelegramWebApp {
   initData: string;
   ready: () => void;
   expand: () => void;
+  /** Bot API 7.7+ — prevents the swipe-down-to-close gesture. */
+  disableVerticalSwipes?: () => void;
   openLink: (url: string) => void;
   openTelegramLink?: (url: string) => void;
   HapticFeedback?: { notificationOccurred: (type: "error" | "success" | "warning") => void };
   colorScheme?: "light" | "dark";
+  BackButton?: TelegramBackButton;
 }
 
 const SUPPORT_BOT = process.env.NEXT_PUBLIC_SUPPORT_BOT || "blackgoatsupport_bot";
@@ -215,6 +225,8 @@ export default function TgMiniApp() {
         clearInterval(interval);
         tg.ready();
         tg.expand();
+        // Impedir el cierre por swipe: un scroll accidental no cierra la app.
+        tg.disableVerticalSwipes?.();
         initDataRef.current = tg.initData;
         setWebApp(tg);
       } else if (tries > 25) {
@@ -228,9 +240,18 @@ export default function TgMiniApp() {
 
   useEffect(() => {
     if (!webApp) return;
+    let redirecting = false;
     (async () => {
       try {
-        const { customer } = await tgFetch("/api/tg/auth", { method: "POST" });
+        const { customer, isAdmin } = await tgFetch("/api/tg/auth", { method: "POST" });
+        // Admin/semi-admin: entrar directo al panel admin embebido (crea sesión y
+        // abre /dashboard), sin pasar por la tienda de cliente. Dejamos el loader
+        // puesto durante la redirección.
+        if (isAdmin) {
+          redirecting = true;
+          window.location.replace("/tg/admin");
+          return;
+        }
         setCustomer(customer);
         const jobs: Promise<unknown>[] = [refreshPeers()];
         // Agents no ven la tienda: no cargamos planes
@@ -241,10 +262,34 @@ export default function TgMiniApp() {
       } catch (err) {
         if (!banned) toast.error(err instanceof Error ? err.message : "Connection error");
       } finally {
-        setLoading(false);
+        if (!redirecting) setLoading(false);
       }
     })();
   }, [webApp, tgFetch, refreshPeers, banned]);
+
+  /* ============ Botón Back nativo (estilo BotFather) ============ */
+  // Telegram muestra "Close" en el Dashboard sin modales, y "‹ Back" cuando hay
+  // un modal abierto o estás en otro tab. Back cierra el modal o vuelve al
+  // Dashboard, en vez de cerrar la app.
+  useEffect(() => {
+    const back = webApp?.BackButton;
+    if (!back) return;
+    const modalOpen = !!(configPeer || renewPeer || renameTarget);
+    const showBack = modalOpen || tab !== "dashboard";
+    const onBack = () => {
+      if (configPeer) setConfigPeer(null);
+      else if (renewPeer) setRenewPeer(null);
+      else if (renameTarget) setRenameTarget(null);
+      else if (tab !== "dashboard") setTab("dashboard");
+    };
+    if (showBack) {
+      back.onClick(onBack);
+      back.show();
+    } else {
+      back.hide();
+    }
+    return () => back.offClick(onBack);
+  }, [webApp, tab, configPeer, renewPeer, renameTarget]);
 
   /* ============ QR del config ============ */
   useEffect(() => {
@@ -463,6 +508,9 @@ export default function TgMiniApp() {
 
   return (
     <div className="min-h-screen pb-20 max-w-lg mx-auto">
+      {/* Pull-to-refresh: refresco suave del tab actual (no recarga la página) */}
+      <PullToRefresh onRefresh={() => refreshCurrent(true)} />
+
       {/* Header */}
       <header className="px-4 pt-5 pb-3 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
