@@ -1,11 +1,9 @@
 import { NextResponse } from "next/server";
 import {
   answerCallbackQuery,
-  getAdminMiniAppUrl,
   getMiniAppUrl,
   sendTelegramMessage,
   setAdminMenuButton,
-  tgApi,
   type BotKind,
   type TelegramUser,
 } from "@/lib/telegram";
@@ -105,8 +103,8 @@ async function handleLinkCommand(
 
   await sendTelegramMessage(
     chatId,
-    "✅ <b>Account linked.</b>\n\nYour menu button now opens the <b>Admin Panel</b>. Tap <b>🛠 Admin</b> below for the panel or single sign-on (or use /sso).",
-    { reply_markup: { inline_keyboard: adminWelcomeKeyboard(false) } },
+    "✅ <b>Account linked.</b>\n\nYour menu button now opens the <b>Admin Panel</b>. Tap <b>🔐 Single Sign On</b> below for a browser login link (or use /sso).",
+    { reply_markup: { inline_keyboard: adminWelcomeKeyboard() } },
     bot
   );
 }
@@ -159,37 +157,22 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
 }
 
 /**
- * Teclado del mensaje de bienvenida para admins vinculados, con un submenú
- * inline expandible: colapsado muestra "🛠 Admin"; al tocarlo (callback
- * admin_menu) se expande a "Admin Panel" (web_app) + "Single Sign On" (callback)
- * + "‹ Back" (callback admin_back). "Open App" siempre va arriba.
+ * Teclado de bienvenida para admins vinculados: "Open App" + un botón directo
+ * "🔐 Single Sign On" (callback "sso" → emite el link de login). El panel
+ * embebido sigue disponible en el botón de menú azul del chat.
  */
-function adminWelcomeKeyboard(expanded: boolean): Array<Array<Record<string, unknown>>> {
+function adminWelcomeKeyboard(): Array<Array<Record<string, unknown>>> {
   const rows: Array<Array<Record<string, unknown>>> = [];
   try {
     rows.push([{ text: "🚀 Open App", web_app: { url: getMiniAppUrl() } }]);
   } catch {
     /* NEXT_PUBLIC_APP_URL ausente: omitir */
   }
-  if (expanded) {
-    try {
-      rows.push([{ text: "🖥 Admin Panel", web_app: { url: getAdminMiniAppUrl() } }]);
-    } catch {
-      /* omitir */
-    }
-    rows.push([{ text: "🔐 Single Sign On", callback_data: "sso" }]);
-    rows.push([{ text: "‹ Back", callback_data: "admin_back" }]);
-  } else {
-    rows.push([{ text: "🛠 Admin", callback_data: "admin_menu" }]);
-  }
+  rows.push([{ text: "🔐 Single Sign On", callback_data: "sso" }]);
   return rows;
 }
 
-/**
- * Maneja los botones inline (solo bot agent):
- *   - admin_menu / admin_back → expande/colapsa el submenú (edita el teclado)
- *   - sso                     → emite un link de login fresco
- */
+/** Maneja los botones inline (solo bot agent). "sso" → emite un link fresco. */
 async function handleCallbackQuery(
   // biome-ignore lint/suspicious/noExplicitAny: Telegram update shape
   callback: any,
@@ -197,30 +180,11 @@ async function handleCallbackQuery(
 ): Promise<void> {
   await answerCallbackQuery(callback?.id, bot);
   const chatId = callback?.message?.chat?.id;
-  const messageId = callback?.message?.message_id;
   const from = callback?.from as TelegramUser | undefined;
-  const data = callback?.data;
   if (!chatId || !from || bot !== "agent") return;
 
-  if (data === "sso") {
+  if (callback?.data === "sso") {
     await handleAdminLogin(chatId, from, bot);
-    return;
-  }
-
-  if (data === "admin_menu" || data === "admin_back") {
-    try {
-      await tgApi(
-        "editMessageReplyMarkup",
-        {
-          chat_id: chatId,
-          message_id: messageId,
-          reply_markup: { inline_keyboard: adminWelcomeKeyboard(data === "admin_menu") },
-        },
-        bot
-      );
-    } catch (err) {
-      console.error("[TelegramWebhook] editMessageReplyMarkup failed:", err instanceof Error ? err.message : err);
-    }
   }
 }
 
@@ -239,17 +203,13 @@ async function sendDefaultWelcome(
   }
 
   const firstName = from?.first_name || "";
-  const greeting = `👋 Hi${firstName ? ` <b>${firstName}</b>` : ""}!`;
-  const text =
-    bot === "agent"
-      ? `${greeting}\n\nFrom the app you can <b>manage your VPN peers</b>: check live status, see how much time is left, download your WireGuard config and rotate your keys.`
-      : `${greeting}\n\nFrom the app you can <b>buy your VPN access</b>, check your peers' status, download your WireGuard config and renew your service paying with crypto.`;
+  const text = `👋 Hi${firstName ? ` <b>${firstName}</b>` : ""}!`;
 
-  // Admin vinculado (bot agent): teclado con el submenú "🛠 Admin" colapsado, y
-  // su botón de menú apunta al panel. El resto: solo "Open App".
+  // Admin vinculado (bot agent): "Open App" + "🔐 Single Sign On", y su botón de
+  // menú apunta al panel. El resto: solo "Open App".
   const isLinkedAdmin = bot === "agent" && !!from && !!(await getProfileByTelegramId(from.id));
   const keyboard: Array<Array<Record<string, unknown>>> = isLinkedAdmin
-    ? adminWelcomeKeyboard(false)
+    ? adminWelcomeKeyboard()
     : [[{ text: "🚀 Open App", web_app: { url: appUrl } }]];
   if (isLinkedAdmin) {
     await setAdminMenuButton(chatId, bot);
