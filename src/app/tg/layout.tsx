@@ -1,4 +1,3 @@
-import Script from "next/script";
 import type { Metadata, Viewport } from "next";
 
 export const metadata: Metadata = {
@@ -14,10 +13,6 @@ export const viewport: Viewport = {
 };
 
 export default function TgLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <>
-      <Script src="https://telegram.org/js/telegram-web-app.js" strategy="afterInteractive" />
-      {children}
-    </>
-  );
+  // The Telegram WebApp SDK is loaded app-wide in the root layout.
+  return <>{children}</>;
 }

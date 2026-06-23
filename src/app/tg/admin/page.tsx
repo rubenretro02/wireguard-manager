@@ -55,7 +55,9 @@ export default function TgAdminLoginPage() {
         }
         setState({ kind: "ok" });
         // La cookie de sesión ya está seteada: cargar el panel en el webview.
-        window.location.replace("/dashboard");
+        // Conservamos el hash (#tgWebAppData…) para que el SDK en /dashboard
+        // detecte que está dentro de Telegram y desactive el swipe-to-close.
+        window.location.replace("/dashboard" + window.location.hash);
       } catch {
         setState({ kind: "error", message: "Network error. Please try again." });
       }
