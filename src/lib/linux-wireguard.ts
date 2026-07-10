@@ -650,9 +650,12 @@ export class LinuxWireGuardClient {
         return { success: true };
       }
 
-      // Add the NAT rule
+      // Insert at the top (not -A/append): a source-restricted SNAT must be evaluated
+      // BEFORE any catch-all `-o <iface> -j MASQUERADE` (e.g. from other interfaces'
+      // PostUp). Appended after such a rule, it would be shadowed and every peer would
+      // exit on the primary IP instead of its assigned public IP.
       await this.executeCommand(
-        `iptables -t nat -A POSTROUTING -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress}`
+        `iptables -t nat -I POSTROUTING 1 -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress}`
       );
 
       // Save iptables rules for persistence
