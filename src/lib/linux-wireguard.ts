@@ -650,9 +650,12 @@ export class LinuxWireGuardClient {
         return { success: true };
       }
 
-      // Add the NAT rule
+      // Insert at the top (not -A/append): a source-restricted SNAT must be evaluated
+      // BEFORE any catch-all `-o <iface> -j MASQUERADE` (e.g. from other interfaces'
+      // PostUp). Appended after such a rule, it would be shadowed and every peer would
+      // exit on the primary IP instead of its assigned public IP.
       await this.executeCommand(
-        `iptables -t nat -A POSTROUTING -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress}`
+        `iptables -t nat -I POSTROUTING 1 -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress}`
       );
 
       // Save iptables rules for persistence
@@ -1067,7 +1070,11 @@ export class LinuxWireGuardClient {
       return { success: false, error: "Listen port already in use", details: `Port ${listenPort} is used by ${portTaken.name}` };
     }
 
-    const conf = `[Interface]\nPrivateKey = ${privateKey}\nAddress = ${address}\nListenPort = ${listenPort}\n`;
+    // Include FORWARD rules in PostUp/PostDown so the interface routes traffic even when
+    // the host's FORWARD policy is DROP (e.g. servers running Docker). Harmless when it's ACCEPT.
+    const conf = `[Interface]\nPrivateKey = ${privateKey}\nAddress = ${address}\nListenPort = ${listenPort}\n` +
+      `PostUp = iptables -A FORWARD -i ${name} -j ACCEPT; iptables -A FORWARD -o ${name} -j ACCEPT;\n` +
+      `PostDown = iptables -D FORWARD -i ${name} -j ACCEPT; iptables -D FORWARD -o ${name} -j ACCEPT;\n`;
     const b64 = Buffer.from(conf, "utf-8").toString("base64");
     const confPath = `/etc/wireguard/${name}.conf`;
 
