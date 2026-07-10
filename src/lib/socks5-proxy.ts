@@ -260,15 +260,18 @@ export class Socks5ProxyClient {
       // Wait for any existing apt/dpkg locks to be released
       await this.executeCommand("fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && sleep 5 || true");
 
-      // Try to install from repos first, if not available compile from source
+      // Try to install from repos first, if not available compile from source.
+      // Wrap compound commands in `bash -c "..."` so sudo applies to the WHOLE chain —
+      // otherwise `sudo -n a && b` only runs `a` as root and `b` fails with a dpkg lock
+      // permission error ("are you root?").
       try {
-        await this.executeCommand("apt-get update && apt-get install -y 3proxy");
+        await this.executeCommand(`bash -c "apt-get update && apt-get install -y 3proxy"`);
       } catch {
         // 3proxy not in repos, install from source
         console.log("[Socks5] 3proxy not in repos, compiling from source...");
-        await this.executeCommand("apt-get update && apt-get install -y build-essential git");
-        await this.executeCommand("cd /tmp && rm -rf 3proxy && git clone https://github.com/3proxy/3proxy.git");
-        await this.executeCommand("cd /tmp/3proxy && make -f Makefile.Linux && make -f Makefile.Linux install");
+        await this.executeCommand(`bash -c "apt-get update && apt-get install -y build-essential git"`);
+        await this.executeCommand(`bash -c "cd /tmp && rm -rf 3proxy && git clone https://github.com/3proxy/3proxy.git"`);
+        await this.executeCommand(`bash -c "cd /tmp/3proxy && make -f Makefile.Linux && make -f Makefile.Linux install"`);
       }
 
       // Create config directory
