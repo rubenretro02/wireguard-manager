@@ -1067,7 +1067,11 @@ export class LinuxWireGuardClient {
       return { success: false, error: "Listen port already in use", details: `Port ${listenPort} is used by ${portTaken.name}` };
     }
 
-    const conf = `[Interface]\nPrivateKey = ${privateKey}\nAddress = ${address}\nListenPort = ${listenPort}\n`;
+    // Include FORWARD rules in PostUp/PostDown so the interface routes traffic even when
+    // the host's FORWARD policy is DROP (e.g. servers running Docker). Harmless when it's ACCEPT.
+    const conf = `[Interface]\nPrivateKey = ${privateKey}\nAddress = ${address}\nListenPort = ${listenPort}\n` +
+      `PostUp = iptables -A FORWARD -i ${name} -j ACCEPT; iptables -A FORWARD -o ${name} -j ACCEPT;\n` +
+      `PostDown = iptables -D FORWARD -i ${name} -j ACCEPT; iptables -D FORWARD -o ${name} -j ACCEPT;\n`;
     const b64 = Buffer.from(conf, "utf-8").toString("base64");
     const confPath = `/etc/wireguard/${name}.conf`;
 
