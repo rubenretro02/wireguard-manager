@@ -386,8 +386,10 @@ allow *
       // Restart 3proxy
       await this.executeCommand("sudo pkill -9 3proxy 2>/dev/null; sleep 1; sudo systemctl start 3proxy");
 
-      // Ensure firewall allows port 1080
-      await this.executeCommand("iptables -C INPUT -p tcp --dport 1080 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 1080 -j ACCEPT");
+      // Ensure firewall allows port 1080. Wrap in `bash -c "..."` so sudo applies to the
+      // whole `-C || -I` chain — otherwise the `iptables -I` fallback runs unprivileged and
+      // fails with "Permission denied (you must be root)".
+      await this.executeCommand(`bash -c "iptables -C INPUT -p tcp --dport 1080 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 1080 -j ACCEPT"`);
 
       return { success: true, message: `Config rebuilt with ${proxies.length} proxies` };
     } catch (error) {
