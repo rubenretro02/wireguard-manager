@@ -209,6 +209,7 @@ export default function Socks5Page() {
 
   // Active connections state (real-time)
   const [activeConnections, setActiveConnections] = useState<Record<string, number>>({});
+  const [traffic, setTraffic] = useState<Record<string, { rx: number; tx: number }>>({});
 
   // Proxy details dialog state
   const [detailsDialogOpen, setDetailsDialogOpen] = useState(false);
@@ -493,6 +494,9 @@ export default function Socks5Page() {
 
       if (data.success && data.activeConnections) {
         setActiveConnections(data.activeConnections);
+      }
+      if (data.success && data.traffic) {
+        setTraffic(data.traffic);
       }
     } catch (error) {
       console.error("Error fetching active connections:", error);
@@ -1551,11 +1555,11 @@ export default function Socks5Page() {
                           <div className="flex flex-col gap-0.5">
                             <div className="flex items-center gap-1">
                               <ArrowUp className="w-3 h-3 text-emerald-400" />
-                              <span className="text-emerald-400 text-xs">{formatBytes(proxy.bytes_sent)}</span>
+                              <span className="text-emerald-400 text-xs">{formatBytes(traffic[proxy.public_ip]?.tx ?? proxy.bytes_sent)}</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <ArrowUp className="w-3 h-3 text-blue-400 rotate-180" />
-                              <span className="text-blue-400 text-xs">{formatBytes(proxy.bytes_received)}</span>
+                              <span className="text-blue-400 text-xs">{formatBytes(traffic[proxy.public_ip]?.rx ?? proxy.bytes_received)}</span>
                             </div>
                           </div>
                         </TableCell>

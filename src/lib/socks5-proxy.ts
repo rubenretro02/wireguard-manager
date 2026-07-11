@@ -342,6 +342,8 @@ auth strong
 `;
         await this.executeCommand(`echo '${emptyConfig}' | sudo tee /etc/3proxy/3proxy.cfg`);
         await this.executeCommand("sudo systemctl restart 3proxy 2>/dev/null || sudo pkill 3proxy 2>/dev/null || true");
+        // Clear the traffic-accounting chain so a deleted last proxy leaves no stale rules.
+        await this.executeCommand(`bash -c "iptables -N SOCKS5_ACCT 2>/dev/null || true; iptables -F SOCKS5_ACCT"`);
         return { success: true, message: "Config cleared - no proxies" };
       }
 
@@ -390,6 +392,18 @@ allow *
       // whole `-C || -I` chain — otherwise the `iptables -I` fallback runs unprivileged and
       // fails with "Permission denied (you must be root)".
       await this.executeCommand(`bash -c "iptables -C INPUT -p tcp --dport 1080 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 1080 -j ACCEPT"`);
+
+      // Per-proxy byte accounting (analogous to wg's rx/tx counters). Each proxy has a
+      // dedicated public IP, so per-IP counters map 1:1 to proxies. A dedicated non-terminating
+      // chain SOCKS5_ACCT (no -j target — only bumps counters, never alters packet fate) is
+      // jumped from INPUT (rx: client->proxy) and OUTPUT (tx: proxy->client), scoped to tcp:1080
+      // so it never overlaps WireGuard's nat/FORWARD traffic. Flush-and-re-add reconciles the
+      // rules every rebuild (consistent: rebuild already restarts 3proxy and drops connections).
+      // The whole compound chain lives in one `bash -c` so sudo covers every sub-command.
+      const acctRules = proxies
+        .map(p => `iptables -A SOCKS5_ACCT -p tcp -d ${p.publicIp} --dport 1080; iptables -A SOCKS5_ACCT -p tcp -s ${p.publicIp} --sport 1080`)
+        .join("; ");
+      await this.executeCommand(`bash -c "iptables -N SOCKS5_ACCT 2>/dev/null || true; iptables -C INPUT -j SOCKS5_ACCT 2>/dev/null || iptables -I INPUT -j SOCKS5_ACCT; iptables -C OUTPUT -j SOCKS5_ACCT 2>/dev/null || iptables -I OUTPUT -j SOCKS5_ACCT; iptables -F SOCKS5_ACCT; ${acctRules}"`);
 
       return { success: true, message: `Config rebuilt with ${proxies.length} proxies` };
     } catch (error) {
@@ -616,6 +630,44 @@ allow *
       return connections;
     } catch (error) {
       console.error("[Socks5] getActiveConnections error:", error);
+      return {};
+    }
+  }
+
+  /**
+   * Read live per-public-IP traffic counters from the SOCKS5_ACCT iptables chain.
+   * Returns a map of public_ip -> { rx, tx } in raw bytes. rx = client->proxy (dport 1080),
+   * tx = proxy->client (sport 1080). Counters are live and reset on reboot / config rebuild,
+   * same semantics as wg's rx/tx. Fails soft (returns {}) if the chain or 3proxy is absent.
+   */
+  async getTraffic(): Promise<Record<string, { rx: number; tx: number }>> {
+    try {
+      // -x = exact byte counts, -n = numeric, -v = show pkts/bytes columns
+      const result = await this.executeCommand("iptables -t filter -nvxL SOCKS5_ACCT", true);
+      const traffic: Record<string, { rx: number; tx: number }> = {};
+
+      for (const line of result.split("\n")) {
+        const isRx = line.includes("dpt:1080");
+        const isTx = line.includes("spt:1080");
+        if (!isRx && !isTx) continue;
+
+        const fields = line.trim().split(/\s+/);
+        // Columns: pkts bytes target prot opt in out source destination ...
+        const bytes = parseInt(fields[1], 10);
+        // The proxy IP is the single non-wildcard IPv4 token on the line.
+        const ip = fields.find(
+          f => /^\d{1,3}(\.\d{1,3}){3}$/.test(f) && f !== "0.0.0.0/0"
+        );
+        if (!ip || isNaN(bytes)) continue;
+
+        if (!traffic[ip]) traffic[ip] = { rx: 0, tx: 0 };
+        if (isRx) traffic[ip].rx += bytes;
+        else traffic[ip].tx += bytes;
+      }
+
+      return traffic;
+    } catch (error) {
+      console.error("[Socks5] getTraffic error:", error);
       return {};
     }
   }

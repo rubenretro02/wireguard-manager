@@ -770,29 +770,43 @@ export async function POST(request: Request) {
       }
 
       case "getActiveConnections": {
-        // Get active connections per IP from the server
-        const activeConnections = await socks5Client.getActiveConnections();
+        // Get active connections + live traffic counters per IP from the server
+        const [activeConnections, traffic] = await Promise.all([
+          socks5Client.getActiveConnections(),
+          socks5Client.getTraffic(),
+        ]);
 
-        // Update last_connected_at for proxies with active connections
+        // Persist live traffic snapshot + refresh last_connected_at.
         const { data: proxies } = await supabase
           .from("socks5_proxies")
-          .select("id, public_ip")
+          .select("id, public_ip, bytes_sent, bytes_received")
           .eq("router_id", routerId);
 
         if (proxies) {
+          const now = new Date().toISOString();
           for (const proxy of proxies) {
-            if (activeConnections[proxy.public_ip] && activeConnections[proxy.public_ip] > 0) {
-              await supabase
-                .from("socks5_proxies")
-                .update({ last_connected_at: new Date().toISOString() })
-                .eq("id", proxy.id);
+            const t = traffic[proxy.public_ip];
+            const hasSocket = (activeConnections[proxy.public_ip] || 0) > 0;
+            // Counter moved since last snapshot (or reset below stored value) => activity.
+            const counterChanged = !!t && (t.rx !== proxy.bytes_received || t.tx !== proxy.bytes_sent);
+            const update: Record<string, unknown> = {};
+            if (t) {
+              update.bytes_received = t.rx;
+              update.bytes_sent = t.tx;
+            }
+            if (hasSocket || counterChanged) {
+              update.last_connected_at = now;
+            }
+            if (Object.keys(update).length > 0) {
+              await supabase.from("socks5_proxies").update(update).eq("id", proxy.id);
             }
           }
         }
 
         return NextResponse.json({
           success: true,
-          activeConnections
+          activeConnections,
+          traffic,
         });
       }
 
