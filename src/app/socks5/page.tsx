@@ -237,13 +237,16 @@ export default function Socks5Page() {
   const socksCountByIp = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const proxy of proxies) {
+      // Scope to proxies the current user may see (owner or admin), so the IP-picker
+      // badge doesn't leak the existence of other users' proxies.
+      if (!isAdmin && proxy.created_by !== currentUser?.id) continue;
       const ip = proxy.public_ip;
       if (ip) {
         counts[ip] = (counts[ip] || 0) + 1;
       }
     }
     return counts;
-  }, [proxies]);
+  }, [proxies, isAdmin, currentUser?.id]);
 
   // Creator emails map
   const [creatorEmails, setCreatorEmails] = useState<Record<string, string>>({});
@@ -620,6 +623,10 @@ export default function Socks5Page() {
         const counts: Record<string, number> = {};
         const grouped: Record<string, Array<{ id: string; name: string; address: string; disabled: boolean }>> = {};
         for (const peer of data.peers) {
+          // Scope to peers the current user is allowed to see (owner or admin), same
+          // predicate the page already uses for proxies. Prevents leaking the count and
+          // names of other users' peers in the IP picker / "Peers using X" modal.
+          if (!isAdmin && peer.created_by_user_id !== currentUser?.id) continue;
           const comment = peer.comment || "";
           if (comment) {
             counts[comment] = (counts[comment] || 0) + 1;
@@ -638,7 +645,7 @@ export default function Socks5Page() {
     } catch (err) {
       console.error("Failed to fetch peer counts:", err);
     }
-  }, [selectedRouterId]);
+  }, [selectedRouterId, isAdmin, currentUser?.id]);
 
   useEffect(() => {
     if (selectedRouterId) {
@@ -1493,9 +1500,19 @@ export default function Socks5Page() {
                         key={proxy.id}
                         className={`table-row-hover border-border ${expired ? "opacity-60" : ""} ${!canManage ? "opacity-70" : ""}`}
                       >
-                        {/* Name Column */}
+                        {/* Name Column — clickable to open proxy details/config (like peers) */}
                         <TableCell className="font-medium">
-                          <span>{proxy.name || "-"}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedProxyForDetails(proxy);
+                              setDetailsDialogOpen(true);
+                            }}
+                            className="text-left hover:text-emerald-400 hover:underline transition-colors cursor-pointer"
+                            title="View proxy details"
+                          >
+                            {proxy.name || "-"}
+                          </button>
                         </TableCell>
 
                         {/* Username Column */}
