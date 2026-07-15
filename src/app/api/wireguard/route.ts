@@ -188,6 +188,8 @@ export async function POST(request: Request) {
               disabled: false,
               name: stored?.name || fallbackName || "",
               comment: stored?.comment || stored?.public_ip || "",
+              created_by_user_id: stored?.created_by_user_id,
+              created_by_email: stored?.created_by_email,
             };
           });
 
@@ -209,6 +211,8 @@ export async function POST(request: Request) {
               disabled: true,
               name: stored.name || "",
               comment: stored.comment || stored.public_ip || "",
+              created_by_user_id: stored.created_by_user_id,
+              created_by_email: stored.created_by_email,
             }));
 
           return NextResponse.json({ peers: [...formattedPeers, ...disabledPeers] });
