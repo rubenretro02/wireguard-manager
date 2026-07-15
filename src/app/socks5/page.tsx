@@ -1498,21 +1498,15 @@ export default function Socks5Page() {
                     return (
                       <TableRow
                         key={proxy.id}
-                        className={`table-row-hover border-border ${expired ? "opacity-60" : ""} ${!canManage ? "opacity-70" : ""}`}
+                        onClick={() => {
+                          setSelectedProxyForDetails(proxy);
+                          setDetailsDialogOpen(true);
+                        }}
+                        className={`table-row-hover border-border cursor-pointer ${expired ? "opacity-60" : ""} ${!canManage ? "opacity-70" : ""}`}
                       >
-                        {/* Name Column — clickable to open proxy details/config (like peers) */}
+                        {/* Name Column — row is clickable to open proxy details/config (like peers) */}
                         <TableCell className="font-medium">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedProxyForDetails(proxy);
-                              setDetailsDialogOpen(true);
-                            }}
-                            className="text-left hover:text-emerald-400 hover:underline transition-colors cursor-pointer"
-                            title="View proxy details"
-                          >
-                            {proxy.name || "-"}
-                          </button>
+                          {proxy.name || "-"}
                         </TableCell>
 
                         {/* Username Column */}
@@ -1618,7 +1612,7 @@ export default function Socks5Page() {
                         </TableCell>
 
                         {/* Actions Column */}
-                        <TableCell className="text-right">
+                        <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1">
                             {/* View proxy details */}
                             <Button
