@@ -166,9 +166,6 @@ export default function DashboardPage() {
   const [expirationValue, setExpirationValue] = useState<number>(24);
   const [expirationUnit, setExpirationUnit] = useState<TimeUnit>("hours");
 
-  // View config dialog
-  const [viewConfigOpen, setViewConfigOpen] = useState(false);
-  const [selectedPeer, setSelectedPeer] = useState<PeerWithMetadata | null>(null);
 
   // Edit mode in view dialog (WireGuard PC App style)
   const [dialogEditMode, setDialogEditMode] = useState(false);
@@ -2698,7 +2695,7 @@ PersistentKeepalive = 25`;
 
       {/* Peer Management Dialog - WireGuard PC App Style */}
       <Dialog open={peerManageOpen} onOpenChange={setPeerManageOpen}>
-        <DialogContent className="bg-card border-border max-w-2xl">
+        <DialogContent className="bg-card border-border max-w-2xl z-[10001]">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
               <span>{managingPeer?.name || "Peer Configuration"}</span>
@@ -3189,7 +3186,7 @@ PersistentKeepalive = 25"
 
       {/* Peers by IP Modal (from IP selector) */}
       <Dialog open={ipPeersModalOpen} onOpenChange={setIpPeersModalOpen}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col z-[10000]">
           <DialogHeader>
             <DialogTitle>Peers using {selectedIpForModal}</DialogTitle>
             <DialogDescription>
@@ -3210,9 +3207,7 @@ PersistentKeepalive = 25"
                       isDisabled ? "border-red-500/30 bg-red-500/5" : "border-border bg-card"
                     } hover:bg-accent/50 cursor-pointer transition-colors`}
                     onClick={() => {
-                      setSelectedPeer(peer);
-                      setViewConfigOpen(true);
-                      setIpPeersModalOpen(false);
+                      openPeerManagement(peer, "view");
                     }}
                   >
                     <div className="flex items-center justify-between">
@@ -3235,12 +3230,7 @@ PersistentKeepalive = 25"
                           className="h-8 w-8 text-cyan-500 hover:text-cyan-400 hover:bg-cyan-500/20 hover:scale-110 transition-all duration-150"
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Close modal first, then open config with delay
-                            setIpPeersModalOpen(false);
-                            setTimeout(() => {
-                              setSelectedPeer(peer);
-                              setViewConfigOpen(true);
-                            }, 100);
+                            openPeerManagement(peer, "view");
                           }}
                           title="View config"
                         >
