@@ -53,8 +53,10 @@ import {
   TrendingDown,
   Network,
   UserPlus,
-  Loader2
+  Loader2,
+  QrCode
 } from "lucide-react";
+import QRCodeLib from "qrcode";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities, TimeUnit, UserIpAccess } from "@/lib/types";
 
@@ -190,6 +192,10 @@ export default function DashboardPage() {
   const [peerManageOpen, setPeerManageOpen] = useState(false);
   const [managingPeer, setManagingPeer] = useState<PeerWithMetadata | null>(null);
   const [peerAction, setPeerAction] = useState<"edit" | "view" | null>(null);
+
+  // QR config dialog
+  const [qrPeer, setQrPeer] = useState<PeerWithMetadata | null>(null);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
 
   // Renew peer dialog (for expired peers)
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
@@ -1888,6 +1894,14 @@ Endpoint = ${endpointHost}:${listenPort}
 PersistentKeepalive = 25`;
   };
 
+  const openQr = (peer: PeerWithMetadata) => {
+    setQrPeer(peer);
+    setQrDataUrl(null);
+    QRCodeLib.toDataURL(generateConfig(peer), { width: 320, margin: 1, color: { dark: "#000000", light: "#ffffff" } })
+      .then(setQrDataUrl)
+      .catch(() => toast.error("Failed to generate QR"));
+  };
+
   const downloadConfig = (peer: WireGuardPeer) => {
     const config = generateConfig(peer);
     const blob = new Blob([config], { type: "text/plain" });
@@ -2388,6 +2402,14 @@ PersistentKeepalive = 25`;
                                 title="Download config"
                               >
                                 <Download className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => openQr(peer)}
+                                title="Show QR code"
+                              >
+                                <QrCode className="w-4 h-4" />
                               </Button>
                               <Button
                                 variant="ghost"
@@ -3179,6 +3201,37 @@ PersistentKeepalive = 25"
                   Save Settings
                 </>
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* QR config dialog */}
+      <Dialog open={qrPeer !== null} onOpenChange={(open) => { if (!open) { setQrPeer(null); setQrDataUrl(null); } }}>
+        <DialogContent className="bg-card border-border max-w-sm z-[10001]">
+          <DialogHeader>
+            <DialogTitle>{qrPeer?.name || "Peer"}</DialogTitle>
+            <DialogDescription>
+              Scan with the WireGuard app to import this config
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col items-center gap-3 py-2">
+            {qrDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={qrDataUrl} alt="WireGuard config QR" className="w-[280px] h-[280px] rounded-lg bg-white p-2" />
+            ) : (
+              <div className="w-[280px] h-[280px] flex items-center justify-center">
+                <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground font-mono">
+              {qrPeer?.["allowed-address"]}
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => qrPeer && downloadConfig(qrPeer)} className="gap-1">
+              <Download className="w-4 h-4" />
+              Download
             </Button>
           </DialogFooter>
         </DialogContent>
