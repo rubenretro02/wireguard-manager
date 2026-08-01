@@ -21,6 +21,7 @@ import {
   Shield,
   ShoppingCart,
   Wallet,
+  WifiOff,
   X,
 } from "lucide-react";
 
@@ -122,6 +123,14 @@ function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" });
 }
 
+function timeAgo(iso: string): string {
+  const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
+
 const STATUS_LABEL: Record<Peer["status"], string> = {
   active: "Active",
   expired: "Expired",
@@ -163,6 +172,11 @@ export default function TgMiniApp() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mainRef = useRef<HTMLElement | null>(null); // target del edge-swipe back
 
+  // Conexión caída (fallos de fondo repetidos): nota sutil, sin toasts
+  const [connLost, setConnLost] = useState(false);
+  const lastSyncRef = useRef(Date.now());
+  const refreshBusyRef = useRef(false);
+
   const initDataRef = useRef<string>("");
 
   const tgFetch = useCallback(async (path: string, options: RequestInit = {}) => {
@@ -184,8 +198,13 @@ export default function TgMiniApp() {
 
   const refreshPeers = useCallback(async () => {
     // live=1: el server consulta handshake/tráfico real (como el dashboard)
-    const { peers } = await tgFetch("/api/tg/peers?live=1");
-    setPeers(peers);
+    const { peers: fresh } = await tgFetch("/api/tg/peers?live=1");
+    // Stale-while-revalidate: si un router no contestó (live null), conservar
+    // el último estado conocido en vez de volver al spinner "Checking…".
+    setPeers((prev) => {
+      const prevById = new Map(prev.map((p) => [p.id, p]));
+      return (fresh as Peer[]).map((p) => (p.live ? p : { ...p, live: prevById.get(p.id)?.live ?? null }));
+    });
   }, [tgFetch]);
 
   const refreshPayments = useCallback(async () => {
@@ -196,27 +215,37 @@ export default function TgMiniApp() {
   // Refresca los datos del tab actual (manual = botón, con spinner y toast de error)
   const refreshCurrent = useCallback(
     async (manual: boolean) => {
+      // No apilar ciclos de fondo si el anterior sigue en vuelo (routers lentos)
+      if (!manual && refreshBusyRef.current) return;
+      refreshBusyRef.current = true;
       if (manual) setRefreshing(true);
       try {
         const jobs: Promise<unknown>[] = [refreshPeers()];
         if (tab === "buy") jobs.push(tgFetch("/api/tg/plans").then((r) => setPlans(r.plans)));
         if (tab === "payments") jobs.push(refreshPayments());
         await Promise.all(jobs);
+        lastSyncRef.current = Date.now();
+        setConnLost(false);
       } catch (err) {
         if (manual) toast.error(err instanceof Error ? err.message : "Failed to refresh");
+        // Fallos de fondo repetidos = conexión caída: nota sutil (los datos en
+        // pantalla se conservan), nunca un toast cada ciclo.
+        if (Date.now() - lastSyncRef.current > 10000) setConnLost(true);
       } finally {
         if (manual) setRefreshing(false);
+        refreshBusyRef.current = false;
       }
     },
     [tab, refreshPeers, refreshPayments, tgFetch]
   );
 
-  // Auto-refresh cada 10s
+  // Auto-refresh cada 3s, silencioso: los datos se actualizan in place, sin
+  // estados de carga (el server cachea las consultas al router ~2.5s).
   useEffect(() => {
     if (!customer) return;
     const interval = setInterval(() => {
       refreshCurrent(false);
-    }, 10000);
+    }, 3000);
     return () => clearInterval(interval);
   }, [customer, refreshCurrent]);
 
@@ -696,6 +725,14 @@ export default function TgMiniApp() {
         </div>
       )}
 
+      {/* Conexión caída: los datos en pantalla son los últimos conocidos */}
+      {connLost && (
+        <div className="mx-4 mb-3 px-3 py-2 rounded-xl bg-secondary/50 flex items-center gap-2 text-xs text-muted-foreground">
+          <WifiOff className="w-3.5 h-3.5 shrink-0" />
+          Connection lost — showing last known data
+        </div>
+      )}
+
       {/* Contenido — key={tab}: remonta con un fade (solo opacity) al cambiar de tab */}
       <main key={tab} ref={mainRef} className="px-4 space-y-3 animate-fade-in">
         {tab === "dashboard" && (
@@ -904,7 +941,12 @@ export default function TgMiniApp() {
                           ) : (
                             <>
                               <span className="inline-flex rounded-full h-2.5 w-2.5 bg-amber-500/50" />
-                              <span className="text-amber-400">Offline</span>
+                              <span className="text-amber-400">
+                                Offline
+                                {live.latestHandshake && (
+                                  <span className="text-muted-foreground"> · seen {timeAgo(live.latestHandshake)} ago</span>
+                                )}
+                              </span>
                             </>
                           )
                         ) : (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -145,6 +145,32 @@ const setInterfaceCache = (routerId: string, interfaces: WireGuardInterface[]) =
   }
 };
 
+// Last known peer list per router (persisted in localStorage, same pattern as
+// the interface cache): the table renders instantly on load and survives a
+// router/server outage — failures show as staleness, never as an empty list.
+const PEER_CACHE_KEY = "wg_peer_cache";
+
+const getPeerCache = (routerId: string): PeerWithMetadata[] => {
+  if (typeof window === "undefined") return [];
+  try {
+    const cache = JSON.parse(localStorage.getItem(PEER_CACHE_KEY) || "{}");
+    return cache[routerId] || [];
+  } catch {
+    return [];
+  }
+};
+
+const setPeerCache = (routerId: string, peers: PeerWithMetadata[]) => {
+  if (typeof window === "undefined") return;
+  try {
+    const cache = JSON.parse(localStorage.getItem(PEER_CACHE_KEY) || "{}");
+    cache[routerId] = peers;
+    localStorage.setItem(PEER_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Ignore localStorage errors (quota)
+  }
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -163,6 +189,11 @@ export default function DashboardPage() {
   const [socksCountByIp, setSocksCountByIp] = useState<Record<string, number>>({}); // SOCKS5 proxy count per IP
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Stale-while-revalidate: when the router is unreachable the list on screen
+  // is the last known data; this holds its fetch time (null = data is live).
+  const [staleSince, setStaleSince] = useState<number | null>(null);
+  const lastGoodFetchRef = useRef<number | null>(null);
+  const fetchInFlightRef = useRef(false);
 
   // Create peer dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -743,6 +774,14 @@ export default function DashboardPage() {
     }
   }, [selectedRouterId]);
 
+  // Seed the table instantly from the last known peer list of this router;
+  // the background fetch then updates it in place (stale-while-revalidate).
+  useEffect(() => {
+    if (!selectedRouterId) return;
+    setPeers(getPeerCache(selectedRouterId));
+    setStaleSince(null);
+  }, [selectedRouterId]);
+
   // Native Telegram Back button (same treatment as the /tg Mini App): with a
   // dialog open Telegram shows "‹ Back" instead of only "Close", and it closes
   // the dialog instead of the whole Mini App. No-op in a normal browser.
@@ -846,9 +885,13 @@ export default function DashboardPage() {
     }
   }, [selectedRouterId, supabase, routers]);
 
-  const fetchWireGuardData = useCallback(async (forceRefresh = false) => {
+  const fetchWireGuardData = useCallback(async (forceRefresh = false, background = false) => {
     if (!selectedRouterId) return;
-    setRefreshing(true);
+    // Background polls are silent (no loading UI, no toasts) and never overlap:
+    // a slow router (SSH can take seconds) must not pile up requests.
+    if (background && fetchInFlightRef.current) return;
+    fetchInFlightRef.current = true;
+    if (!background) setRefreshing(true);
     try {
       const [intRes, peerRes] = await Promise.all([
         fetch("/api/wireguard", {
@@ -881,9 +924,21 @@ export default function DashboardPage() {
       }
       if (peerData.peers) {
         setPeers(peerData.peers);
+        if (peerData.stale) {
+          // Router unreachable: the server returned its last known list
+          setStaleSince(peerData.fetchedAt || lastGoodFetchRef.current || Date.now());
+        } else {
+          lastGoodFetchRef.current = peerData.fetchedAt || Date.now();
+          setStaleSince(null);
+          // Cache the peers for when the router AND the server cache are down
+          setPeerCache(selectedRouterId, peerData.peers);
+        }
         if (forceRefresh) {
           toast.success(`Loaded ${peerData.peers.length} peers`);
         }
+      } else {
+        // Error payload: keep the current list, convey the failure as staleness
+        setStaleSince((prev) => prev ?? lastGoodFetchRef.current ?? Date.now());
       }
 
       // Also fetch metadata
@@ -894,18 +949,23 @@ export default function DashboardPage() {
       if (cachedInterfaces.length > 0) {
         setInterfaces(cachedInterfaces);
       }
-      toast.error("Failed to fetch data");
+      // Keep the peer list on screen — failures show as staleness, not emptiness
+      setStaleSince((prev) => prev ?? lastGoodFetchRef.current ?? Date.now());
+      if (!background) toast.error("Failed to fetch data");
     }
-    setRefreshing(false);
+    if (!background) setRefreshing(false);
+    fetchInFlightRef.current = false;
   }, [selectedRouterId, newPeer.interface, fetchPeerMetadata]);
 
-  // Auto-refresh every 30 seconds for real-time connection tracking
+  // Background refresh every 3 seconds: silent stale-while-revalidate — data
+  // updates in place, failures keep the last list on screen (the server caches
+  // router reads ~2.5s, so this doesn't hammer the MikroTik API / SSH).
   useEffect(() => {
     if (!selectedRouterId) return;
 
     const interval = setInterval(() => {
-      fetchWireGuardData(false);
-    }, 30000);
+      fetchWireGuardData(false, true);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [selectedRouterId, fetchWireGuardData]);
@@ -2070,6 +2130,12 @@ PersistentKeepalive = 25`;
                   <User className="w-3 h-3 mr-1" />
                   My Peers
                 </Badge>
+              )}
+              {staleSince !== null && (
+                <span className="flex items-center gap-1.5 text-xs text-amber-400">
+                  <WifiOff className="w-3.5 h-3.5" />
+                  Router unreachable — showing data from {new Date(staleSince).toLocaleTimeString()}
+                </span>
               )}
             </div>
             <div className="flex items-center gap-3 flex-wrap">

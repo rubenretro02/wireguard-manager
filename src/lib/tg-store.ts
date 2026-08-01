@@ -1,6 +1,7 @@
 import { createClient as createAdminClient, type SupabaseClient } from "@supabase/supabase-js";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { MikroTikClient } from "@/lib/mikrotik";
+import { cachedRouterRead } from "@/lib/router-read-cache";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { AuthMethod, PublicIP, Router, WireGuardPeer } from "@/lib/types";
 
@@ -704,11 +705,18 @@ export async function getLiveStatusesForPeers(
         const interfaces = Array.from(new Set(routerPeers.map((p) => p.wg_interface)));
         for (const iface of interfaces) {
           const client = buildLinuxClient(router as Router, iface);
-          const livePeers = await client.getPeersForInterface(iface);
-          const byKey = new Map(livePeers.map((lp) => [lp.publicKey, lp]));
+          // Cache corto compartido con /api/wireguard (misma key): una sola
+          // consulta SSH por ventana de TTL sirve a todos los que pollean; si
+          // el server no responde, se usa el último dump conocido (stale) —
+          // los handshakes son epoch, así que "connected" envejece solo.
+          const read = await cachedRouterRead(`linux-peers:${router.id}:${iface}`, () =>
+            client.getPeersForInterface(iface)
+          );
+          const byKey = new Map(read.data.map((lp) => [lp.publicKey, lp]));
           for (const p of routerPeers.filter((x) => x.wg_interface === iface)) {
             const lp = byKey.get(p.peer_public_key);
-            sync(p, Boolean(lp)); // en Linux, presente en wg = habilitado
+            // No sincronizar status desde datos stale: reflejan una realidad vieja
+            if (!read.stale) sync(p, Boolean(lp)); // en Linux, presente en wg = habilitado
             if (!lp) {
               live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
               continue;
@@ -724,17 +732,24 @@ export async function getLiveStatusesForPeers(
         }
       } else {
         const client = buildMikroTikClient(router as Router);
-        const livePeers = await client.getWireGuardPeers();
-        const byKey = new Map(livePeers.map((lp) => [lp["public-key"], lp]));
+        // Cache corto compartido con /api/wireguard (misma key). MikroTik
+        // reporta el handshake como duración relativa al momento del dump, así
+        // que se le suma la edad del cache — con datos stale el peer pasa a
+        // Offline cuando su último handshake real supera la ventana de 3 min.
+        const read = await cachedRouterRead(`mt-peers:${router.id}`, () => client.getWireGuardPeers());
+        const elapsedSec = Math.max(0, Math.round((now - read.fetchedAt) / 1000));
+        const byKey = new Map(read.data.map((lp) => [lp["public-key"], lp]));
         for (const p of routerPeers) {
           const rp = byKey.get(p.peer_public_key);
           const enabled = Boolean(rp) && !isMikroTikDisabled(rp?.disabled);
-          sync(p, enabled);
+          // No sincronizar status desde datos stale: reflejan una realidad vieja
+          if (!read.stale) sync(p, enabled);
           if (!rp || !enabled) {
             live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
             continue;
           }
-          const secondsAgo = parseMikroTikDuration(rp["last-handshake"]);
+          const parsed = parseMikroTikDuration(rp["last-handshake"]);
+          const secondsAgo = parsed !== null ? parsed + elapsedSec : null;
           live.set(p.id, {
             connected: secondsAgo !== null && secondsAgo < 180,
             latestHandshake: secondsAgo !== null ? new Date(now - secondsAgo * 1000).toISOString() : null,

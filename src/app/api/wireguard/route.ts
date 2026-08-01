@@ -3,6 +3,7 @@ import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 import { MikroTikClient, clearClientCacheForRouter } from "@/lib/mikrotik";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
+import { cachedRouterRead, invalidateRouterReadCache } from "@/lib/router-read-cache";
 import { logActivity } from "@/lib/activity-logger";
 import type { ConnectionType, AuthMethod } from "@/lib/types";
 
@@ -51,6 +52,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Please select a router" }, { status: 400 });
   }
 
+  // getPeers/getInterfaces are served through a short stale-while-revalidate
+  // cache (clients poll every ~3s). Any other action may mutate the router,
+  // so drop its cached reads first.
+  if (action !== "getPeers" && action !== "getInterfaces") {
+    invalidateRouterReadCache(routerId);
+  }
+
   const { data: router, error: routerError } = await supabase.from("routers").select("*").eq("id", routerId).single();
   if (routerError || !router) {
     console.error("[WireGuard API] Router not found:", routerError);
@@ -93,7 +101,11 @@ export async function POST(request: Request) {
         }
 
         case "getInterfaces": {
-          const info = await linuxClient.getInterfaceInfo();
+          const { data: info } = await cachedRouterRead(
+            `linux-ifaces:${routerId}`,
+            () => linuxClient.getInterfaceInfo(),
+            { bypassTtl: Boolean(forceRefresh) }
+          );
           if (info) {
             return NextResponse.json({
               interfaces: [{
@@ -125,10 +137,24 @@ export async function POST(request: Request) {
             if (row.wg_interface) interfaceSet.add(row.wg_interface);
           }
 
+          // Short stale-while-revalidate cache per interface: one SSH query per
+          // TTL window serves every polling client, and if the server is down
+          // the last known dump is returned flagged stale (handshakes are epoch
+          // seconds, so "connected" ages out naturally on the client).
           const livePeers: Array<{ publicKey: string; allowedIps: string; endpoint?: string; latestHandshake?: string; transfer?: { rx: number; tx: number }; interface: string }> = [];
+          let peersStale = false;
+          let peersFetchedAt = Date.now();
           for (const iface of interfaceSet) {
-            const peers = await linuxClient.getPeersForInterface(iface);
-            for (const p of peers) livePeers.push({ ...p, interface: iface });
+            const read = await cachedRouterRead(
+              `linux-peers:${routerId}:${iface}`,
+              () => linuxClient.getPeersForInterface(iface),
+              { bypassTtl: Boolean(forceRefresh) }
+            );
+            if (read.stale) {
+              peersStale = true;
+              peersFetchedAt = Math.min(peersFetchedAt, read.fetchedAt);
+            }
+            for (const p of read.data) livePeers.push({ ...p, interface: iface });
           }
 
           // Get stored peer metadata from BOTH tables to fully populate names/comments
@@ -215,7 +241,11 @@ export async function POST(request: Request) {
               created_by_email: stored.created_by_email,
             }));
 
-          return NextResponse.json({ peers: [...formattedPeers, ...disabledPeers] });
+          return NextResponse.json({
+            peers: [...formattedPeers, ...disabledPeers],
+            stale: peersStale,
+            fetchedAt: peersFetchedAt,
+          });
         }
 
         case "createMikroTikRules": {
@@ -1027,18 +1057,29 @@ export async function POST(request: Request) {
   try {
     switch (action) {
       case "getInterfaces": {
-        const interfaces = await client.getWireGuardInterfaces();
+        const { data: interfaces } = await cachedRouterRead(
+          `mt-ifaces:${routerId}`,
+          () => client.getWireGuardInterfaces(),
+          { bypassTtl: Boolean(forceRefresh) }
+        );
         console.log(`[WireGuard API] Got ${interfaces.length} interfaces`);
         return NextResponse.json({ interfaces });
       }
       case "getPeers": {
-        const peers = await client.getWireGuardPeers();
-        console.log(`[WireGuard API] Got ${peers.length} peers`);
+        // Stale-while-revalidate: one MikroTik query per TTL window serves all
+        // polling clients; if the router is unreachable, the last known list is
+        // returned flagged stale instead of failing.
+        const { data: peers, stale, fetchedAt } = await cachedRouterRead(
+          `mt-peers:${routerId}`,
+          () => client.getWireGuardPeers(),
+          { bypassTtl: Boolean(forceRefresh) }
+        );
+        console.log(`[WireGuard API] Got ${peers.length} peers${stale ? " (stale)" : ""}`);
         if (peers.length > 0) {
           const addresses = peers.slice(0, 5).map(p => p["allowed-address"]);
           console.log(`[WireGuard API] Sample addresses: ${addresses.join(", ")}`);
         }
-        return NextResponse.json({ peers });
+        return NextResponse.json({ peers, stale, fetchedAt });
       }
       case "createPeer": {
         console.log("[WireGuard API] Creating peer with data:", JSON.stringify(data, null, 2));
