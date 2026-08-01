@@ -172,14 +172,31 @@ export function getAdminMiniAppUrl(): string {
  */
 export const ADMIN_BOT: BotKind = "agent";
 
-let cachedAdminBotUsername: string | null = null;
+const cachedBotUsernames: Partial<Record<BotKind, string>> = {};
+
+/** Username de un bot (vía getMe, cacheado) para armar links t.me. */
+export async function getBotUsername(bot: BotKind = ADMIN_BOT): Promise<string> {
+  const cached = cachedBotUsernames[bot];
+  if (cached) return cached;
+  const me = await tgApi<{ username: string }>("getMe", {}, bot);
+  cachedBotUsernames[bot] = me.username;
+  return me.username;
+}
 
 /** Username del bot admin (vía getMe, cacheado) para armar deep links t.me. */
 export async function getAdminBotUsername(): Promise<string> {
-  if (cachedAdminBotUsername) return cachedAdminBotUsername;
-  const me = await tgApi<{ username: string }>("getMe", {}, ADMIN_BOT);
-  cachedAdminBotUsername = me.username;
-  return me.username;
+  return getBotUsername(ADMIN_BOT);
+}
+
+/**
+ * Link directo a la Main Mini App (t.me/<bot>?startapp[=param]). Requiere la
+ * Mini App habilitada en BotFather (Bot Settings → Configure Mini App). Abre
+ * el contenedor nuevo de Telegram (chevron para minimizar, Back nativo) en
+ * vez del webview clásico de los botones web_app.
+ */
+export async function getMiniAppDirectLink(bot: BotKind, startParam?: string): Promise<string> {
+  const username = await getBotUsername(bot);
+  return `https://t.me/${username}?startapp${startParam ? `=${startParam}` : ""}`;
 }
 
 /**

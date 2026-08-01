@@ -223,6 +223,14 @@ export default function TgMiniApp() {
       tries++;
       if (tg?.initData) {
         clearInterval(interval);
+        // Abierta por link directo del panel (t.me/<bot>?startapp=admin):
+        // saltar a la Mini App de login de admin conservando el hash
+        // (#tgWebAppData…) para que el SDK re-derive initData allá.
+        const startParam = new URLSearchParams(tg.initData).get("start_param");
+        if (startParam === "admin") {
+          window.location.replace("/tg/admin" + window.location.hash);
+          return;
+        }
         tg.ready();
         tg.expand();
         // Impedir el cierre por swipe: un scroll accidental no cierra la app.

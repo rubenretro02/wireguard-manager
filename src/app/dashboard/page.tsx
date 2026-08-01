@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { StatCard } from "@/components/StatCard";
 import {
   Users,
@@ -59,6 +60,13 @@ import {
 import QRCodeLib from "qrcode";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities, TimeUnit, UserIpAccess } from "@/lib/types";
+
+interface TelegramBackButton {
+  show: () => void;
+  hide: () => void;
+  onClick: (cb: () => void) => void;
+  offClick: (cb: () => void) => void;
+}
 
 // Helper function to convert time value + unit to hours
 const convertToHours = (value: number, unit: TimeUnit): number => {
@@ -734,6 +742,42 @@ export default function DashboardPage() {
       localStorage.setItem("wg-last-router", selectedRouterId);
     }
   }, [selectedRouterId]);
+
+  // Native Telegram Back button (same treatment as the /tg Mini App): with a
+  // dialog open Telegram shows "‹ Back" instead of only "Close", and it closes
+  // the dialog instead of the whole Mini App. No-op in a normal browser.
+  useEffect(() => {
+    const back = (window as unknown as {
+      Telegram?: { WebApp?: { BackButton?: TelegramBackButton } };
+    }).Telegram?.WebApp?.BackButton;
+    if (!back) return;
+
+    // Closing order mirrors the stacking order, so Back walks back through
+    // nested dialogs (QR / peer details sit on top of the peers-by-IP modal).
+    const onBack = () => {
+      if (qrPeer) { setQrPeer(null); setQrDataUrl(null); }
+      else if (peerManageOpen) setPeerManageOpen(false);
+      else if (ipPeersModalOpen) setIpPeersModalOpen(false);
+      else if (createDialogOpen) setCreateDialogOpen(false);
+      else if (renewDialogOpen) setRenewDialogOpen(false);
+      else if (editExpirationOpen) setEditExpirationOpen(false);
+      else if (bulkAssignOpen) setBulkAssignOpen(false);
+      else if (bulkExpOpen) setBulkExpOpen(false);
+    };
+
+    const anyOpen = qrPeer !== null || peerManageOpen || ipPeersModalOpen ||
+      createDialogOpen || renewDialogOpen || editExpirationOpen ||
+      bulkAssignOpen || bulkExpOpen;
+
+    if (anyOpen) {
+      back.onClick(onBack);
+      back.show();
+    } else {
+      back.hide();
+    }
+    return () => back.offClick(onBack);
+  }, [qrPeer, peerManageOpen, ipPeersModalOpen, createDialogOpen, renewDialogOpen,
+      editExpirationOpen, bulkAssignOpen, bulkExpOpen]);
 
   // Get the selected router to check if it's Linux
   const selectedRouter = useMemo(() => {
@@ -1942,6 +1986,7 @@ PersistentKeepalive = 25`;
       hasSocks5Access={hasSocks5Access}
       onLogout={handleLogout}
     >
+      <PullToRefresh onRefresh={() => fetchWireGuardData(true)} />
       <PageHeader title="Dashboard" description="Manage your WireGuard peers">
         <Select value={selectedRouterId} onValueChange={setSelectedRouterId}>
           <SelectTrigger className="w-[200px] bg-secondary border-border">

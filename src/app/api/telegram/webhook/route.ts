@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   answerCallbackQuery,
+  getMiniAppDirectLink,
   getMiniAppUrl,
   sendTelegramMessage,
   setAdminMenuButton,
@@ -161,12 +162,20 @@ async function handleAdminLogin(chatId: number, from: TelegramUser, bot: BotKind
  * "🔐 Single Sign On" (callback "sso" → emite el link de login). El panel
  * embebido sigue disponible en el botón de menú azul del chat.
  */
-function adminWelcomeKeyboard(): Array<Array<Record<string, unknown>>> {
+async function adminWelcomeKeyboard(): Promise<Array<Array<Record<string, unknown>>>> {
   const rows: Array<Array<Record<string, unknown>>> = [];
   try {
-    rows.push([{ text: "🚀 Open App", web_app: { url: getMiniAppUrl() } }]);
+    // Link directo (Main Mini App): contenedor nuevo con minimizar + Back nativo.
+    // startapp=admin → /tg redirige a /tg/admin conservando el hash.
+    rows.push([{ text: "🚀 Open App", url: await getMiniAppDirectLink("agent") }]);
+    rows.push([{ text: "🖥 Panel admin", url: await getMiniAppDirectLink("agent", "admin") }]);
   } catch {
-    /* NEXT_PUBLIC_APP_URL ausente: omitir */
+    // getMe falló: caer al botón web_app clásico.
+    try {
+      rows.push([{ text: "🚀 Open App", web_app: { url: getMiniAppUrl() } }]);
+    } catch {
+      /* NEXT_PUBLIC_APP_URL ausente: omitir */
+    }
   }
   rows.push([{ text: "🔐 Single Sign On", callback_data: "sso" }]);
   return rows;
@@ -208,9 +217,16 @@ async function sendDefaultWelcome(
   // Admin vinculado (bot agent): "Open App" + "🔐 Single Sign On", y su botón de
   // menú apunta al panel. El resto: solo "Open App".
   const isLinkedAdmin = bot === "agent" && !!from && !!(await getProfileByTelegramId(from.id));
+  // Link directo (Main Mini App) → contenedor con minimizar; fallback web_app.
+  let openAppButton: Record<string, unknown>;
+  try {
+    openAppButton = { text: "🚀 Open App", url: await getMiniAppDirectLink(bot) };
+  } catch {
+    openAppButton = { text: "🚀 Open App", web_app: { url: appUrl } };
+  }
   const keyboard: Array<Array<Record<string, unknown>>> = isLinkedAdmin
-    ? adminWelcomeKeyboard()
-    : [[{ text: "🚀 Open App", web_app: { url: appUrl } }]];
+    ? await adminWelcomeKeyboard()
+    : [[openAppButton]];
   if (isLinkedAdmin) {
     await setAdminMenuButton(chatId, bot);
   }
