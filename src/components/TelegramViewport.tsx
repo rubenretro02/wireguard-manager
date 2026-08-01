@@ -28,6 +28,7 @@ type WebApp = {
   /** Bot API 8.0+ — fullscreen mode (app covers the status bar). */
   requestFullscreen?: () => void;
   exitFullscreen?: () => void;
+  isFullscreen?: boolean;
 };
 
 const FLAG = "tg_inapp";
@@ -53,7 +54,10 @@ export function TelegramViewport() {
       try {
         sessionStorage.setItem(FLAG, "1");
         tg.ready?.();
-        tg.expand?.();
+        // expand() while already fullscreen makes iOS re-layout the viewport
+        // (scroll jank), and the admin flow reloads the page twice — so every
+        // step here must be a no-op when the state is already right.
+        if (!tg.isFullscreen) tg.expand?.();
         tg.disableVerticalSwipes?.(); // Bot API 7.7+; no-op on older clients
         tg.setHeaderColor?.(APP_BG);
         tg.setBackgroundColor?.(APP_BG);
@@ -62,7 +66,7 @@ export function TelegramViewport() {
         // Applies on every route: the embedded admin panel pads its fixed
         // chrome with --tg-top, so an admin flowing /tg → /tg/admin →
         // /dashboard keeps fullscreen instead of bouncing back to a sheet.
-        if (tg.platform === "ios" || tg.platform === "android") {
+        if ((tg.platform === "ios" || tg.platform === "android") && !tg.isFullscreen) {
           tg.requestFullscreen?.();
         }
       } catch {

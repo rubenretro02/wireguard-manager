@@ -236,10 +236,9 @@ export default function TgMiniApp() {
           window.location.replace("/tg/admin" + window.location.hash);
           return;
         }
-        tg.ready();
-        tg.expand();
-        // Impedir el cierre por swipe: un scroll accidental no cierra la app.
-        tg.disableVerticalSwipes?.();
+        // ready/expand/disableVerticalSwipes/fullscreen los maneja
+        // TelegramViewport (montado en el root layout); repetir expand() aquí
+        // con fullscreen ya activo provoca re-layouts del viewport en iOS.
         initDataRef.current = tg.initData;
         setWebApp(tg);
       } else if (tries > 25) {
