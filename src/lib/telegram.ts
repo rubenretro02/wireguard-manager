@@ -172,15 +172,29 @@ export function getAdminMiniAppUrl(): string {
  */
 export const ADMIN_BOT: BotKind = "agent";
 
-const cachedBotUsernames: Partial<Record<BotKind, string>> = {};
+interface BotInfo {
+  username: string;
+  hasMainWebApp: boolean;
+}
 
-/** Username de un bot (vía getMe, cacheado) para armar links t.me. */
+const cachedBotInfo: Partial<Record<BotKind, BotInfo>> = {};
+
+/**
+ * getMe cacheado. Si has_main_web_app es false NO se cachea, para detectar
+ * sin redeploy el momento en que se habilite la Mini App en BotFather.
+ */
+async function getBotInfo(bot: BotKind): Promise<BotInfo> {
+  const cached = cachedBotInfo[bot];
+  if (cached?.hasMainWebApp) return cached;
+  const me = await tgApi<{ username: string; has_main_web_app?: boolean }>("getMe", {}, bot);
+  const info: BotInfo = { username: me.username, hasMainWebApp: !!me.has_main_web_app };
+  if (info.hasMainWebApp) cachedBotInfo[bot] = info;
+  return info;
+}
+
+/** Username de un bot (vía getMe) para armar links t.me. */
 export async function getBotUsername(bot: BotKind = ADMIN_BOT): Promise<string> {
-  const cached = cachedBotUsernames[bot];
-  if (cached) return cached;
-  const me = await tgApi<{ username: string }>("getMe", {}, bot);
-  cachedBotUsernames[bot] = me.username;
-  return me.username;
+  return (await getBotInfo(bot)).username;
 }
 
 /** Username del bot admin (vía getMe, cacheado) para armar deep links t.me. */
@@ -189,14 +203,18 @@ export async function getAdminBotUsername(): Promise<string> {
 }
 
 /**
- * Link directo a la Main Mini App (t.me/<bot>?startapp[=param]). Requiere la
- * Mini App habilitada en BotFather (Bot Settings → Configure Mini App). Abre
- * el contenedor nuevo de Telegram (chevron para minimizar, Back nativo) en
- * vez del webview clásico de los botones web_app.
+ * Link directo a la Main Mini App (t.me/<bot>?startapp[=param]). Abre el
+ * contenedor nuevo de Telegram (chevron para minimizar, Back nativo) en vez
+ * del webview clásico de los botones web_app. Lanza si el bot todavía no
+ * tiene la Mini App habilitada en BotFather (Bot Settings → Configure Mini
+ * App): los callers caen al botón web_app clásico.
  */
 export async function getMiniAppDirectLink(bot: BotKind, startParam?: string): Promise<string> {
-  const username = await getBotUsername(bot);
-  return `https://t.me/${username}?startapp${startParam ? `=${startParam}` : ""}`;
+  const info = await getBotInfo(bot);
+  if (!info.hasMainWebApp) {
+    throw new Error(`Bot @${info.username} has no Main Mini App configured in BotFather`);
+  }
+  return `https://t.me/${info.username}?startapp${startParam ? `=${startParam}` : ""}`;
 }
 
 /**
