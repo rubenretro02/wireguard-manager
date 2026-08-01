@@ -35,14 +35,14 @@ export function DashboardLayout({ children, userRole, userEmail, userCapabilitie
         type="button"
         onClick={() => setMobileNavOpen(true)}
         aria-label="Open menu"
-        className="md:hidden fixed top-3 left-3 z-40 p-2 rounded-lg bg-card border border-border text-foreground shadow-sm"
+        className="md:hidden fixed top-[calc(0.75rem+var(--tg-top))] left-3 z-40 p-2 rounded-lg bg-card border border-border text-foreground shadow-sm"
       >
         <Menu className="w-5 h-5" />
       </button>
 
       <main className={cn(
         "transition-all duration-300 ml-0 md:ml-[240px]",
-        "min-h-screen"
+        "min-h-screen pb-[var(--tg-bottom)]"
       )}>
         {children}
       </main>
@@ -58,7 +58,7 @@ interface PageHeaderProps {
 
 export function PageHeader({ title, description, children }: PageHeaderProps) {
   return (
-    <div className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-30">
+    <div className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-30 pt-[var(--tg-top)]">
       <div className="px-4 md:px-8 py-6 pl-16 md:pl-8 flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">{title}</h1>

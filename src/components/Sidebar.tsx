@@ -81,7 +81,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
       )}
       <aside
         className={cn(
-          "fixed left-0 top-0 z-50 h-screen bg-card border-r border-border transition-all duration-300 flex flex-col",
+          "fixed left-0 top-0 z-50 h-screen bg-card border-r border-border transition-all duration-300 flex flex-col pt-[var(--tg-top)]",
           collapsed ? "w-[70px]" : "w-[240px]",
           // En móvil es un drawer: oculto fuera de pantalla salvo cuando está abierto.
           mobileOpen ? "translate-x-0" : "-translate-x-full",
