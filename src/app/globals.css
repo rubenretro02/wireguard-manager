@@ -166,6 +166,52 @@
   }
 }
 
+/* ============ Telegram Mini App: safe areas + native touch feel ============ */
+
+:root {
+  /* Telegram fullscreen: the app covers the status bar and Telegram floats its
+     ⌄/⋯ controls over the top-right. The SDK exposes both insets as CSS vars;
+     outside Telegram (or non-fullscreen) they are 0. */
+  --tg-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+  /* Home-indicator clearance: browser env() or Telegram's own inset. */
+  --tg-bottom: max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px));
+}
+
+/* Touch devices only — desktop keeps text selection and normal hover. */
+@media (hover: none) {
+  html {
+    -webkit-tap-highlight-color: transparent; /* no gray flash on tap */
+  }
+  body {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  input,
+  textarea,
+  select,
+  [contenteditable] {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  /* Kill the double-tap-to-zoom delay so taps respond instantly. */
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+  /* Press state: content sinks slightly under the finger, ease-out on release. */
+  button:not(:disabled) {
+    transition: color 0.15s, background-color 0.15s, border-color 0.15s,
+      opacity 0.15s, transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  button:not(:disabled):active {
+    transform: scale(0.96);
+  }
+}
+
 /* Animation utilities */
 @layer utilities {
   .animate-fade-in {

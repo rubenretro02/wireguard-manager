@@ -39,7 +39,11 @@ interface TelegramWebApp {
   disableVerticalSwipes?: () => void;
   openLink: (url: string) => void;
   openTelegramLink?: (url: string) => void;
-  HapticFeedback?: { notificationOccurred: (type: "error" | "success" | "warning") => void };
+  HapticFeedback?: {
+    impactOccurred?: (style: "light" | "medium" | "heavy" | "rigid" | "soft") => void;
+    notificationOccurred: (type: "error" | "success" | "warning") => void;
+    selectionChanged?: () => void;
+  };
   colorScheme?: "light" | "dark";
   BackButton?: TelegramBackButton;
 }
@@ -157,6 +161,7 @@ export default function TgMiniApp() {
   const [buying, setBuying] = useState<string | null>(null); // planId en proceso
   const [pendingPayment, setPendingPayment] = useState<Payment | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mainRef = useRef<HTMLElement | null>(null); // target del edge-swipe back
 
   const initDataRef = useRef<string>("");
 
@@ -298,6 +303,133 @@ export default function TgMiniApp() {
     }
     return () => back.offClick(onBack);
   }, [webApp, tab, configPeer, renewPeer, renameTarget]);
+
+  /* ============ Edge-swipe back (estilo iOS) ============ */
+  // En fullscreen no hay header nativo, así que recreamos el gesto de volver en
+  // los tabs que no son el Dashboard: el contenido sigue al dedo 1:1 y al
+  // soltar confirma (vuelve al Dashboard) o rebota. Con un modal abierto no
+  // aplica — los modales son position:fixed hermanos de <main> y no seguirían
+  // el arrastre. Los transforms se limpian por completo al quedar idle.
+  useEffect(() => {
+    if (!webApp) return;
+    if (tab === "dashboard" || configPeer || renewPeer || renameTarget) return;
+
+    // Cualquier transform en <main> lo vuelve containing block de children
+    // position:fixed, así que los estilos se quitan al terminar el gesto.
+    const clearStyles = () => {
+      const el = mainRef.current;
+      if (!el) return;
+      el.style.transform = "";
+      el.style.transition = "";
+      el.style.boxShadow = "";
+    };
+
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastT = 0;
+    let velocity = 0; // px/ms, media móvil exponencial
+    let state: "idle" | "pending" | "dragging" = "idle";
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      state = t.clientX <= 32 ? "pending" : "idle"; // solo desde el borde izquierdo
+      startX = lastX = t.clientX;
+      startY = t.clientY;
+      lastT = e.timeStamp;
+      velocity = 0;
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (state === "idle") return;
+      const t = e.touches[0];
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+
+      if (state === "pending") {
+        if (Math.abs(dy) > 14 && Math.abs(dy) > dx) {
+          state = "idle"; // intención vertical: es un scroll
+          return;
+        }
+        if (dx < 10) return; // todavía no hay intención horizontal
+        state = "dragging";
+      }
+
+      const el = mainRef.current;
+      if (!el) {
+        state = "idle";
+        return;
+      }
+      const dt = Math.max(1, e.timeStamp - lastT);
+      velocity = 0.8 * ((t.clientX - lastX) / dt) + 0.2 * velocity;
+      lastX = t.clientX;
+      lastT = e.timeStamp;
+
+      el.style.transition = "none";
+      el.style.transform = `translateX(${Math.max(0, dx)}px)`;
+      el.style.boxShadow = "-12px 0 32px rgba(0, 0, 0, 0.5)";
+      if (e.cancelable) e.preventDefault(); // el gesto es dueño del drag, no el scroller
+    };
+
+    const onTouchEnd = () => {
+      if (state !== "dragging") {
+        state = "idle";
+        return;
+      }
+      state = "idle";
+      const el = mainRef.current;
+      if (!el) return;
+      const dx = lastX - startX;
+      const commit = dx > window.innerWidth * 0.35 || (dx > 60 && velocity > 0.5);
+
+      if (commit) {
+        el.style.transition = "transform 0.18s cubic-bezier(0.22, 1, 0.36, 1)";
+        el.style.transform = `translateX(${window.innerWidth}px)`;
+        webApp.HapticFeedback?.impactOccurred?.("light");
+        // Dejar que el slide termine fuera de pantalla y volver al Dashboard;
+        // <main> lleva key={tab}, así que remonta limpio, sin estilos residuales.
+        setTimeout(() => setTab("dashboard"), 170);
+      } else {
+        el.style.transition = "transform 0.24s cubic-bezier(0.22, 1, 0.36, 1)";
+        el.style.transform = "translateX(0px)";
+        el.style.boxShadow = "";
+        setTimeout(clearStyles, 260);
+      }
+    };
+
+    window.addEventListener("touchstart", onTouchStart, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onTouchEnd, { passive: true });
+    window.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    return () => {
+      window.removeEventListener("touchstart", onTouchStart);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("touchcancel", onTouchEnd);
+      clearStyles();
+    };
+  }, [webApp, tab, configPeer, renewPeer, renameTarget]);
+
+  /* ============ Haptics delegados ============ */
+  // Tick háptico en cada tap: selección en los tabs del bottom nav, impacto
+  // suave en cualquier otro botón. Delegado para no instrumentar cada botón.
+  useEffect(() => {
+    const h = webApp?.HapticFeedback;
+    if (!h) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t) return;
+      try {
+        if (t.closest("nav button")) h.selectionChanged?.();
+        else if (t.closest("button")) h.impactOccurred?.("light");
+      } catch {
+        /* clientes viejos pueden no tener la API */
+      }
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [webApp]);
 
   /* ============ QR del config ============ */
   useEffect(() => {
@@ -515,12 +647,12 @@ export default function TgMiniApp() {
   });
 
   return (
-    <div className="min-h-screen pb-20 max-w-lg mx-auto">
+    <div className="min-h-screen pb-[calc(5rem+var(--tg-bottom))] max-w-lg mx-auto">
       {/* Pull-to-refresh: refresco suave del tab actual (no recarga la página) */}
       <PullToRefresh onRefresh={() => refreshCurrent(true)} />
 
-      {/* Header */}
-      <header className="px-4 pt-5 pb-3 flex items-center gap-3">
+      {/* Header — --tg-top: libra el status bar + el pill ⌄/⋯ de Telegram en fullscreen */}
+      <header className="px-4 pt-[calc(1.25rem+var(--tg-top))] pb-3 flex items-center gap-3">
         <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
           <Shield className="w-5 h-5 text-primary" />
         </div>
@@ -565,8 +697,8 @@ export default function TgMiniApp() {
         </div>
       )}
 
-      {/* Contenido */}
-      <main className="px-4 space-y-3">
+      {/* Contenido — key={tab}: remonta con un fade (solo opacity) al cambiar de tab */}
+      <main key={tab} ref={mainRef} className="px-4 space-y-3 animate-fade-in">
         {tab === "dashboard" && (
           <>
             {/* Resumen de productos — tarjetas clickeables: abren My Peers filtrado */}
@@ -875,7 +1007,7 @@ export default function TgMiniApp() {
       {configPeer && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center" onClick={() => setConfigPeer(null)}>
           <div
-            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 pb-[calc(1.25rem+var(--tg-bottom))] space-y-4 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -971,7 +1103,7 @@ export default function TgMiniApp() {
       {renewPeer && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center" onClick={() => setRenewPeer(null)}>
           <div
-            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 space-y-4"
+            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 pb-[calc(1.25rem+var(--tg-bottom))] space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1037,7 +1169,7 @@ export default function TgMiniApp() {
       {renameTarget && (
         <div className="fixed inset-0 z-50 bg-black/70 flex items-end sm:items-center justify-center" onClick={() => setRenameTarget(null)}>
           <div
-            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 space-y-4"
+            className="w-full max-w-lg bg-card border border-border rounded-t-3xl sm:rounded-3xl p-5 pb-[calc(1.25rem+var(--tg-bottom))] space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -1066,7 +1198,7 @@ export default function TgMiniApp() {
       )}
 
       {/* Bottom nav — agents sin tienda (sin Buy/Payments) */}
-      <nav className="fixed bottom-0 inset-x-0 border-t border-border bg-card/95 backdrop-blur-sm">
+      <nav className="fixed bottom-0 inset-x-0 border-t border-border bg-card/95 backdrop-blur-sm pb-[var(--tg-bottom)]">
         <div className={`max-w-lg mx-auto grid ${isAgent ? "grid-cols-3" : "grid-cols-5"}`}>
           {(
             [

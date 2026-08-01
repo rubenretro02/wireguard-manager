@@ -1,11 +1,15 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 
 // When the app runs inside the Telegram WebView (notably the embedded admin
 // panel reached from the bot), expand to full height and disable the vertical
-// swipe-to-close gesture so a scroll never closes the Mini App. No-op in a
-// normal browser. Mounted app-wide in the root layout.
+// swipe-to-close gesture so a scroll never closes the Mini App. It also tells
+// Telegram the app's (dark) background so the native controls (status-bar
+// text, floating ⌄/⋯ pill) pick a readable tint, and puts the customer Mini
+// App (/tg) in fullscreen on phones. No-op in a normal browser. Mounted
+// app-wide in the root layout.
 //
 // The embedded panel reaches /dashboard via a full navigation, which drops the
 // #tgWebAppData launch params; we remember "we're in Telegram" in sessionStorage
@@ -13,17 +17,31 @@ import { useEffect } from "react";
 
 type WebApp = {
   initData?: string;
+  /** 'unknown' when the SDK runs outside Telegram (e.g. a normal browser). */
+  platform?: string;
   ready?: () => void;
   expand?: () => void;
   disableVerticalSwipes?: () => void;
+  /** Bot API 6.1+ — header/background color for Telegram's native controls. */
+  setHeaderColor?: (color: string) => void;
+  setBackgroundColor?: (color: string) => void;
+  /** Bot API 8.0+ — fullscreen mode (app covers the status bar). */
+  requestFullscreen?: () => void;
+  exitFullscreen?: () => void;
 };
 
 const FLAG = "tg_inapp";
+// hsl(0 0% 4%) — the app's --background in globals.css.
+const APP_BG = "#0a0a0a";
 
 export function TelegramViewport() {
+  const pathname = usePathname();
+
   useEffect(() => {
     let tries = 0;
+    let cancelled = false;
     const apply = () => {
+      if (cancelled) return;
       const tg = (window as unknown as { Telegram?: { WebApp?: WebApp } }).Telegram?.WebApp;
       if (!tg) {
         if (tries++ < 20) setTimeout(apply, 100); // SDK still loading
@@ -37,12 +55,27 @@ export function TelegramViewport() {
         tg.ready?.();
         tg.expand?.();
         tg.disableVerticalSwipes?.(); // Bot API 7.7+; no-op on older clients
+        tg.setHeaderColor?.(APP_BG);
+        tg.setBackgroundColor?.(APP_BG);
+        // Fullscreen (Bot API 8.0+) gives the customer Mini App the native ⌄
+        // minimize control. Phones only (on desktop it would maximize the
+        // window) and only on /tg: the embedded admin panel has no safe-area
+        // padding, so we exit fullscreen elsewhere — an admin coming through
+        // /tg → /tg/admin → /dashboard must not inherit it.
+        if (pathname === "/tg" && (tg.platform === "ios" || tg.platform === "android")) {
+          tg.requestFullscreen?.();
+        } else if (pathname !== "/tg") {
+          tg.exitFullscreen?.();
+        }
       } catch {
         /* older clients may lack some methods */
       }
     };
     apply();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
 
   return null;
 }

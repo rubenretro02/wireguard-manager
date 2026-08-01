@@ -10,6 +10,8 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // Populates env(safe-area-inset-*) in Telegram's fullscreen mode.
+  viewportFit: "cover",
 };
 
 export default function TgLayout({ children }: { children: React.ReactNode }) {
