@@ -675,7 +675,7 @@ export default function TgMiniApp() {
   });
 
   return (
-    <div className="min-h-screen pb-[calc(5rem+var(--tg-bottom))] max-w-lg mx-auto">
+    <div className="tg-app min-h-screen pb-[calc(5rem+var(--tg-bottom))] max-w-lg mx-auto">
       {/* Pull-to-refresh: refresco suave del tab actual (no recarga la página) */}
       <PullToRefresh onRefresh={() => refreshCurrent(true)} />
 

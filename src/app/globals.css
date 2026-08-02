@@ -177,37 +177,36 @@
   --tg-bottom: max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px));
 }
 
-/* Touch devices only — desktop keeps text selection and normal hover. */
+/* Touch feel — customer Mini App (.tg-app) only; the embedded admin panel and
+   the desktop site keep stock browser behavior. */
 @media (hover: none) {
-  html {
+  .tg-app {
     -webkit-tap-highlight-color: transparent; /* no gray flash on tap */
-  }
-  body {
     -webkit-user-select: none;
     user-select: none;
     -webkit-touch-callout: none;
   }
-  input,
-  textarea,
-  select,
-  [contenteditable] {
+  .tg-app input,
+  .tg-app textarea,
+  .tg-app select,
+  .tg-app [contenteditable] {
     -webkit-user-select: text;
     user-select: text;
   }
   /* Kill the double-tap-to-zoom delay so taps respond instantly. */
-  button,
-  a,
-  input,
-  select,
-  textarea {
+  .tg-app button,
+  .tg-app a,
+  .tg-app input,
+  .tg-app select,
+  .tg-app textarea {
     touch-action: manipulation;
   }
   /* Press state: content sinks slightly under the finger, ease-out on release. */
-  button:not(:disabled) {
+  .tg-app button:not(:disabled) {
     transition: color 0.15s, background-color 0.15s, border-color 0.15s,
       opacity 0.15s, transform 0.15s cubic-bezier(0.22, 1, 0.36, 1);
   }
-  button:not(:disabled):active {
+  .tg-app button:not(:disabled):active {
     transform: scale(0.96);
   }
 }
