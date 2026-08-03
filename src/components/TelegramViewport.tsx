@@ -61,15 +61,12 @@ export function TelegramViewport() {
         tg.disableVerticalSwipes?.(); // Bot API 7.7+; no-op on older clients
         tg.setHeaderColor?.(APP_BG);
         tg.setBackgroundColor?.(APP_BG);
-        // Fullscreen (Bot API 8.0+) gives the customer Mini App the native ⌄
-        // minimize control. Phones only (on desktop it would maximize the
-        // window) and ONLY on /tg: the embedded admin panel scrolls badly in
-        // fullscreen on iOS, so it stays a regular sheet — an admin flowing
-        // /tg → /tg/admin → /dashboard drops back out of fullscreen.
-        if (pathname === "/tg" && (tg.platform === "ios" || tg.platform === "android")) {
-          if (!tg.isFullscreen) tg.requestFullscreen?.();
-        } else if (pathname !== "/tg" && tg.isFullscreen) {
-          tg.exitFullscreen?.();
+        // Fullscreen (Bot API 8.0+) gives the Mini App the native ⌄ minimize
+        // control. Phones only (on desktop it would maximize the window).
+        // Applies on every route — the admin panel too (bare: native
+        // Close/⌄/Back plus safe-area padding, no touch effects there).
+        if ((tg.platform === "ios" || tg.platform === "android") && !tg.isFullscreen) {
+          tg.requestFullscreen?.();
         }
       } catch {
         /* older clients may lack some methods */

@@ -16,7 +16,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { PullToRefresh } from "@/components/PullToRefresh";
 import { StatCard } from "@/components/StatCard";
 import {
   Users,
@@ -2046,7 +2045,6 @@ PersistentKeepalive = 25`;
       hasSocks5Access={hasSocks5Access}
       onLogout={handleLogout}
     >
-      <PullToRefresh onRefresh={() => fetchWireGuardData(true)} />
       <PageHeader title="Dashboard" description="Manage your WireGuard peers">
         <Select value={selectedRouterId} onValueChange={setSelectedRouterId}>
           <SelectTrigger className="w-[200px] bg-secondary border-border">
