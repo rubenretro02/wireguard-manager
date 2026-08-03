@@ -41,6 +41,36 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-03 — Peers visibles con el server caído (fallback a DB, todos los tipos)
+
+**Problema:** con un server caído (caso real: Clif FL), dashboard y Public IPs mostraban 0 peers.
+Causa raíz: `getPeersForInterface`/`getPeers`/`getInterfaceInfo` en `linux-wireguard.ts` tragaban
+el error SSH y devolvían `[]`/`null` — `cachedRouterRead` lo cacheaba como lectura buena
+(`stale:false`), el dashboard pintaba 0 y sobreescribía `wg_peer_cache` (localStorage) con la
+lista vacía. Colateral: la Mini App (`tg-store.ts`) veía `stale:false` con dump vacío y persistía
+`status='disabled'` en `tg_customer_peers` durante el outage.
+
+**Cambios (sin migraciones SQL):**
+- `linux-wireguard.ts`: esas 3 funciones ahora relanzan el error (contrato SWR de `cachedRouterRead`).
+- `route.ts` getPeers Linux: try/catch por interface + flag `routerDown`; con server caído incluye
+  TODOS los `linux_peers` ausentes del dump (no solo disabled) → lista reconstruida desde DB.
+- `route.ts` getPeers MikroTik: si `cachedRouterRead` lanza (cold start + router caído), reconstruye
+  desde `peer_metadata` + deriva la IP pública (comment) matcheando el prefijo /24 de
+  `allowed_address` contra `public_ips.internal_subnet`. Solo peers creados desde la app.
+- Respuesta getPeers (ambos): `{ peers, stale, fetchedAt?, routerDown?, source: "db"|"live" }`.
+- `mikrotik.ts` REST: `getWireGuardPeers`/`getWireGuardInterfaces` normalizan a array (body vacío
+  devolvía `{}` y envenenaba la caché).
+- `dashboard/page.tsx`: guard `Array.isArray(peerData.peers)`, estado `routerDown`, banner
+  "Server down — showing saved peers (last seen …)".
+- `public-ips/page.tsx` + `admin/page.tsx` (fetchPeerCounts): guard + indicador ámbar
+  "Server unreachable — peer data may be outdated". Conteos por IP funcionan con el fallback
+  (comment viene poblado desde DB).
+- `tg-store.ts:719`: sync requiere `!read.stale && read.data.length > 0` (cinturón anti-corrupción).
+- SOCKS5: sin cambios — la lista ya es DB-first (`socks5_proxies`).
+
+**Gotcha:** con el fallback DB los peers salen con `disabled` real (Linux) o `disabled:false`
+(MikroTik, estado desconocido) y sin handshake/rx/tx → se ven Disconnected, correcto.
+
 ### 2026-06-14 — Login de admin/semi-admin desde Telegram (v22)
 
 **Qué es:** los admins y semi-admins (cuentas de `profiles` / Supabase Auth, NO `tg_customers`)
@@ -302,3 +332,74 @@ Buy / Payments (agents solo ven los 3 primeros).
 | Crear interface devuelve `"Interface did not start"` | Conflicto de puerto no detectado, o `wg-quick` falla | Revisar `journalctl -u wg-quick@wgN` en el servidor |
 | TypeScript falla en build pero `tsc --noEmit` local pasa | `node_modules` desincronizado en Vercel | Limpiar cache de build en Vercel |
 | Cambios no se ven en prod | Commit de colaborador no se desplegó | Merge desde GitHub con cuenta dueña |
+
+
+---
+
+# Karpathy coding guidelines (appended)
+
+# CLAUDE.md
+
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+## 1. Think Before Coding
+
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
+
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
+```
+
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+---
+
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

@@ -143,18 +143,26 @@ export async function POST(request: Request) {
           // seconds, so "connected" ages out naturally on the client).
           const livePeers: Array<{ publicKey: string; allowedIps: string; endpoint?: string; latestHandshake?: string; transfer?: { rx: number; tx: number }; interface: string }> = [];
           let peersStale = false;
+          let routerDown = false;
           let peersFetchedAt = Date.now();
           for (const iface of interfaceSet) {
-            const read = await cachedRouterRead(
-              `linux-peers:${routerId}:${iface}`,
-              () => linuxClient.getPeersForInterface(iface),
-              { bypassTtl: Boolean(forceRefresh) }
-            );
-            if (read.stale) {
+            try {
+              const read = await cachedRouterRead(
+                `linux-peers:${routerId}:${iface}`,
+                () => linuxClient.getPeersForInterface(iface),
+                { bypassTtl: Boolean(forceRefresh) }
+              );
+              if (read.stale) {
+                peersStale = true;
+                routerDown = true;
+                peersFetchedAt = Math.min(peersFetchedAt, read.fetchedAt);
+              }
+              for (const p of read.data) livePeers.push({ ...p, interface: iface });
+            } catch {
+              // SSH down and no in-memory cache: fall back to linux_peers below
               peersStale = true;
-              peersFetchedAt = Math.min(peersFetchedAt, read.fetchedAt);
+              routerDown = true;
             }
-            for (const p of read.data) livePeers.push({ ...p, interface: iface });
           }
 
           // Get stored peer metadata from BOTH tables to fully populate names/comments
@@ -219,10 +227,12 @@ export async function POST(request: Request) {
             };
           });
 
-          // Also include disabled peers (stored but not in WireGuard)
+          // Also include disabled peers (stored but not in WireGuard). When the
+          // server is unreachable, include ALL stored peers missing from the live
+          // dump so the list can be reconstructed from the DB.
           const livePeerKeys = new Set(livePeers.map(p => p.publicKey));
           const disabledPeers = (storedPeers || [])
-            .filter((p: any) => p.disabled && !livePeerKeys.has(p.public_key))
+            .filter((p: any) => (p.disabled || routerDown) && !livePeerKeys.has(p.public_key))
             .map((stored: any) => ({
               ".id": stored.id,
               "public-key": stored.public_key,
@@ -234,7 +244,7 @@ export async function POST(request: Request) {
               rx: 0,
               tx: 0,
               interface: router.wg_interface || "wg1",
-              disabled: true,
+              disabled: Boolean(stored.disabled),
               name: stored.name || "",
               comment: stored.comment || stored.public_ip || "",
               created_by_user_id: stored.created_by_user_id,
@@ -245,6 +255,8 @@ export async function POST(request: Request) {
             peers: [...formattedPeers, ...disabledPeers],
             stale: peersStale,
             fetchedAt: peersFetchedAt,
+            routerDown,
+            source: routerDown && livePeers.length === 0 ? "db" : "live",
           });
         }
 
@@ -1069,17 +1081,47 @@ export async function POST(request: Request) {
         // Stale-while-revalidate: one MikroTik query per TTL window serves all
         // polling clients; if the router is unreachable, the last known list is
         // returned flagged stale instead of failing.
-        const { data: peers, stale, fetchedAt } = await cachedRouterRead(
-          `mt-peers:${routerId}`,
-          () => client.getWireGuardPeers(),
-          { bypassTtl: Boolean(forceRefresh) }
-        );
-        console.log(`[WireGuard API] Got ${peers.length} peers${stale ? " (stale)" : ""}`);
-        if (peers.length > 0) {
-          const addresses = peers.slice(0, 5).map(p => p["allowed-address"]);
-          console.log(`[WireGuard API] Sample addresses: ${addresses.join(", ")}`);
+        try {
+          const { data: peers, stale, fetchedAt } = await cachedRouterRead(
+            `mt-peers:${routerId}`,
+            () => client.getWireGuardPeers(),
+            { bypassTtl: Boolean(forceRefresh) }
+          );
+          console.log(`[WireGuard API] Got ${peers.length} peers${stale ? " (stale)" : ""}`);
+          if (peers.length > 0) {
+            const addresses = peers.slice(0, 5).map(p => p["allowed-address"]);
+            console.log(`[WireGuard API] Sample addresses: ${addresses.join(", ")}`);
+          }
+          return NextResponse.json({ peers, stale, fetchedAt, routerDown: stale, source: "live" });
+        } catch (err) {
+          // Router down and no in-memory cache (e.g. serverless cold start):
+          // rebuild the basic list from peer_metadata. Only peers created from
+          // the app have a row here; the public IP (comment) is derived by
+          // matching allowed_address's /24 prefix against public_ips.internal_subnet.
+          console.error(`[WireGuard API] getPeers failed, falling back to peer_metadata:`, err instanceof Error ? err.message : err);
+          const [{ data: meta }, { data: ips }] = await Promise.all([
+            supabase.from("peer_metadata").select("*").eq("router_id", routerId),
+            supabase.from("public_ips").select("public_ip, internal_subnet").eq("router_id", routerId),
+          ]);
+          const subnetToIp = new Map<string, string>(
+            (ips || []).map((ip: { public_ip: string; internal_subnet: string }) => [ip.internal_subnet, ip.public_ip])
+          );
+          const peers = (meta || []).map((m: any) => {
+            const prefix = String(m.allowed_address || "").split("/")[0].split(".").slice(0, 3).join(".");
+            return {
+              ".id": m.id,
+              "public-key": m.peer_public_key,
+              name: m.peer_name || "",
+              "allowed-address": m.allowed_address || "",
+              interface: m.peer_interface || undefined,
+              comment: subnetToIp.get(prefix) || "",
+              disabled: false,
+              created_by_user_id: m.created_by_user_id,
+              created_by_email: m.created_by_email,
+            };
+          });
+          return NextResponse.json({ peers, stale: true, routerDown: true, source: "db" });
         }
-        return NextResponse.json({ peers, stale, fetchedAt });
       }
       case "createPeer": {
         console.log("[WireGuard API] Creating peer with data:", JSON.stringify(data, null, 2));

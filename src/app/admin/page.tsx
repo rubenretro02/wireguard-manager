@@ -60,6 +60,7 @@ import {
   Upload,
   FileJson,
   Copy,
+  WifiOff,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { formatLogMessage, getActionColor } from "@/lib/activity-logger";
@@ -305,6 +306,7 @@ export default function AdminPage() {
   const [creatingRulesFor, setCreatingRulesFor] = useState<number | null>(null);
   const [ipSearchQuery, setIpSearchQuery] = useState("");
   const [peersByIp, setPeersByIp] = useState<Record<string, { count: number; names: string[]; peers: Array<{ id: string; name: string; address: string }> }>>({});
+  const [peersStaleDown, setPeersStaleDown] = useState(false);
 
   // Peers detail modal
   const [peersModalOpen, setPeersModalOpen] = useState(false);
@@ -649,7 +651,8 @@ export default function AdminPage() {
         body: JSON.stringify({ action: "getPeers", routerId: selectedRouterForIps })
       });
       const data = await res.json();
-      if (data.peers) {
+      if (Array.isArray(data.peers)) {
+        setPeersStaleDown(Boolean(data.stale || data.routerDown));
         const counts: Record<string, { count: number; names: string[]; peers: Array<{ id: string; name: string; address: string; publicKey?: string; interface?: string; disabled?: boolean; rx?: number; tx?: number; comment?: string }> }> = {};
         for (const peer of data.peers) {
           const comment = peer.comment || "";
@@ -1997,6 +2000,12 @@ export default function AdminPage() {
                       </Badge>
                     )}
                   </div>
+                )}
+                {peersStaleDown && (
+                  <span className="flex items-center gap-1.5 text-xs text-amber-400 whitespace-nowrap">
+                    <WifiOff className="w-3.5 h-3.5" />
+                    Server unreachable — peer data may be outdated
+                  </span>
                 )}
                 {/* v15: read-only badge showing this router's configured WG interface.
                     New IPs created from this page inherit it automatically. */}

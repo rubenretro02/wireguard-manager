@@ -22,7 +22,8 @@ import {
   PowerOff,
   Trash2,
   RefreshCw,
-  User
+  User,
+  WifiOff
 } from "lucide-react";
 import type { Profile, Router as RouterType, PublicIP, UserCapabilities, PeerMetadata } from "@/lib/types";
 
@@ -53,6 +54,7 @@ export default function PublicIpsPage() {
   const [hasSocks5Access, setHasSocks5Access] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [peersByIp, setPeersByIp] = useState<Record<string, { count: number; peers: PeerInfo[] }>>({});
+  const [peersStaleDown, setPeersStaleDown] = useState(false);
   const [peerMetadata, setPeerMetadata] = useState<Record<string, PeerMetadata>>({});
 
   // User hierarchy for visibility
@@ -300,7 +302,8 @@ export default function PublicIpsPage() {
         body: JSON.stringify({ action: "getPeers", routerId: selectedRouterId })
       });
       const data = await res.json();
-      if (data.peers) {
+      if (Array.isArray(data.peers)) {
+        setPeersStaleDown(Boolean(data.stale || data.routerDown));
         const counts: Record<string, { count: number; peers: PeerInfo[] }> = {};
         for (const peer of data.peers) {
           const comment = peer.comment || "";
@@ -492,6 +495,12 @@ export default function PublicIpsPage() {
                 <User className="w-3 h-3 mr-1" />
                 {canSeeAllPeers ? "All Peers Visible" : canCreateUsers ? "My Team's Peers" : "My Peers Only"}
               </Badge>
+            )}
+            {peersStaleDown && (
+              <span className="flex items-center gap-1.5 text-xs text-amber-400 whitespace-nowrap">
+                <WifiOff className="w-3.5 h-3.5" />
+                Server unreachable — peer data may be outdated
+              </span>
             )}
           </div>
           <Button

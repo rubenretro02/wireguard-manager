@@ -191,6 +191,7 @@ export default function DashboardPage() {
   // Stale-while-revalidate: when the router is unreachable the list on screen
   // is the last known data; this holds its fetch time (null = data is live).
   const [staleSince, setStaleSince] = useState<number | null>(null);
+  const [routerDown, setRouterDown] = useState(false);
   const lastGoodFetchRef = useRef<number | null>(null);
   const fetchInFlightRef = useRef(false);
 
@@ -779,6 +780,7 @@ export default function DashboardPage() {
     if (!selectedRouterId) return;
     setPeers(getPeerCache(selectedRouterId));
     setStaleSince(null);
+    setRouterDown(false);
   }, [selectedRouterId]);
 
   // Native Telegram Back button (same treatment as the /tg Mini App): with a
@@ -921,14 +923,17 @@ export default function DashboardPage() {
           setInterfaces(cachedInterfaces);
         }
       }
-      if (peerData.peers) {
+      if (Array.isArray(peerData.peers)) {
         setPeers(peerData.peers);
         if (peerData.stale) {
-          // Router unreachable: the server returned its last known list
+          // Router unreachable: the server returned its last known list (or a
+          // DB-reconstructed one when routerDown && source === "db")
           setStaleSince(peerData.fetchedAt || lastGoodFetchRef.current || Date.now());
+          setRouterDown(Boolean(peerData.routerDown));
         } else {
           lastGoodFetchRef.current = peerData.fetchedAt || Date.now();
           setStaleSince(null);
+          setRouterDown(false);
           // Cache the peers for when the router AND the server cache are down
           setPeerCache(selectedRouterId, peerData.peers);
         }
@@ -2132,7 +2137,9 @@ PersistentKeepalive = 25`;
               {staleSince !== null && (
                 <span className="flex items-center gap-1.5 text-xs text-amber-400">
                   <WifiOff className="w-3.5 h-3.5" />
-                  Router unreachable — showing data from {new Date(staleSince).toLocaleTimeString()}
+                  {routerDown
+                    ? `Server down — showing saved peers (last seen ${new Date(staleSince).toLocaleTimeString()})`
+                    : `Router unreachable — showing data from ${new Date(staleSince).toLocaleTimeString()}`}
                 </span>
               )}
             </div>

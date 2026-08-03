@@ -65,7 +65,8 @@ class MikroTikRestClient {
   }
 
   async getWireGuardInterfaces(): Promise<WireGuardInterface[]> {
-    return this.request<WireGuardInterface[]>("GET", "/interface/wireguard");
+    const res = await this.request<WireGuardInterface[]>("GET", "/interface/wireguard");
+    return Array.isArray(res) ? res : [];
   }
 
   async createWireGuardInterface(data: Partial<WireGuardInterface>): Promise<WireGuardInterface> {
@@ -73,7 +74,8 @@ class MikroTikRestClient {
   }
 
   async getWireGuardPeers(): Promise<WireGuardPeer[]> {
-    return this.request<WireGuardPeer[]>("GET", "/interface/wireguard/peers");
+    const res = await this.request<WireGuardPeer[]>("GET", "/interface/wireguard/peers");
+    return Array.isArray(res) ? res : [];
   }
 
   async createWireGuardPeer(data: Partial<WireGuardPeer>): Promise<WireGuardPeer> {

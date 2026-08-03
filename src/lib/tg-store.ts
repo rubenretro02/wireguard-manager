@@ -715,8 +715,9 @@ export async function getLiveStatusesForPeers(
           const byKey = new Map(read.data.map((lp) => [lp.publicKey, lp]));
           for (const p of routerPeers.filter((x) => x.wg_interface === iface)) {
             const lp = byKey.get(p.peer_public_key);
-            // No sincronizar status desde datos stale: reflejan una realidad vieja
-            if (!read.stale) sync(p, Boolean(lp)); // en Linux, presente en wg = habilitado
+            // No sincronizar status desde datos stale ni desde un dump vacío
+            // (un [] con el server caído marcaría todos los peers disabled)
+            if (!read.stale && read.data.length > 0) sync(p, Boolean(lp)); // en Linux, presente en wg = habilitado
             if (!lp) {
               live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
               continue;

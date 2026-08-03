@@ -387,8 +387,9 @@ export class LinuxWireGuardClient {
         address: ipAddr.trim(),
       };
     } catch (error) {
+      // Propagate so cachedRouterRead can serve its last good read as stale
       console.error("[LinuxWG] Failed to get interface info:", error);
-      return null;
+      throw error;
     }
   }
 
@@ -422,8 +423,9 @@ export class LinuxWireGuardClient {
 
       return peers;
     } catch (error) {
+      // Propagate so callers can distinguish "server down" from "0 peers"
       console.error("[LinuxWG] Failed to get peers:", error);
-      return [];
+      throw error;
     }
   }
 
@@ -520,8 +522,9 @@ export class LinuxWireGuardClient {
       }
       return peers;
     } catch (error) {
+      // Propagate so cachedRouterRead marks the read stale instead of caching []
       console.error(`[LinuxWG] Failed to get peers for ${wgInterface}:`, error);
-      return [];
+      throw error;
     }
   }
 
