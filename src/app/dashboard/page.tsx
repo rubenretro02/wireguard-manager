@@ -148,6 +148,9 @@ const setInterfaceCache = (routerId: string, interfaces: WireGuardInterface[]) =
 // the interface cache): the table renders instantly on load and survives a
 // router/server outage — failures show as staleness, never as an empty list.
 const PEER_CACHE_KEY = "wg_peer_cache";
+// Per-router timestamp of the last successful (live) fetch, so after a page
+// reload the "Server down" banner can show the real last-connection time.
+const PEER_CACHE_AT_KEY = "wg_peer_cache_at";
 
 const getPeerCache = (routerId: string): PeerWithMetadata[] => {
   if (typeof window === "undefined") return [];
@@ -159,12 +162,25 @@ const getPeerCache = (routerId: string): PeerWithMetadata[] => {
   }
 };
 
-const setPeerCache = (routerId: string, peers: PeerWithMetadata[]) => {
+const getPeerCacheAt = (routerId: string): number | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const cache = JSON.parse(localStorage.getItem(PEER_CACHE_AT_KEY) || "{}");
+    return typeof cache[routerId] === "number" ? cache[routerId] : null;
+  } catch {
+    return null;
+  }
+};
+
+const setPeerCache = (routerId: string, peers: PeerWithMetadata[], fetchedAt?: number) => {
   if (typeof window === "undefined") return;
   try {
     const cache = JSON.parse(localStorage.getItem(PEER_CACHE_KEY) || "{}");
     cache[routerId] = peers;
     localStorage.setItem(PEER_CACHE_KEY, JSON.stringify(cache));
+    const atCache = JSON.parse(localStorage.getItem(PEER_CACHE_AT_KEY) || "{}");
+    atCache[routerId] = fetchedAt || Date.now();
+    localStorage.setItem(PEER_CACHE_AT_KEY, JSON.stringify(atCache));
   } catch {
     // Ignore localStorage errors (quota)
   }
@@ -927,15 +943,19 @@ export default function DashboardPage() {
         setPeers(peerData.peers);
         if (peerData.stale) {
           // Router unreachable: the server returned its last known list (or a
-          // DB-reconstructed one when routerDown && source === "db")
-          setStaleSince(peerData.fetchedAt || lastGoodFetchRef.current || Date.now());
+          // DB-reconstructed one when routerDown && source === "db"). The
+          // localStorage timestamp survives page reloads, so "last connection"
+          // stays accurate even when the backend has no fetchedAt to offer.
+          setStaleSince(
+            peerData.fetchedAt || lastGoodFetchRef.current || getPeerCacheAt(selectedRouterId) || Date.now()
+          );
           setRouterDown(Boolean(peerData.routerDown));
         } else {
           lastGoodFetchRef.current = peerData.fetchedAt || Date.now();
           setStaleSince(null);
           setRouterDown(false);
           // Cache the peers for when the router AND the server cache are down
-          setPeerCache(selectedRouterId, peerData.peers);
+          setPeerCache(selectedRouterId, peerData.peers, lastGoodFetchRef.current ?? undefined);
         }
         if (forceRefresh) {
           toast.success(`Loaded ${peerData.peers.length} peers`);
@@ -2138,8 +2158,8 @@ PersistentKeepalive = 25`;
                 <span className="flex items-center gap-1.5 text-xs text-amber-400">
                   <WifiOff className="w-3.5 h-3.5" />
                   {routerDown
-                    ? `Server down — showing saved peers (last seen ${new Date(staleSince).toLocaleTimeString()})`
-                    : `Router unreachable — showing data from ${new Date(staleSince).toLocaleTimeString()}`}
+                    ? `Server down — (last connection ${new Date(staleSince).toLocaleString()})`
+                    : `Router unreachable — showing data from ${new Date(staleSince).toLocaleString()}`}
                 </span>
               )}
             </div>
