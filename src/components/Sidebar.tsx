@@ -16,6 +16,7 @@ import {
   Network,
   UserCog,
   Key,
+  KeyRound,
   Send,
   UserCircle
 } from "lucide-react";
@@ -47,6 +48,7 @@ const adminSubMenu = [
   { name: "IPs", href: "/admin?tab=ips", icon: Globe, tab: "ips" },
   { name: "Users", href: "/admin?tab=users", icon: UserCog, tab: "users" },
   { name: "Access", href: "/admin?tab=access", icon: Key, tab: "access" },
+  { name: "Interfaces", href: "/admin?tab=interfaces", icon: KeyRound, tab: "interfaces" },
   { name: "Telegram", href: "/admin/telegram", icon: Send, tab: null },
 ];
 

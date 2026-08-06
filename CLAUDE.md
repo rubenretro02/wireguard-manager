@@ -41,6 +41,30 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-06 — Backup de llaves de interfaces (Admin → Interfaces) v23
+
+**Motivo:** la private key de cada interface WG solo vivía en `/etc/wireguard/<if>.conf`; al
+formatear un server se pierde y TODOS los clientes deben re-descargar su config (pasó con TX y Ohio).
+
+**Migración SQL:** `scripts/migration-v23-wg-interfaces.sql` — tabla `wg_interfaces`
+(router_id, host, interface_name, listen_port, private_key, public_key, address, running,
+peer_count, source, last_synced_at) con `UNIQUE(host, interface_name)` — la clave es host+interface
+porque varias filas de `routers` pueden apuntar al mismo host (workflow router-per-interface).
+RLS admin-only; la app usa service role.
+
+- `linux-wireguard.ts`: `getInterfaceConfigs()` — usa `getInterfacesDetail()` para los nombres y
+  hace `cat /etc/wireguard/<if>.conf` por cada uno, parseando PrivateKey/ListenPort/Address/[Peer].
+- `wireguard-keys.ts`: `publicKeyFromPrivate()` (scalarMult.base, equivalente a `wg pubkey`).
+- `/api/interfaces` (nuevo, runtime nodejs): GET lista la tabla; POST `{action:"sync", routerId?}`
+  recorre los servers linux-ssh (uno por host, dedupe) y hace upsert. Guard admin vía service role.
+- `route.ts` `createLinuxInterface`: guarda el keypair en `wg_interfaces` al crear (source `created`).
+- Admin: pestaña **Interfaces** (+ link en Sidebar) con tabla server/interface/port/address/
+  public key/private key (oculta con ojo + copiar)/peers/last synced, botones "Sync from servers"
+  y "Download JSON".
+
+**Gotcha:** el sync necesita SSH vivo; los servers caídos se listan como error pero no borran lo ya
+guardado. Correr el sync después de crear interfaces a mano por SSH.
+
 ### 2026-08-06 — Script de restauración de servers formateados
 
 `scripts/restore-linux-server.mjs` — reconstruye un server linux-ssh formateado desde Supabase:

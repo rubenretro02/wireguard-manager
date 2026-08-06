@@ -29,6 +29,20 @@ export function generateKeyPair(): WireGuardKeyPair {
 }
 
 /**
+ * Derive the public key of an existing private key (same Curve25519 math as
+ * `wg pubkey`). Used to back up server interface keys read from their .conf.
+ */
+export function publicKeyFromPrivate(privateKey: string): string | null {
+  try {
+    const bytes = Buffer.from(privateKey.trim(), "base64");
+    if (bytes.length !== 32) return null;
+    return Buffer.from(nacl.scalarMult.base(new Uint8Array(bytes))).toString("base64");
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Validate a WireGuard key (base64 encoded, 32 bytes when decoded)
  */
 export function isValidKey(key: string): boolean {

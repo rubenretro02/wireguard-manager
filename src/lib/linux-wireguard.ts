@@ -1039,6 +1039,47 @@ export class LinuxWireGuardClient {
   }
 
   /**
+   * Read every interface's [Interface] section from /etc/wireguard/*.conf,
+   * including the private key — the one piece of state that exists ONLY on the
+   * server and is lost forever if it gets formatted.
+   */
+  async getInterfaceConfigs(): Promise<Array<{
+    name: string;
+    privateKey: string | null;
+    listenPort: number | null;
+    address: string | null;
+    running: boolean;
+    peerCount: number;
+  }>> {
+    const detail = await this.getInterfacesDetail();
+    const out: Array<{ name: string; privateKey: string | null; listenPort: number | null; address: string | null; running: boolean; peerCount: number }> = [];
+
+    for (const iface of detail) {
+      let conf = "";
+      try {
+        conf = await this.executeCommand(`cat /etc/wireguard/${iface.name}.conf 2>/dev/null || true`);
+      } catch {
+        // Interface running without a conf file (or unreadable): keep what wg show gave us
+      }
+      const section = conf.match(/\[Interface\]([\s\S]*?)(?=\[Peer\]|$)/)?.[1] || "";
+      const privateKey = section.match(/PrivateKey\s*=\s*(\S+)/i)?.[1] || null;
+      const portFromConf = section.match(/ListenPort\s*=\s*(\d+)/i)?.[1];
+      const addresses = [...section.matchAll(/Address\s*=\s*(.+)/gi)].map(m => m[1].trim());
+
+      out.push({
+        name: iface.name,
+        privateKey,
+        listenPort: iface.port ?? (portFromConf ? parseInt(portFromConf, 10) : null),
+        address: addresses.length > 0 ? addresses.join(", ") : null,
+        running: iface.running,
+        peerCount: (conf.match(/\[Peer\]/g) || []).length,
+      });
+    }
+
+    return out;
+  }
+
+  /**
    * Create a new WireGuard interface on Linux.
    * Validates name and port collisions, writes the conf, enables and starts the service.
    */

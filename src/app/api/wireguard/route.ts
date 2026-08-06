@@ -892,6 +892,28 @@ export async function POST(request: Request) {
             details: { listenPort, address, publicKey: keyPair.publicKey },
           });
 
+          // Back up the keypair immediately: without this the private key would
+          // only exist in the server's .conf and die with a reinstall.
+          const keyBackupClient = getAdminClient();
+          if (keyBackupClient) {
+            await keyBackupClient.from("wg_interfaces").upsert(
+              {
+                router_id: routerId,
+                host: router.host,
+                interface_name: name,
+                listen_port: parseInt(String(listenPort), 10),
+                private_key: keyPair.privateKey,
+                public_key: keyPair.publicKey,
+                address,
+                running: true,
+                peer_count: 0,
+                source: "created",
+                last_synced_at: new Date().toISOString(),
+              },
+              { onConflict: "host,interface_name" }
+            );
+          }
+
           return NextResponse.json({
             success: true,
             interface: {

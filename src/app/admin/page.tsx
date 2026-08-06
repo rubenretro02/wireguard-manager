@@ -61,6 +61,8 @@ import {
   FileJson,
   Copy,
   WifiOff,
+  KeyRound,
+  EyeOff,
 } from "lucide-react";
 import { Progress } from "@/components/ui/progress";
 import { formatLogMessage, getActionColor } from "@/lib/activity-logger";
@@ -154,6 +156,47 @@ interface ActivityLog {
   routers?: { id: string; name: string } | null;
 }
 
+interface WgInterfaceRow {
+  id: string;
+  router_id: string | null;
+  host: string;
+  interface_name: string;
+  listen_port: number | null;
+  private_key: string | null;
+  public_key: string | null;
+  address: string | null;
+  running: boolean;
+  peer_count: number | null;
+  last_synced_at: string;
+}
+
+/** Key cell: private keys stay hidden until revealed; both are copyable. */
+function KeyCell({ value, secret = false }: { value: string | null; secret?: boolean }) {
+  const [revealed, setRevealed] = useState(false);
+  if (!value) return <span className="text-muted-foreground">—</span>;
+  const shown = !secret || revealed;
+  return (
+    <div className="flex items-center gap-1">
+      <span className={`font-mono text-xs ${shown ? "max-w-[160px] truncate" : "text-muted-foreground"}`} title={shown ? value : undefined}>
+        {shown ? value : "••••••••••••"}
+      </span>
+      {secret && (
+        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setRevealed(v => !v)}>
+          {revealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-6 w-6"
+        onClick={() => { navigator.clipboard.writeText(value); toast.success("Copied"); }}
+      >
+        <Copy className="w-3.5 h-3.5" />
+      </Button>
+    </div>
+  );
+}
+
 export default function AdminPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -179,6 +222,7 @@ export default function AdminPage() {
     if (tab === "users") return "users";
     if (tab === "socks5") return "socks5";
     if (tab === "backups") return "backups";
+    if (tab === "interfaces") return "interfaces";
     return "routers";
   }, []);
 
@@ -351,6 +395,11 @@ export default function AdminPage() {
   const [logsStartDate, setLogsStartDate] = useState("");
   const [logsEndDate, setLogsEndDate] = useState("");
   const LOGS_PAGE_SIZE = 50;
+
+  // WireGuard interface key backup states
+  const [savedInterfaces, setSavedInterfaces] = useState<WgInterfaceRow[]>([]);
+  const [syncingInterfaces, setSyncingInterfaces] = useState(false);
+  const [interfaceSyncErrors, setInterfaceSyncErrors] = useState<Array<{ host: string; name: string; error: string }>>([]);
 
   // Backup states
   const [selectedRouterForBackup, setSelectedRouterForBackup] = useState<string>("");
@@ -1575,6 +1624,54 @@ export default function AdminPage() {
     setBackupLoading(false);
   };
 
+  const fetchWgInterfaces = useCallback(async () => {
+    try {
+      const res = await fetch("/api/interfaces");
+      const data = await res.json();
+      if (res.ok && Array.isArray(data.interfaces)) setSavedInterfaces(data.interfaces);
+    } catch {
+      // keep whatever is on screen
+    }
+  }, []);
+
+  const handleSyncInterfaces = async () => {
+    setSyncingInterfaces(true);
+    setInterfaceSyncErrors([]);
+    try {
+      const res = await fetch("/api/interfaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sync" })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        const failed = (data.servers || []).filter((s: { ok: boolean }) => !s.ok);
+        setInterfaceSyncErrors(failed);
+        toast.success(`${data.saved} interfaces saved${failed.length ? ` (${failed.length} server(s) unreachable)` : ""}`);
+        await fetchWgInterfaces();
+      } else {
+        toast.error(data.error || "Sync failed");
+      }
+    } catch {
+      toast.error("Sync failed");
+    }
+    setSyncingInterfaces(false);
+  };
+
+  const handleDownloadInterfaces = () => {
+    const fileName = `wg-interfaces-${new Date().toISOString().split("T")[0]}.json`;
+    const blob = new Blob([JSON.stringify(savedInterfaces, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    toast.success(`Downloaded: ${fileName}`);
+  };
+
   const handleDownloadBackup = () => {
     if (!backupData) return;
 
@@ -1671,6 +1768,11 @@ export default function AdminPage() {
     }
   }, [selectedRouterForBackup, fetchBackupPreview]);
 
+  // Load the saved interface keys when the tab opens (DB read, no SSH)
+  useEffect(() => {
+    if (activeTab === "interfaces") fetchWgInterfaces();
+  }, [activeTab, fetchWgInterfaces]);
+
   // Format date helper
   const formatDate = (dateString: string | null | undefined) => {
     if (!dateString) return "-";
@@ -1746,6 +1848,10 @@ export default function AdminPage() {
             <TabsTrigger value="socks5" className="gap-2">
               <Network className="w-4 h-4" />
               SOCKS5
+            </TabsTrigger>
+            <TabsTrigger value="interfaces" className="gap-2">
+              <KeyRound className="w-4 h-4" />
+              Interfaces
             </TabsTrigger>
             <TabsTrigger value="backups" className="gap-2">
               <Archive className="w-4 h-4" />
@@ -2626,6 +2732,102 @@ export default function AdminPage() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* Interfaces Tab — permanent backup of every server's WG interface keys */}
+          <TabsContent value="interfaces" className="space-y-4">
+            <div className="flex justify-between items-center gap-4 flex-wrap">
+              <div>
+                <h3 className="text-lg font-semibold">WireGuard Interfaces</h3>
+                <p className="text-sm text-muted-foreground">
+                  Every interface of every server with its port and keys, saved in the database.
+                  The private key only lives on the server otherwise — if it gets formatted, it is lost forever.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={handleDownloadInterfaces}
+                  disabled={savedInterfaces.length === 0}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download JSON
+                </Button>
+                <Button onClick={handleSyncInterfaces} disabled={syncingInterfaces} className="gap-2">
+                  <RefreshCw className={`w-4 h-4 ${syncingInterfaces ? "animate-spin" : ""}`} />
+                  {syncingInterfaces ? "Syncing..." : "Sync from servers"}
+                </Button>
+              </div>
+            </div>
+
+            {interfaceSyncErrors.length > 0 && (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-1">
+                {interfaceSyncErrors.map((e, i) => (
+                  <p key={i} className="text-xs text-amber-400">
+                    <span className="font-medium">{e.name}</span> ({e.host}): {e.error}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent border-border">
+                    <TableHead>Server</TableHead>
+                    <TableHead>Interface</TableHead>
+                    <TableHead>Port</TableHead>
+                    <TableHead>Address</TableHead>
+                    <TableHead>Public Key</TableHead>
+                    <TableHead>Private Key</TableHead>
+                    <TableHead>Peers</TableHead>
+                    <TableHead>Last synced</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {savedInterfaces.length === 0 ? (
+                    <TableRow className="border-border">
+                      <TableCell colSpan={8} className="text-center text-muted-foreground py-10">
+                        No interfaces saved yet — click &quot;Sync from servers&quot; to read them over SSH.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    savedInterfaces.map((iface) => (
+                      <TableRow key={iface.id} className="border-border hover:bg-secondary/50 transition-colors">
+                        <TableCell>
+                          <div className="font-medium">{routers.find(r => r.id === iface.router_id)?.name || iface.host}</div>
+                          <div className="text-xs text-muted-foreground font-mono">{iface.host}</div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="font-mono gap-1 text-cyan-400 border-cyan-400/50">
+                            <Network className="w-3 h-3" />
+                            {iface.interface_name}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono">{iface.listen_port ?? "—"}</TableCell>
+                        <TableCell className="font-mono text-xs max-w-[180px] truncate" title={iface.address || ""}>
+                          {iface.address || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <KeyCell value={iface.public_key} />
+                        </TableCell>
+                        <TableCell>
+                          <KeyCell value={iface.private_key} secret />
+                        </TableCell>
+                        <TableCell>{iface.peer_count ?? "—"}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {iface.last_synced_at ? new Date(iface.last_synced_at).toLocaleString() : "—"}
+                          {iface.running === false && (
+                            <Badge variant="outline" className="ml-2 text-amber-400 border-amber-400/50">down</Badge>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
           </TabsContent>
 
           {/* Backups Tab */}
