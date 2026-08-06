@@ -41,6 +41,20 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-06 — Script de restauración de servers formateados
+
+`scripts/restore-linux-server.mjs` — reconstruye un server linux-ssh formateado desde Supabase:
+paquetes base, user del panel (fila `routers`) + sudoers NOPASSWD, interface WG (keypair NUEVO,
+mismo listen_port desde `tg_customer_peers`), 253 IPs públicas + SNAT desde `public_ips`,
+y todos los peers enabled de `linux_peers` con sus mismas llaves/IPs. Idempotente.
+Uso: `node scripts/restore-linux-server.mjs --host <ip> --ssh-user X --ssh-pass Y [--dry-run]`.
+
+**Gotcha clave:** la private key de la interface del server NO está en la DB (solo en el .conf
+del server) — al restaurar se genera keypair nuevo y los clientes deben re-descargar su config
+(solo cambia la PublicKey del server). El script actualiza `tg_customer_peers.server_public_key`.
+Después de restaurar, descargar un backup del panel (Admin → Backups): es el único lugar donde
+queda la private key. Usado el 2026-08-06 para el TX 12.164.34.2 (formateado; 90 peers, 253 IPs).
+
 ### 2026-08-03 — Peers visibles con el server caído (fallback a DB, todos los tipos)
 
 **Problema:** con un server caído (caso real: Clif FL), dashboard y Public IPs mostraban 0 peers.
