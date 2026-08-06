@@ -56,7 +56,10 @@ RLS admin-only; la app usa service role.
   hace `cat /etc/wireguard/<if>.conf` por cada uno, parseando PrivateKey/ListenPort/Address/[Peer].
 - `wireguard-keys.ts`: `publicKeyFromPrivate()` (scalarMult.base, equivalente a `wg pubkey`).
 - `/api/interfaces` (nuevo, runtime nodejs): GET lista la tabla; POST `{action:"sync", routerId?}`
-  recorre los servers linux-ssh (uno por host, dedupe) y hace upsert. Guard admin vía service role.
+  recorre TODOS los routers (uno por host, dedupe) y hace upsert. Guard admin vía service role.
+  Linux: lee los `.conf`. MikroTik: `/interface/wireguard` expone `private-key` y `public-key`
+  directo (verificado en RouterOS 7 por REST; el cliente clásico ya mapea `privateKey`→`private-key`).
+  MikroTik no tiene Address en la interface (vive en `/ip/address`) → esa columna queda vacía.
 - `route.ts` `createLinuxInterface`: guarda el keypair en `wg_interfaces` al crear (source `created`).
 - Admin: pestaña **Interfaces** (+ link en Sidebar) con tabla server/interface/port/address/
   public key/private key (oculta con ojo + copiar)/peers/last synced, botones "Sync from servers"
