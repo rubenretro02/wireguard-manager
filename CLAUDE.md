@@ -41,6 +41,36 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-08 — Telegram como menú padre + filtros en Peers + "Created by" del dashboard
+
+**Sin migraciones SQL.**
+
+- `Sidebar.tsx`: **Telegram** deja de ser un link suelto y pasa a ser un submenú colapsable
+  dentro de Admin Panel, con sus páginas hijas (Peers / Customers / Plans / IPs for Sale /
+  Payments) apuntando a `/admin/telegram?tab=<x>`.
+- `admin/telegram/page.tsx`: los tabs ahora se manejan por URL (`useSearchParams` + `router.replace`,
+  envuelto en `Suspense` porque Next lo exige en prerender). **Peers es el tab por defecto**
+  (`/admin/telegram` sin query → peers).
+- Tab Peers: barra de filtros — buscador difuso, select de servidor, select de customer y chips
+  de estado (All / Active / Expiring soon ≤7d / Expired / Disabled / No expiry) con contadores,
+  contador "X of Y peers" y botón Clear. La columna Expires muestra "in Nd" / "Nd ago" en ámbar/rojo
+  y el badge de estado agrega la variante `expiring`.
+- `src/lib/fuzzy.ts` (nuevo): `fuzzyScore(fields, query)` estilo Google — insensible a
+  acentos/mayúsculas, multi-término AND, substring primero ("amon" → "Ramon") y subsecuencia
+  ajustada como fallback ("rmon" → "Ramon"). Con query activa la lista se ordena por relevancia.
+
+**"Created by" del dashboard:** la columna y el sort "By Created" dependían SOLO de
+`peerMetadata`, que el cliente lee con la sesión del usuario (RLS). Ahora `/api/wireguard getPeers`
+adjunta `created_by_email` / `created_by_user_id` / `created_at` a cada peer leyendo con service role:
+- Linux: `linux_peers` con fallback a `peer_metadata` (antes de ahí solo se sacaba el nombre).
+- MikroTik: merge nuevo con `peer_metadata`, cacheado en `cachedRouterRead` (`mt-peer-meta:<routerId>`)
+  para no pegarle a Supabase en cada poll de 3s; si falla, se ignora (el dato es cosmético).
+- `dashboard/page.tsx`: la celda y el sort usan `meta?.… || peer.…`.
+
+**Gotcha:** los peers creados a mano en el router (no desde la app) no tienen fila en ninguna tabla
+→ siguen mostrando "—", no hay de dónde sacar el autor. Medido el 2026-08-08: Miami FL
+76.245.59.200 (MikroTik) tenía 321 peers vivos y 168 filas en `peer_metadata`.
+
 ### 2026-08-06 — Backup de llaves de interfaces (Admin → Interfaces) v23
 
 **Motivo:** la private key de cada interface WG solo vivía en `/etc/wireguard/<if>.conf`; al

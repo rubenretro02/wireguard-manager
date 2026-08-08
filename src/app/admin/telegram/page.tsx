@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,8 +23,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Send, Trash2, UserMinus, Users } from "lucide-react";
+import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Search, Send, Trash2, UserMinus, Users, X } from "lucide-react";
 import type { Profile } from "@/lib/types";
+import { fuzzyScore } from "@/lib/fuzzy";
 
 /* ============ Types (tg-admin API responses, with joins) ============ */
 interface AdminPlan {
@@ -56,13 +57,14 @@ interface AdminCustomer {
 interface AdminPeer {
   id: string;
   customer_id: string;
+  router_id: string;
   peer_name: string;
   peer_public_key: string;
   allowed_address: string;
   public_ip: string;
   wg_interface: string;
   status: "active" | "expired" | "disabled";
-  expires_at: string;
+  expires_at: string | null;
   created_at: string;
   renewal_price_usd: number | null;
   renewal_duration_days: number | null;
@@ -133,8 +135,47 @@ function fmtDate(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
-export default function AdminTelegramPage() {
+const DAY_MS = 86_400_000;
+/** Whole days until expiry (negative = already past). null when the peer has no timer. */
+function daysLeft(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / DAY_MS);
+}
+
+const PEER_FILTERS = [
+  { value: "all", label: "All" },
+  { value: "active", label: "Active" },
+  { value: "expiring", label: "Expiring soon" },
+  { value: "expired", label: "Expired" },
+  { value: "disabled", label: "Disabled" },
+  { value: "no-expiry", label: "No expiry" },
+] as const;
+type PeerFilter = (typeof PEER_FILTERS)[number]["value"];
+
+function matchesPeerFilter(p: AdminPeer, filter: PeerFilter): boolean {
+  const days = daysLeft(p.expires_at);
+  switch (filter) {
+    case "active":
+      return p.status === "active";
+    case "expiring":
+      return p.status === "active" && days !== null && days >= 0 && days <= 7;
+    case "expired":
+      return p.status === "expired" || (p.status !== "disabled" && days !== null && days < 0);
+    case "disabled":
+      return p.status === "disabled";
+    case "no-expiry":
+      return days === null;
+    default:
+      return true;
+  }
+}
+
+function AdminTelegramPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Each tab is a child page of the Telegram menu — the sidebar links straight into it.
+  const tab = searchParams.get("tab") || "peers";
+  const setTab = (value: string) => router.replace(`/admin/telegram?tab=${value}`, { scroll: false });
   const supabase = createClient();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -194,6 +235,12 @@ export default function AdminTelegramPage() {
   const [extending, setExtending] = useState(false);
 
   const [busyPeerId, setBusyPeerId] = useState<string | null>(null);
+
+  // Peers tab filters
+  const [peerSearch, setPeerSearch] = useState("");
+  const [peerFilter, setPeerFilter] = useState<PeerFilter>("all");
+  const [peerRouterFilter, setPeerRouterFilter] = useState("all");
+  const [peerCustomerFilter, setPeerCustomerFilter] = useState("all");
 
   const tgAdmin = useCallback(async (action: string, data: Record<string, unknown> = {}) => {
     const res = await fetch("/api/tg-admin", {
@@ -557,6 +604,65 @@ export default function AdminTelegramPage() {
     }
   };
 
+  /* ============ Peers tab: search + filters ============ */
+  const filteredPeers = useMemo(() => {
+    const scored = peers
+      .map((peer) => ({
+        peer,
+        score: fuzzyScore(
+          [
+            peer.peer_name,
+            customerLabel(peer.tg_customers),
+            peer.tg_customers?.first_name,
+            peer.tg_customers ? String(peer.tg_customers.telegram_id) : null,
+            peer.public_ip,
+            peer.allowed_address,
+            peer.routers?.name,
+            peer.wg_interface,
+          ],
+          peerSearch
+        ),
+      }))
+      .filter(
+        ({ peer, score }) =>
+          score >= 0 &&
+          matchesPeerFilter(peer, peerFilter) &&
+          (peerRouterFilter === "all" || peer.router_id === peerRouterFilter) &&
+          (peerCustomerFilter === "all" || peer.customer_id === peerCustomerFilter)
+      );
+    // With a query, rank by relevance; otherwise keep the API order (newest first).
+    if (peerSearch.trim()) scored.sort((a, b) => b.score - a.score);
+    return scored.map((s) => s.peer);
+  }, [peers, peerSearch, peerFilter, peerRouterFilter, peerCustomerFilter]);
+
+  const peerFilterCounts = useMemo(() => {
+    const counts = {} as Record<PeerFilter, number>;
+    for (const f of PEER_FILTERS) counts[f.value] = peers.filter((p) => matchesPeerFilter(p, f.value)).length;
+    return counts;
+  }, [peers]);
+
+  const peerRouterOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of peers) if (p.router_id) map.set(p.router_id, p.routers?.name || p.router_id);
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [peers]);
+
+  const peerCustomerOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of peers) if (p.customer_id) map.set(p.customer_id, customerLabel(p.tg_customers));
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [peers]);
+
+  const peerFiltersActive =
+    peerSearch.trim() !== "" || peerFilter !== "all" || peerRouterFilter !== "all" || peerCustomerFilter !== "all";
+
+  const clearPeerFilters = () => {
+    setPeerSearch("");
+    setPeerFilter("all");
+    setPeerRouterFilter("all");
+    setPeerCustomerFilter("all");
+  };
+
   if (loading || !profile) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -568,6 +674,7 @@ export default function AdminTelegramPage() {
   const statusBadge = (status: string) => {
     const variants: Record<string, string> = {
       active: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
+      expiring: "bg-amber-500/15 text-amber-400 border-amber-500/30",
       expired: "bg-red-500/15 text-red-400 border-red-500/30",
       disabled: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
       paid: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
@@ -588,12 +695,12 @@ export default function AdminTelegramPage() {
         </div>
       </PageHeader>
       <PageContent>
-        <Tabs defaultValue="plans">
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
+            <TabsTrigger value="peers">Peers ({peers.length})</TabsTrigger>
+            <TabsTrigger value="customers">Customers ({customers.length})</TabsTrigger>
             <TabsTrigger value="plans">Plans ({plans.length})</TabsTrigger>
             <TabsTrigger value="ips">IPs for Sale</TabsTrigger>
-            <TabsTrigger value="customers">Customers ({customers.length})</TabsTrigger>
-            <TabsTrigger value="peers">Peers ({peers.length})</TabsTrigger>
             <TabsTrigger value="payments">Payments ({payments.length})</TabsTrigger>
           </TabsList>
 
@@ -885,18 +992,80 @@ export default function AdminTelegramPage() {
 
           {/* ============ PEERS ============ */}
           <TabsContent value="peers" className="space-y-4">
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                onClick={() => {
-                  resetAssignForm();
-                  setAssignRouterId("");
-                  setAssignPeerKey("");
-                  setAssignDialogOpen(true);
-                }}
-              >
-                <Plus className="w-4 h-4 mr-2" /> Assign existing peer
-              </Button>
+            {/* Filter bar */}
+            <div className="space-y-3 rounded-xl border border-border bg-secondary/20 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="relative flex-1 min-w-[220px]">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search name, customer, IP, server…"
+                    value={peerSearch}
+                    onChange={(e) => setPeerSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <Select value={peerRouterFilter} onValueChange={setPeerRouterFilter}>
+                  <SelectTrigger className="w-[190px]">
+                    <SelectValue placeholder="Server" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All servers</SelectItem>
+                    {peerRouterOptions.map(([id, name]) => (
+                      <SelectItem key={id} value={id}>
+                        {name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select value={peerCustomerFilter} onValueChange={setPeerCustomerFilter}>
+                  <SelectTrigger className="w-[190px]">
+                    <SelectValue placeholder="Customer" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    <SelectItem value="all">All customers</SelectItem>
+                    {peerCustomerOptions.map(([id, label]) => (
+                      <SelectItem key={id} value={id}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    resetAssignForm();
+                    setAssignRouterId("");
+                    setAssignPeerKey("");
+                    setAssignDialogOpen(true);
+                  }}
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Assign existing peer
+                </Button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {PEER_FILTERS.map((f) => (
+                  <button
+                    key={f.value}
+                    onClick={() => setPeerFilter(f.value)}
+                    className={`rounded-full border px-3 py-1 text-xs transition-colors ${
+                      peerFilter === f.value
+                        ? "border-primary/40 bg-primary/15 text-primary"
+                        : "border-border text-muted-foreground hover:bg-secondary hover:text-foreground"
+                    }`}
+                  >
+                    {f.label}
+                    <span className="ml-1.5 opacity-60">{peerFilterCounts[f.value]}</span>
+                  </button>
+                ))}
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {filteredPeers.length} of {peers.length} peers
+                </span>
+                {peerFiltersActive && (
+                  <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={clearPeerFilters}>
+                    <X className="w-3.5 h-3.5 mr-1" /> Clear
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="rounded-xl border border-border overflow-hidden">
               <Table>
@@ -913,14 +1082,16 @@ export default function AdminTelegramPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {peers.length === 0 && (
+                  {filteredPeers.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                        No customer peers yet.
+                        {peers.length === 0
+                          ? "No customer peers yet."
+                          : "No peers match these filters."}
                       </TableCell>
                     </TableRow>
                   )}
-                  {peers.map((peer) => (
+                  {filteredPeers.map((peer) => (
                     <TableRow key={peer.id}>
                       <TableCell className="font-medium">{peer.peer_name}</TableCell>
                       <TableCell>{customerLabel(peer.tg_customers)}</TableCell>
@@ -938,8 +1109,37 @@ export default function AdminTelegramPage() {
                           ? `$${Number(peer.renewal_price_usd).toFixed(2)} / ${peer.renewal_duration_days || 30}d`
                           : <span className="text-muted-foreground">store plans</span>}
                       </TableCell>
-                      <TableCell>{statusBadge(peer.status)}</TableCell>
-                      <TableCell>{fmtDate(peer.expires_at)}</TableCell>
+                      <TableCell>
+                        {statusBadge(
+                          matchesPeerFilter(peer, "expiring") ? "expiring" : peer.status
+                        )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {peer.expires_at ? (
+                          <>
+                            {fmtDate(peer.expires_at)}
+                            <br />
+                            <span
+                              className={`text-xs ${
+                                (daysLeft(peer.expires_at) ?? 0) < 0
+                                  ? "text-red-400"
+                                  : (daysLeft(peer.expires_at) ?? 0) <= 7
+                                    ? "text-amber-400"
+                                    : "text-muted-foreground"
+                              }`}
+                            >
+                              {(() => {
+                                const d = daysLeft(peer.expires_at) ?? 0;
+                                if (d < 0) return `${Math.abs(d)}d ago`;
+                                if (d === 0) return "today";
+                                return `in ${d}d`;
+                              })()}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right whitespace-nowrap">
                         {busyPeerId === peer.id ? (
                           <Loader2 className="w-4 h-4 animate-spin inline-block" />
@@ -1544,5 +1744,20 @@ export default function AdminTelegramPage() {
         </Dialog>
       </PageContent>
     </DashboardLayout>
+  );
+}
+
+// useSearchParams (tab routing) needs a Suspense boundary during prerender.
+export default function AdminTelegramPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-background">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      }
+    >
+      <AdminTelegramPageContent />
+    </Suspense>
   );
 }

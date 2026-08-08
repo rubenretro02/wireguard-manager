@@ -182,6 +182,15 @@ export async function POST(request: Request) {
             disabled?: boolean;
             created_by_user_id?: string;
             created_by_email?: string;
+            created_at?: string;
+          }
+
+          interface LegacyMeta {
+            peer_public_key: string;
+            peer_name?: string | null;
+            created_by_email?: string | null;
+            created_by_user_id?: string | null;
+            created_at?: string | null;
           }
 
           const [{ data: storedPeers }, { data: storedMeta }] = await Promise.all([
@@ -191,23 +200,24 @@ export async function POST(request: Request) {
               .eq("router_id", routerId),
             metaClient
               .from("peer_metadata")
-              .select("id, peer_public_key, peer_name")
+              .select("id, peer_public_key, peer_name, created_by_email, created_by_user_id, created_at")
               .eq("router_id", routerId),
           ]);
 
           const storedPeersMap = new Map<string, StoredLinuxPeer>(
             (storedPeers || []).map((p: StoredLinuxPeer) => [p.public_key, p])
           );
-          const legacyMetaMap = new Map<string, string>(
+          const legacyMetaMap = new Map<string, LegacyMeta>(
             (storedMeta || [])
-              .filter((m: { peer_public_key?: string; peer_name?: string | null }) => m.peer_public_key && m.peer_name)
-              .map((m: { peer_public_key: string; peer_name: string }) => [m.peer_public_key, m.peer_name])
+              .filter((m: LegacyMeta) => m.peer_public_key)
+              .map((m: LegacyMeta) => [m.peer_public_key, m])
           );
 
           // Merge live peers with stored metadata (linux_peers takes priority, peer_metadata as fallback)
           const formattedPeers = livePeers.map((peer, index) => {
             const stored = storedPeersMap.get(peer.publicKey) as StoredLinuxPeer | undefined;
-            const fallbackName = legacyMetaMap.get(peer.publicKey);
+            const legacy = legacyMetaMap.get(peer.publicKey);
+            const fallbackName = legacy?.peer_name;
             return {
               ".id": stored?.id || `*${index + 1}`,
               "public-key": peer.publicKey,
@@ -222,8 +232,9 @@ export async function POST(request: Request) {
               disabled: false,
               name: stored?.name || fallbackName || "",
               comment: stored?.comment || stored?.public_ip || "",
-              created_by_user_id: stored?.created_by_user_id,
-              created_by_email: stored?.created_by_email,
+              created_by_user_id: stored?.created_by_user_id || legacy?.created_by_user_id,
+              created_by_email: stored?.created_by_email || legacy?.created_by_email,
+              created_at: stored?.created_at || legacy?.created_at,
             };
           });
 
@@ -247,8 +258,9 @@ export async function POST(request: Request) {
               disabled: Boolean(stored.disabled),
               name: stored.name || "",
               comment: stored.comment || stored.public_ip || "",
-              created_by_user_id: stored.created_by_user_id,
-              created_by_email: stored.created_by_email,
+              created_by_user_id: stored.created_by_user_id || legacyMetaMap.get(stored.public_key)?.created_by_user_id,
+              created_by_email: stored.created_by_email || legacyMetaMap.get(stored.public_key)?.created_by_email,
+              created_at: stored.created_at || legacyMetaMap.get(stored.public_key)?.created_at,
             }));
 
           return NextResponse.json({
@@ -1100,6 +1112,13 @@ export async function POST(request: Request) {
         return NextResponse.json({ interfaces });
       }
       case "getPeers": {
+        interface MikroTikPeerMeta {
+          peer_public_key: string;
+          created_by_email?: string | null;
+          created_by_user_id?: string | null;
+          created_at?: string | null;
+        }
+
         // Stale-while-revalidate: one MikroTik query per TTL window serves all
         // polling clients; if the router is unreachable, the last known list is
         // returned flagged stale instead of failing.
@@ -1114,7 +1133,37 @@ export async function POST(request: Request) {
             const addresses = peers.slice(0, 5).map(p => p["allowed-address"]);
             console.log(`[WireGuard API] Sample addresses: ${addresses.join(", ")}`);
           }
-          return NextResponse.json({ peers, stale, fetchedAt, routerDown: stale, source: "live" });
+
+          // Attach who created each peer. Read with service-role so RLS never hides
+          // rows created by other users (the frontend does capability filtering), and
+          // share it through the same TTL cache as the router read so the 3s dashboard
+          // poll doesn't hit Supabase on every tick.
+          let mtMeta: MikroTikPeerMeta[] = [];
+          try {
+            mtMeta = (await cachedRouterRead(`mt-peer-meta:${routerId}`, async () => {
+              const { data } = await (getAdminClient() ?? supabase)
+                .from("peer_metadata")
+                .select("peer_public_key, created_by_email, created_by_user_id, created_at")
+                .eq("router_id", routerId);
+              return (data || []) as MikroTikPeerMeta[];
+            })).data;
+          } catch {
+            // Creator info is cosmetic — never fail the peer list over it.
+          }
+          const mtMetaMap = new Map(mtMeta.map((m) => [m.peer_public_key, m]));
+          const peersWithCreator = peers.map((p) => {
+            const m = mtMetaMap.get(p["public-key"]);
+            return m
+              ? {
+                  ...p,
+                  created_by_email: m.created_by_email,
+                  created_by_user_id: m.created_by_user_id,
+                  created_at: m.created_at,
+                }
+              : p;
+          });
+
+          return NextResponse.json({ peers: peersWithCreator, stale, fetchedAt, routerDown: stale, source: "live" });
         } catch (err) {
           // Router down and no in-memory cache (e.g. serverless cold start):
           // rebuild the basic list from peer_metadata. Only peers created from
@@ -1140,6 +1189,7 @@ export async function POST(request: Request) {
               disabled: false,
               created_by_user_id: m.created_by_user_id,
               created_by_email: m.created_by_email,
+              created_at: m.created_at,
             };
           });
           return NextResponse.json({ peers, stale: true, routerDown: true, source: "db" });

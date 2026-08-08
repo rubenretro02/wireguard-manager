@@ -142,4 +142,9 @@ export interface WireGuardPeer {
   "last-handshake"?: string;
   disabled: boolean;
   comment?: string;
+  // Creator info merged server-side from linux_peers / peer_metadata (service role,
+  // so it is present even when RLS hides those rows from the requesting user).
+  created_by_email?: string | null;
+  created_by_user_id?: string | null;
+  created_at?: string | null;
 }

@@ -657,11 +657,12 @@ export default function DashboardPage() {
 
       switch (sortBy) {
         case "created": {
-          // Sort by created_at from metadata (newest first by default)
-          const metaA = peerMetadata[a["public-key"]];
-          const metaB = peerMetadata[b["public-key"]];
-          const dateA = metaA?.created_at ? new Date(metaA.created_at).getTime() : 0;
-          const dateB = metaB?.created_at ? new Date(metaB.created_at).getTime() : 0;
+          // Sort by created_at from metadata, falling back to the creation date the
+          // API merges into the peer itself (newest first by default)
+          const createdA = peerMetadata[a["public-key"]]?.created_at || a.created_at;
+          const createdB = peerMetadata[b["public-key"]]?.created_at || b.created_at;
+          const dateA = createdA ? new Date(createdA).getTime() : 0;
+          const dateB = createdB ? new Date(createdB).getTime() : 0;
           comparison = dateB - dateA; // Newest first by default
           break;
         }
@@ -2448,13 +2449,18 @@ PersistentKeepalive = 25`;
 
                       {/* Created By Column */}
                       <TableCell className="text-sm">
-                        {meta?.created_by_email ? (
-                          <span className="truncate max-w-[100px] block" title={meta.created_by_email}>
-                            {meta.created_by_email.split("@")[0]}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
+                        {(() => {
+                          // The API merges linux_peers / peer_metadata with service role,
+                          // so peer.created_by_email fills the gaps RLS leaves in `meta`.
+                          const createdBy = meta?.created_by_email || peer.created_by_email;
+                          return createdBy ? (
+                            <span className="truncate max-w-[120px] block" title={createdBy}>
+                              {createdBy.split("@")[0]}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          );
+                        })()}
                       </TableCell>
 
                       {/* Expires Column */}

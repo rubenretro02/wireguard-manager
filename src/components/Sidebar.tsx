@@ -18,7 +18,10 @@ import {
   Key,
   KeyRound,
   Send,
-  UserCircle
+  UserCircle,
+  Package,
+  CreditCard,
+  Share2
 } from "lucide-react";
 import { useState, Suspense } from "react";
 import { cn } from "@/lib/utils";
@@ -49,7 +52,15 @@ const adminSubMenu = [
   { name: "Users", href: "/admin?tab=users", icon: UserCog, tab: "users" },
   { name: "Access", href: "/admin?tab=access", icon: Key, tab: "access" },
   { name: "Interfaces", href: "/admin?tab=interfaces", icon: KeyRound, tab: "interfaces" },
-  { name: "Telegram", href: "/admin/telegram", icon: Send, tab: null },
+];
+
+// Telegram Store is its own parent menu (nested under Admin) — each tab is a child page.
+const telegramSubMenu = [
+  { name: "Peers", href: "/admin/telegram?tab=peers", icon: Share2, tab: "peers" },
+  { name: "Customers", href: "/admin/telegram?tab=customers", icon: Users, tab: "customers" },
+  { name: "Plans", href: "/admin/telegram?tab=plans", icon: Package, tab: "plans" },
+  { name: "IPs for Sale", href: "/admin/telegram?tab=ips", icon: Globe, tab: "ips" },
+  { name: "Payments", href: "/admin/telegram?tab=payments", icon: CreditCard, tab: "payments" },
 ];
 
 // Inner component that uses useSearchParams
@@ -58,6 +69,7 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
   const searchParams = useSearchParams();
   const [collapsed, setCollapsed] = useState(false);
   const [adminExpanded, setAdminExpanded] = useState(true);
+  const [telegramExpanded, setTelegramExpanded] = useState(() => pathname.startsWith("/admin/telegram"));
 
   const filteredNav = navigation.filter(item => {
     // Admin check
@@ -69,7 +81,10 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
     return true;
   });
   const isAdminPage = pathname === "/admin" || pathname.startsWith("/admin");
+  const isTelegramPage = pathname.startsWith("/admin/telegram");
   const currentTab = searchParams.get("tab");
+  // The Telegram page lands on Peers when no tab is in the URL.
+  const telegramTab = currentTab || "peers";
 
   return (
     <>
@@ -202,6 +217,52 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
                         </Link>
                       );
                     })}
+
+                    {/* Telegram Store — parent menu with its own children */}
+                    <div className="space-y-1">
+                      <button
+                        onClick={() => setTelegramExpanded(!telegramExpanded)}
+                        className={cn(
+                          "w-full flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-sm transition-all duration-200",
+                          isTelegramPage
+                            ? "bg-primary/10 text-primary"
+                            : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                        )}
+                      >
+                        <div className="flex items-center gap-2">
+                          <Send className="w-4 h-4 flex-shrink-0" />
+                          <span>Telegram</span>
+                        </div>
+                        <ChevronDown className={cn(
+                          "w-3.5 h-3.5 transition-transform",
+                          telegramExpanded && "rotate-180"
+                        )} />
+                      </button>
+
+                      {telegramExpanded && (
+                        <div className="ml-3 pl-3 border-l border-border space-y-1">
+                          {telegramSubMenu.map((tgItem) => {
+                            const isTgActive = isTelegramPage && telegramTab === tgItem.tab;
+                            return (
+                              <Link
+                                key={tgItem.name}
+                                href={tgItem.href}
+                                onClick={onMobileClose}
+                                className={cn(
+                                  "flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all duration-200",
+                                  isTgActive
+                                    ? "bg-primary/10 text-primary"
+                                    : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                                )}
+                              >
+                                <tgItem.icon className="w-3.5 h-3.5 flex-shrink-0" />
+                                <span>{tgItem.name}</span>
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </>
