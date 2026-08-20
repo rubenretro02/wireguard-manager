@@ -377,7 +377,12 @@ export default function PublicIpsPage() {
       const res = await fetch("/api/wireguard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, routerId: selectedRouterId, data: { id: peer.id } })
+        // name/publicKey van para que el log de actividad diga QUÉ peer fue
+        body: JSON.stringify({
+          action,
+          routerId: selectedRouterId,
+          data: { id: peer.id, name: peer.name || null, publicKey: peer.publicKey },
+        })
       });
       const data = await res.json();
       if (data.success) {

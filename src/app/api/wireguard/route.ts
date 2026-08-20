@@ -757,7 +757,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: storedPeer.id,
               entityName: storedPeer.name || null,
-              details: {}
+              details: { auto: Boolean(data.autoEnable), reason: data.autoEnable ? "scheduled enable" : "manual" }
             });
 
             console.log("[WireGuard API] Linux peer enabled (added back to WG)");
@@ -1982,7 +1982,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: data.id,
           entityName: data.name || null,
-          details: {}
+          details: { auto: Boolean(data.autoEnable), reason: data.autoEnable ? "scheduled enable" : "manual" }
         });
         console.log("[WireGuard API] Activity logged for enable");
         return NextResponse.json({ success: true });

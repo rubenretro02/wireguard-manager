@@ -185,12 +185,12 @@ export default function LogsPage() {
   const describe = (log: ActivityLog) => {
     const d = (log.details || {}) as Record<string, unknown>;
     const bits: string[] = [];
-    if (d.auto === true) bits.push("automático");
+    if (d.auto === true) bits.push("automatic");
     if (typeof d.reason === "string") bits.push(d.reason);
-    if (typeof d.source === "string") bits.push(d.source);
+    if (typeof d.source === "string") bits.push(String(d.source).replace(/_/g, " "));
     if (typeof d.telegram_extend_days === "number") bits.push(`+${d.telegram_extend_days}d`);
     if (typeof d.timer_mode === "string") bits.push(`timer: ${d.timer_mode}`);
-    if (typeof d.expires_at === "string") bits.push(`vence ${new Date(d.expires_at).toLocaleDateString("en-US")}`);
+    if (typeof d.expires_at === "string") bits.push(`expires ${new Date(d.expires_at).toLocaleDateString("en-US")}`);
     if (Array.isArray(d.updatedFields) && d.updatedFields.length) bits.push((d.updatedFields as string[]).join(", "));
     if (typeof d.allowed_address === "string") bits.push(String(d.allowed_address));
     return bits.join(" · ");

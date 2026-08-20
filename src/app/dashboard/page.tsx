@@ -1037,7 +1037,11 @@ export default function DashboardPage() {
         const res = await fetch("/api/wireguard", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "enablePeer", routerId: selectedRouterId, data: { id: peer[".id"] } })
+          body: JSON.stringify({
+            action: "enablePeer",
+            routerId: selectedRouterId,
+            data: { id: peer[".id"], name: peer.name || null, publicKey: peer["public-key"], autoEnable: true },
+          })
         });
         const data = await res.json();
         if (data.success) {
@@ -1396,7 +1400,12 @@ export default function DashboardPage() {
     const res = await fetch("/api/wireguard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, routerId: selectedRouterId, data: { id } })
+      // name/publicKey van para que el log de actividad diga QUÉ peer fue
+      body: JSON.stringify({
+        action,
+        routerId: selectedRouterId,
+        data: { id, name: peer.name || null, publicKey: peer["public-key"] },
+      })
     });
     const data = await res.json();
     if (data.success) {
@@ -1443,7 +1452,7 @@ export default function DashboardPage() {
           body: JSON.stringify({
             action: enable ? "enablePeer" : "disablePeer",
             routerId: selectedRouterId,
-            data: { id: peer[".id"], "public-key": peer["public-key"] },
+            data: { id: peer[".id"], "public-key": peer["public-key"], name: peer.name || null },
           }),
         });
         const data = await res.json();
@@ -1688,7 +1697,11 @@ export default function DashboardPage() {
       const enableRes = await fetch("/api/wireguard", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "enablePeer", routerId: selectedRouterId, data: { id: renewingPeer[".id"] } })
+        body: JSON.stringify({
+          action: "enablePeer",
+          routerId: selectedRouterId,
+          data: { id: renewingPeer[".id"], name: renewingPeer.name || null, publicKey: renewingPeer["public-key"] },
+        })
       });
       const enableData = await enableRes.json();
 
@@ -3466,7 +3479,11 @@ PersistentKeepalive = 25"
                               const res = await fetch("/api/wireguard", {
                                 method: "POST",
                                 headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ action, routerId: selectedRouterId, data: { id: peer[".id"] } })
+                                body: JSON.stringify({
+                                  action,
+                                  routerId: selectedRouterId,
+                                  data: { id: peer[".id"], name: peer.name || null, publicKey: peer["public-key"] },
+                                })
                               });
                               const data = await res.json();
                               if (data.success) {
