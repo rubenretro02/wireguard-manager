@@ -67,6 +67,10 @@ interface AdminPeer {
   status: "active" | "expired" | "disabled";
   expires_at: string | null;
   created_at: string;
+  // Estado en vivo del router (lo adjunta listCustomerPeers). null = el server
+  // no respondió, así que no se afirma nada.
+  connected?: boolean | null;
+  latest_handshake?: string | null;
   renewal_price_usd: number | null;
   renewal_duration_days: number | null;
   tg_customers?: { telegram_id: number; username: string | null; first_name: string | null } | null;
@@ -1120,9 +1124,21 @@ function AdminTelegramPageContent() {
                           : <span className="text-muted-foreground">store plans</span>}
                       </TableCell>
                       <TableCell>
-                        {statusBadge(
-                          matchesPeerFilter(peer, "expiring") ? "expiring" : peer.status
-                        )}
+                        <div className="flex flex-col gap-1 items-start">
+                          {statusBadge(
+                            matchesPeerFilter(peer, "expiring") ? "expiring" : peer.status
+                          )}
+                          {peer.connected !== null && peer.connected !== undefined && (
+                            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  peer.connected ? "bg-emerald-500" : "bg-amber-500/70"
+                                }`}
+                              />
+                              {peer.connected ? "Online" : "Offline"}
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       {/* Mismo pill que el dashboard: el timer es uno solo, así que
                           el mismo peer tiene que verse igual en los dos lados. */}

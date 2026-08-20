@@ -520,9 +520,7 @@ export async function reactivateCustomerPeerOnServer(
     const client = buildLinuxClient(router as Router, peer.wg_interface);
     const added = await client.addPeer(peer.peer_public_key, peer.allowed_address, peer.wg_interface);
     if (!added) throw new Error("Failed to re-enable peer in WireGuard");
-    if (peer.linux_peer_id) {
-      await supabase.from("linux_peers").update({ disabled: false }).eq("id", peer.linux_peer_id);
-    }
+    await setLinuxPeerDisabled(supabase, peer, false);
   } else {
     const client = buildMikroTikClient(router as Router);
     const existing = await findMikroTikPeerByPublicKey(client, peer.peer_public_key);
@@ -642,8 +640,28 @@ export async function deactivateCustomerPeer(params: {
   }
 
   await supabase.from("tg_customer_peers").update({ status }).eq("id", peer.id);
-  if (peer.linux_peer_id) {
-    await supabase.from("linux_peers").update({ disabled: true }).eq("id", peer.linux_peer_id);
+  await setLinuxPeerDisabled(supabase, peer, true);
+}
+
+/**
+ * Espeja el estado en `linux_peers`, que es lo que lee el dashboard.
+ *
+ * Antes esto se hacía solo `if (peer.linux_peer_id)`. Con ese campo en null
+ * (peers asignados a mano, o filas creadas antes de que existiera el link) la
+ * bandera no se tocaba nunca: el peer quedaba vivo en el servidor pero el
+ * dashboard lo mostraba Disabled. Se cae de vuelta a router_id + public key.
+ */
+async function setLinuxPeerDisabled(
+  supabase: SupabaseClient,
+  peer: TgCustomerPeer,
+  disabled: boolean
+): Promise<void> {
+  const query = supabase.from("linux_peers").update({ disabled });
+  const { error } = peer.linux_peer_id
+    ? await query.eq("id", peer.linux_peer_id)
+    : await query.eq("router_id", peer.router_id).eq("public_key", peer.peer_public_key);
+  if (error) {
+    console.warn("[TgStore] linux_peers mirror failed (continuing):", error.message);
   }
 }
 

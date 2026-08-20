@@ -7,8 +7,10 @@ import {
   buildLinuxClient,
   buildMikroTikClient,
   deactivateCustomerPeer,
+  getLiveStatusesForPeers,
   getServiceClient,
   reactivateCustomerPeerOnServer,
+  type LivePeerStatus,
   removeCustomerPeerFromServer,
   renewCustomerPeer,
   type TgCustomerPeer,
@@ -144,7 +146,30 @@ export async function POST(request: Request) {
           .select("*, tg_customers(telegram_id, username, first_name), tg_plans(name), routers(name)")
           .order("created_at", { ascending: false });
         if (error) throw new Error(error.message);
-        return NextResponse.json({ peers });
+
+        // Sin esto la tabla muestra el último status persistido, que solo se
+        // actualizaba cuando un CLIENTE abría la Mini App: el admin veía
+        // "active" mientras el dashboard (que lee el router) decía "Disabled".
+        // Misma función que usa la Mini App; cachea las lecturas del router
+        // ~2.5s y se saltea los servers que fallan.
+        const live = new Map<string, LivePeerStatus>();
+        try {
+          const result = await getLiveStatusesForPeers(supabase, (peers || []) as TgCustomerPeer[]);
+          for (const [id, status] of result.statusChanges) {
+            const row = (peers || []).find((p) => p.id === id);
+            if (row) row.status = status;
+          }
+          for (const [id, s] of result.live) live.set(id, s);
+        } catch (err) {
+          console.warn("[TgAdmin] live sync failed, showing stored status:", err instanceof Error ? err.message : err);
+        }
+
+        const withLive = (peers || []).map((p) => ({
+          ...p,
+          connected: live.get(p.id)?.connected ?? null,
+          latest_handshake: live.get(p.id)?.latestHandshake ?? null,
+        }));
+        return NextResponse.json({ peers: withLive });
       }
 
       case "extendPeer": {
