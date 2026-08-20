@@ -141,6 +141,49 @@ export async function setUnifiedExpiry(
 }
 
 /**
+ * Mueve el timer de un peer a su llave nueva cuando se rota/cambia la key.
+ *
+ * peer_metadata está indexada por (router_id, peer_public_key): sin esto la fila
+ * queda con la llave vieja, el dashboard busca por la nueva, no la encuentra y
+ * el peer aparece "sin timer" (la fila vieja queda huérfana para siempre).
+ */
+export async function movePeerTimerToNewKey(
+  supabase: SupabaseClient,
+  params: { oldKey: string; newKey: string }
+): Promise<void> {
+  const { oldKey, newKey } = params;
+  if (!oldKey || !newKey || oldKey === newKey) return;
+
+  try {
+    const { data: toMove } = await supabase
+      .from("peer_metadata")
+      .select("id, router_id")
+      .eq("peer_public_key", oldKey);
+    if (!toMove || toMove.length === 0) return;
+
+    // UNIQUE(router_id, peer_public_key): si ya hay una fila con la llave nueva
+    // en ese router, sacarla antes de mover (es basura de una rotación previa).
+    const routerIds = Array.from(new Set(toMove.map((row) => row.router_id)));
+    await supabase
+      .from("peer_metadata")
+      .delete()
+      .eq("peer_public_key", newKey)
+      .in("router_id", routerIds);
+
+    const { error } = await supabase
+      .from("peer_metadata")
+      .update({ peer_public_key: newKey })
+      .in("id", toMove.map((row) => row.id));
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    console.warn(
+      "[PeerExpiry] move timer to new key failed (continuing):",
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+/**
  * Espejo en la dirección opuesta: una fecha que ya se escribió en
  * tg_customer_peers baja a peer_metadata. Best-effort — si falla, el peer sigue
  * con su fecha correcta en la tienda; lo peor que pasa es que el dashboard lo

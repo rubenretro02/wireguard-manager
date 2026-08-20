@@ -5,7 +5,7 @@ import { MikroTikClient, clearClientCacheForRouter } from "@/lib/mikrotik";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { cachedRouterRead, invalidateRouterReadCache } from "@/lib/router-read-cache";
 import { logActivity } from "@/lib/activity-logger";
-import { resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
+import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
 
 // Lazy service-role client for reads that must bypass RLS
@@ -839,6 +839,15 @@ export async function POST(request: Request) {
 
             if (Object.keys(updates).length > 0) {
               await supabase.from("linux_peers").update(updates).eq("id", peerId);
+            }
+
+            // peer_metadata está indexada por public key: sin esto el timer se
+            // queda apuntando a la llave vieja y el peer aparece "sin timer".
+            if (keyChanged) {
+              const adminClient = getAdminClient();
+              if (adminClient) {
+                await movePeerTimerToNewKey(adminClient, { oldKey: oldPubKey, newKey: effectivePubKey });
+              }
             }
 
             await logActivity({
@@ -1859,6 +1868,7 @@ export async function POST(request: Request) {
           if (data["allowed-address"] !== undefined) updateData["allowed-address"] = data["allowed-address"];
           if (data.comment !== undefined) updateData.comment = data.comment;
 
+          let oldPublicKey: string | undefined;
           if (data["public-key"]) {
             const allPeers = await client.getWireGuardPeers();
             const existingPeerWithKey = allPeers.find(p =>
@@ -1870,11 +1880,22 @@ export async function POST(request: Request) {
                 existingPeerId: existingPeerWithKey[".id"]
               }, { status: 400 });
             }
+            // La llave vieja sale del propio router (el cliente no la manda)
+            oldPublicKey = allPeers.find(p => p[".id"] === data.id)?.["public-key"];
             updateData["public-key"] = data["public-key"];
           }
           if (data["private-key"]) updateData["private-key"] = data["private-key"];
 
           await client.updateWireGuardPeer(data.id, updateData);
+
+          // peer_metadata está indexada por public key: sin esto el timer se
+          // queda apuntando a la llave vieja y el peer aparece "sin timer".
+          if (oldPublicKey && oldPublicKey !== data["public-key"]) {
+            const adminClient = getAdminClient();
+            if (adminClient) {
+              await movePeerTimerToNewKey(adminClient, { oldKey: oldPublicKey, newKey: data["public-key"] });
+            }
+          }
 
           await logActivity({
             supabase,

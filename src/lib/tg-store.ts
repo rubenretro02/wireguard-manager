@@ -1,7 +1,7 @@
 import { createClient as createAdminClient, type SupabaseClient } from "@supabase/supabase-js";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { MikroTikClient } from "@/lib/mikrotik";
-import { mirrorTgExpiryToDashboard } from "@/lib/peer-expiry";
+import { mirrorTgExpiryToDashboard, movePeerTimerToNewKey } from "@/lib/peer-expiry";
 import { cachedRouterRead } from "@/lib/router-read-cache";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { AuthMethod, PublicIP, Router, WireGuardPeer } from "@/lib/types";
@@ -601,6 +601,14 @@ export async function rotateCustomerPeerKeys(
     .select()
     .single();
   if (error || !updated) throw new Error(`Failed to save new keys: ${error?.message}`);
+
+  // El timer vive en peer_metadata indexado por public key: moverlo o el peer
+  // queda "sin timer" después de rotar.
+  await movePeerTimerToNewKey(supabase, {
+    oldKey: peer.peer_public_key,
+    newKey: keyPair.publicKey,
+  });
+
   return updated as TgCustomerPeer;
 }
 
