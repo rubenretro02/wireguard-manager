@@ -75,6 +75,41 @@ export async function POST(request: Request) {
   const isLinux = connectionType === "linux-ssh";
 
   // =====================================================
+  // GUARD DEL AUTO-DISABLE (independiente de la plataforma)
+  // =====================================================
+  // Nunca apagar POR VENCIMIENTO un peer cuya fecha real en la tienda sigue
+  // vigente (o es NULL = sin timer). Protege a los clientes que pagaron cuando
+  // peer_metadata quedó desincronizada. Solo aplica al apagado automático
+  // (`data.autoExpiry`): el disable manual del admin pasa siempre.
+  if (action === "disablePeer" && data?.autoExpiry) {
+    const adminClient = getAdminClient();
+    if (adminClient) {
+      let publicKey: string | null = data["public-key"] || data.publicKey || null;
+      if (!publicKey && data.id) {
+        const { data: stored } = await adminClient
+          .from("linux_peers")
+          .select("public_key")
+          .eq("id", data.id)
+          .maybeSingle();
+        publicKey = stored?.public_key ?? null;
+      }
+      if (publicKey) {
+        const { data: tgPeer } = await adminClient
+          .from("tg_customer_peers")
+          .select("expires_at")
+          .eq("peer_public_key", publicKey)
+          .maybeSingle();
+        if (tgPeer && (!tgPeer.expires_at || new Date(tgPeer.expires_at) > new Date())) {
+          console.warn(
+            `[WireGuard API] auto-disable bloqueado: ${publicKey} sigue vigente en la tienda (${tgPeer.expires_at || "sin timer"})`
+          );
+          return NextResponse.json({ success: false, skipped: true, reason: "active-in-store" });
+        }
+      }
+    }
+  }
+
+  // =====================================================
   // TIMER DE EXPIRACIÓN (independiente de la plataforma)
   // =====================================================
   // Único punto de escritura de la fecha: actualiza peer_metadata Y
@@ -659,7 +694,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: data.id || publicKey?.substring(0, 8),
               entityName: data.name || null,
-              details: {}
+              details: { auto: Boolean(data.autoExpiry), reason: data.autoExpiry ? "timer expired" : "manual" }
             });
 
             console.log("[WireGuard API] Linux peer disabled (removed from WG, kept in DB)");
@@ -1965,7 +2000,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: data.id,
           entityName: data.name || null,
-          details: {}
+          details: { auto: Boolean(data.autoExpiry), reason: data.autoExpiry ? "timer expired" : "manual" }
         });
         console.log("[WireGuard API] Activity logged for disable");
         return NextResponse.json({ success: true });

@@ -200,6 +200,16 @@ export async function POST(request: Request) {
         const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", data.id).single();
         if (!peer) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
         await deactivateCustomerPeer({ supabase, peer: peer as TgCustomerPeer, status: "disabled" });
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          routerId: peer.router_id,
+          action: "disable",
+          entityType: "peer",
+          entityId: peer.id,
+          entityName: peer.peer_name,
+          details: { source: "telegram_admin", allowed_address: peer.allowed_address, expires_at: peer.expires_at },
+        });
         return NextResponse.json({ success: true });
       }
 
@@ -223,6 +233,16 @@ export async function POST(request: Request) {
           peer.expires_at,
           { peerName: peer.peer_name, peerInterface: peer.wg_interface, allowedAddress: peer.allowed_address }
         );
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          routerId: peer.router_id,
+          action: "enable",
+          entityType: "peer",
+          entityId: peer.id,
+          entityName: peer.peer_name,
+          details: { source: "telegram_admin", allowed_address: peer.allowed_address, expires_at: peer.expires_at },
+        });
         return NextResponse.json({ success: true });
       }
 

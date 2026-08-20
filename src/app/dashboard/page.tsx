@@ -1013,7 +1013,13 @@ export default function DashboardPage() {
         const res = await fetch("/api/wireguard", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "disablePeer", routerId: selectedRouterId, data: { id: peer[".id"] } })
+          // autoExpiry: el servidor verifica contra tg_customer_peers y rechaza
+          // el apagado si el peer sigue vigente en la tienda.
+          body: JSON.stringify({
+            action: "disablePeer",
+            routerId: selectedRouterId,
+            data: { id: peer[".id"], publicKey: peer["public-key"], autoExpiry: true },
+          })
         });
         const data = await res.json();
         if (data.success) {

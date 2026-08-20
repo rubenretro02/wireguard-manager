@@ -21,7 +21,8 @@ import {
   UserCircle,
   Package,
   CreditCard,
-  Share2
+  Share2,
+  ScrollText
 } from "lucide-react";
 import { useState, Suspense } from "react";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,7 @@ const adminSubMenu = [
   { name: "Users", href: "/admin?tab=users", icon: UserCog, tab: "users" },
   { name: "Access", href: "/admin?tab=access", icon: Key, tab: "access" },
   { name: "Interfaces", href: "/admin?tab=interfaces", icon: KeyRound, tab: "interfaces" },
+  { name: "Logs", href: "/logs", icon: ScrollText, tab: null },
 ];
 
 // Telegram Store is its own parent menu (nested under Admin) — each tab is a child page.
@@ -80,7 +82,8 @@ function SidebarContent({ userRole = "user", userEmail, userCapabilities, hasSoc
     if (item.requiresSocks5Access && userRole !== "admin" && !hasSocks5Access) return false;
     return true;
   });
-  const isAdminPage = pathname === "/admin" || pathname.startsWith("/admin");
+  // /logs vive dentro del Admin Panel aunque su ruta no cuelgue de /admin
+  const isAdminPage = pathname === "/admin" || pathname.startsWith("/admin") || pathname.startsWith("/logs");
   const isTelegramPage = pathname.startsWith("/admin/telegram");
   const currentTab = searchParams.get("tab");
   // The Telegram page lands on Peers when no tab is in the URL.
