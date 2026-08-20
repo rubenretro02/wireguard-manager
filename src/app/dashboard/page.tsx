@@ -58,7 +58,7 @@ import {
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { generateKeyPair } from "@/lib/wireguard-keys";
-import { convertToHours, convertToMilliseconds } from "@/lib/time-units";
+import { convertToHours, convertToMilliseconds, formatTimeRemaining } from "@/lib/time-units";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities, TimeUnit, UserIpAccess } from "@/lib/types";
 
 interface TelegramBackButton {
@@ -1999,44 +1999,12 @@ PersistentKeepalive = 25`;
     return new Date(meta.expires_at) < new Date();
   };
 
-  // Get time remaining for peer
+  // Get time remaining for peer. El formato vive en lib/time-units para que el
+  // panel de Telegram muestre exactamente lo mismo para el mismo peer.
   const getTimeRemaining = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    if (!meta?.expires_at || !meta.auto_disable_enabled) return null;
-    const expiresAt = new Date(meta.expires_at);
-    const now = new Date();
-    const diff = expiresAt.getTime() - now.getTime();
-    if (diff <= 0) return "Expired";
-
-    // If metadata has expiration_value and expiration_unit, use formatDuration
-    if (meta.expiration_value && meta.expiration_unit) {
-      // Calculate remaining time in the same unit
-      // But for display, show the actual time left
-      // We'll use the diff in ms to display
-      const remaining = diff;
-      if (remaining < 60000) {
-        return `${Math.round(remaining / 1000)}s`;
-      }
-      if (remaining < 3600000) {
-        return `${Math.round(remaining / 60000)}m`;
-      }
-      if (remaining < 86400000) {
-        return `${Math.floor(remaining / 3600000)}h ${Math.floor((remaining % 3600000) / 60000)}m`;
-      }
-      const days = Math.floor(remaining / 86400000);
-      const hours = Math.floor((remaining % 86400000) / 3600000);
-      return `${days}d${hours > 0 ? ` ${hours}h` : ""}`;
-    }
-
-    // Fallback to old logic
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-
-    if (hours > 24) {
-      const days = Math.floor(hours / 24);
-      return `${days}d ${hours % 24}h`;
-    }
-    return `${hours}h ${minutes}m`;
+    if (!meta?.auto_disable_enabled) return null;
+    return formatTimeRemaining(meta.expires_at);
   };
 
   const generateConfig = (peer: WireGuardPeer) => {

@@ -23,9 +23,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
-import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Search, Send, Trash2, UserMinus, Users, X } from "lucide-react";
+import { CalendarPlus, DollarSign, Eye, Loader2, Pencil, Plus, Power, PowerOff, RefreshCw, Search, Send, Timer, Trash2, UserMinus, Users, X } from "lucide-react";
 import type { Profile } from "@/lib/types";
 import { fuzzyScore } from "@/lib/fuzzy";
+import { formatTimeRemaining } from "@/lib/time-units";
 
 /* ============ Types (tg-admin API responses, with joins) ============ */
 interface AdminPlan {
@@ -292,6 +293,15 @@ function AdminTelegramPageContent() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Tick de 1 min para que el pill del timer cuente de verdad. El dashboard lo
+  // consigue gratis con su poll de 3s; acá no hay poll, así que sin esto el
+  // contador queda congelado hasta recargar.
+  const [, setTimerTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTimerTick((t) => t + 1), 60_000);
+    return () => clearInterval(id);
   }, []);
 
   // IPs for the router selected in the plan form
@@ -1114,28 +1124,26 @@ function AdminTelegramPageContent() {
                           matchesPeerFilter(peer, "expiring") ? "expiring" : peer.status
                         )}
                       </TableCell>
+                      {/* Mismo pill que el dashboard: el timer es uno solo, así que
+                          el mismo peer tiene que verse igual en los dos lados. */}
                       <TableCell className="whitespace-nowrap">
                         {peer.expires_at ? (
-                          <>
-                            {fmtDate(peer.expires_at)}
-                            <br />
-                            <span
-                              className={`text-xs ${
+                          <div className="flex flex-col gap-1 items-start">
+                            <Badge
+                              variant="outline"
+                              className={
                                 (daysLeft(peer.expires_at) ?? 0) < 0
-                                  ? "text-red-400"
-                                  : (daysLeft(peer.expires_at) ?? 0) <= 7
-                                    ? "text-amber-400"
-                                    : "text-muted-foreground"
-                              }`}
+                                  ? "text-red-400 border-red-400"
+                                  : "text-amber-400 border-amber-400"
+                              }
                             >
-                              {(() => {
-                                const d = daysLeft(peer.expires_at) ?? 0;
-                                if (d < 0) return `${Math.abs(d)}d ago`;
-                                if (d === 0) return "today";
-                                return `in ${d}d`;
-                              })()}
+                              <Timer className="w-3 h-3 mr-1" />
+                              {formatTimeRemaining(peer.expires_at)}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {fmtDate(peer.expires_at)}
                             </span>
-                          </>
+                          </div>
                         ) : (
                           <span className="text-muted-foreground">—</span>
                         )}
