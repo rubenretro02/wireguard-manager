@@ -41,6 +41,73 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-20 — Un solo timer de expiración (dashboard ↔ tienda Telegram) v24
+
+**Síntoma:** los peers de `/admin/telegram?tab=peers` se apagaban solos aunque el admin les extendiera
+el tiempo, y los que habilitaba a mano se caían al rato. En el dashboard, renovar un peer vencido lo
+habilitaba y guardaba la fecha nueva, pero al minuto quedaba disabled otra vez.
+
+**Causa raíz:** había DOS relojes independientes que nunca se hablaban.
+
+| Timer | Tabla | Quién lo escribía |
+|---|---|---|
+| Dashboard | `peer_metadata.expires_at` + `auto_disable_enabled` | El navegador, directo a Supabase |
+| Tienda TG | `tg_customer_peers.expires_at` | Solo el servidor (`tg-store.ts`, `tg-admin`) |
+
+El único puente era una copia **de una sola vez** al asignar un peer (`tg-admin` `assignPeerToCustomer`);
+después las dos fechas divergían para siempre. El que apagaba los peers era el loop del navegador en
+`dashboard/page.tsx`: miraba **solo** `peer_metadata.expires_at` y llamaba `disablePeer`. En Linux
+"disable" borra la llave de `wg`, así que a los ~3 s `getLiveStatusesForPeers` veía el peer ausente y
+escribía `tg_customer_peers.status='disabled'` — el extend de TG quedaba enterrado.
+
+Dos agravantes: (1) el loop corría cada ~3 s y no cada 60 s, porque `autoDisableExpiredPeers` cambiaba
+de identidad en cada poll y recreaba el `setInterval`; (2) `fetchWireGuardData` hace `setPeers(...)` y
+recién al final `await fetchPeerMetadata()`, así que había un render con el peer ya habilitado y la
+metadata vieja → el efecto disparaba `disablePeer`.
+
+**Migración SQL:** `scripts/migration-v24-unified-peer-expiry.sql` — agrega `peer_metadata.expiration_value`
+y `expiration_unit` (la app las escribía desde siempre; ningún script las creaba) y hace el backfill en
+3 pasos: TG sin timer apaga el timer del dashboard → `tg_customer_peers` se queda con `GREATEST` →
+se espeja de vuelta a `peer_metadata`.
+
+**Arquitectura:** `src/lib/peer-expiry.ts` (nuevo) es el **escritor único**. `setUnifiedExpiry()` escribe
+`peer_metadata` y `tg_customer_peers` con el MISMO valor; `resolveExpiry()` centraliza `set` vs `extend`.
+Módulo puro de DB (recibe el `SupabaseClient`), no importa `tg-store` — `tg-store` importa de acá.
+`src/lib/time-units.ts` (nuevo) saca `convertToHours`/`convertToMilliseconds` del dashboard.
+
+- `tg-store.ts`: `renewCustomerPeer` y el provisioning espejan la fecha a `peer_metadata`. `renewCustomerPeer`
+  es el punto de mayor palanca: cubre el extend del admin, el webhook de Cryptomus y el checkout free.
+- `/api/wireguard` acción nueva **`setPeerExpiry`** `{ publicKeys[], mode:"set"|"extend", value, unit, ... }`,
+  gateada por `can_auto_expire`. Vive antes del branch Linux/MikroTik (es pura DB). El dashboard ya no
+  escribe `peer_metadata` directo en Edit Timer / Renew / bulk: el navegador usa el cliente con RLS y
+  `tg_customer_peers` es admin-only vía service role.
+- **Renew del dashboard pasa a `extend`** (`max(ahora, fecha actual) + duración`, igual que TG). Antes
+  los cuatro caminos hacían `ahora + duración`, así que renovar por 1d a un peer con 20 días le
+  **recortaba** el tiempo y las fechas se volvían a separar.
+- Loop de auto-disable: datos por refs (`peersRef`/`peerMetadataRef`) para que el intervalo de 60 s no
+  se recree, ref de in-flight, y **relectura de la fecha en la DB antes de apagar** — aunque el snapshot
+  en memoria esté viejo, nunca apaga un peer recién renovado.
+- `/api/cron/enforce-peer-expiry` (nuevo): aplica el timer server-side aunque nadie tenga el dashboard
+  abierto. Apaga vencidos, procesa `scheduled_enable_at`, y **auto-sana** los `tg_customer_peers` en
+  `status='expired'` con fecha futura (los que el bug dejó muertos). Tiene un guard que nunca apaga un
+  peer cuya fecha en la tienda está en el futuro o es NULL.
+
+**Bugs adyacentes arreglados:** `enableCustomerPeer` hacía `new Date(peer.expires_at)` sin guard y
+`new Date(null).getTime()` es 0 → ningún peer sin timer (v21) se podía habilitar nunca ("Peer is expired
+— use Extend instead"). La rama MikroTik de `getLiveStatusesForPeers` no tenía el guard de dump vacío que
+sí tenía Linux. `handleRenewPeer` usaba `.update()` en vez de upsert: con 0 filas afectadas Supabase no
+devuelve error, así que la fecha se descartaba en silencio. `isPeerExpired`/`getTimeRemaining`/el gate de
+enable miraban `expires_at` ignorando `auto_disable_enabled`.
+
+**Gotchas:**
+- `peer_metadata.router_id` es **TEXT** y `tg_customer_peers.router_id` es **UUID** → todo se joinea por
+  `peer_public_key`. Por lo mismo `setUnifiedExpiry` actualiza TODAS las filas de `peer_metadata` con esa
+  public key, no solo la del router seleccionado: con router-per-interface una fila olvidada con la fecha
+  vieja seguiría apagando el peer.
+- Sacar el timer en el dashboard ahora también lo saca en Telegram (es un solo timer, es lo buscado).
+- Vercel Hobby solo permite crons diarios; para granularidad de minutos apuntarle cron-job.org a
+  `/api/cron/enforce-peer-expiry`, igual que ya se hacía con `expire-customer-peers`.
+
 ### 2026-08-08 — Telegram como menú padre + filtros en Peers + "Created by" del dashboard
 
 **Sin migraciones SQL.**

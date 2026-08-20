@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/expire-customer-peers",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/cron/enforce-peer-expiry",
+      "schedule": "30 3 * * *"
     }
   ]
 }

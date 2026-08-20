@@ -1,6 +1,7 @@
 import { createClient as createAdminClient, type SupabaseClient } from "@supabase/supabase-js";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { MikroTikClient } from "@/lib/mikrotik";
+import { mirrorTgExpiryToDashboard } from "@/lib/peer-expiry";
 import { cachedRouterRead } from "@/lib/router-read-cache";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { AuthMethod, PublicIP, Router, WireGuardPeer } from "@/lib/types";
@@ -118,7 +119,7 @@ export function buildMikroTikClient(router: Router): MikroTikClient {
   });
 }
 
-async function findMikroTikPeerByPublicKey(
+export async function findMikroTikPeerByPublicKey(
   client: MikroTikClient,
   publicKey: string
 ): Promise<WireGuardPeer | null> {
@@ -447,6 +448,15 @@ export async function provisionPeerForCustomer(params: {
     throw new Error(`Failed to save customer peer: ${tgPeerError?.message}`);
   }
 
+  // Espejo del timer en peer_metadata: sin esto el peer nace sin fila ahí y el
+  // dashboard lo lee como "sin timer".
+  await mirrorTgExpiryToDashboard(
+    supabase,
+    { routerId: plan.router_id, publicKey: keyPair.publicKey },
+    expiresAt.toISOString(),
+    { peerName, peerInterface: effectiveInterface, allowedAddress }
+  );
+
   return { peer: tgPeer as TgCustomerPeer };
 }
 
@@ -476,6 +486,17 @@ export async function renewCustomerPeer(params: {
     .select()
     .single();
   if (error || !updated) throw new Error(`Failed to renew peer: ${error?.message}`);
+
+  // El timer es uno solo: bajar la fecha nueva al dashboard. Sin esto,
+  // peer_metadata.expires_at queda vencido y su auto-disable vuelve a apagar el
+  // peer al minuto (pasa con el extend del admin, Cryptomus y el checkout free).
+  await mirrorTgExpiryToDashboard(
+    supabase,
+    { routerId: peer.router_id, publicKey: peer.peer_public_key },
+    newExpiry.toISOString(),
+    { peerName: peer.peer_name, peerInterface: peer.wg_interface, allowedAddress: peer.allowed_address }
+  );
+
   return updated as TgCustomerPeer;
 }
 
@@ -743,8 +764,10 @@ export async function getLiveStatusesForPeers(
         for (const p of routerPeers) {
           const rp = byKey.get(p.peer_public_key);
           const enabled = Boolean(rp) && !isMikroTikDisabled(rp?.disabled);
-          // No sincronizar status desde datos stale: reflejan una realidad vieja
-          if (!read.stale) sync(p, enabled);
+          // No sincronizar status desde datos stale ni desde un dump vacío
+          // (mismo cinturón que la rama Linux: un [] "exitoso" marcaría disabled
+          // a todos los peers TG de este router)
+          if (!read.stale && read.data.length > 0) sync(p, enabled);
           if (!rp || !enabled) {
             live.set(p.id, { connected: false, latestHandshake: null, rx: 0, tx: 0 });
             continue;

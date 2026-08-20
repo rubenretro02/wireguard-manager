@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-logger";
+import { mirrorTgExpiryToDashboard } from "@/lib/peer-expiry";
 import { sendTelegramMessage } from "@/lib/telegram";
 import {
   buildLinuxClient,
@@ -206,12 +207,22 @@ export async function POST(request: Request) {
         if (!data.id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
         const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", data.id).single();
         if (!peer) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
-        if (new Date(peer.expires_at).getTime() < Date.now()) {
+        // expires_at NULL = sin timer (v21). Sin el guard, new Date(null) da 0 y
+        // ningún peer sin timer se podía habilitar nunca.
+        if (peer.expires_at && new Date(peer.expires_at).getTime() < Date.now()) {
           return NextResponse.json({ error: "Peer is expired — use Extend instead" }, { status: 400 });
         }
         // re-agrega/enable-a en el servidor sin tocar la fecha de expiración
         await reactivateCustomerPeerOnServer(supabase, peer as TgCustomerPeer);
         await supabase.from("tg_customer_peers").update({ status: "active" }).eq("id", peer.id);
+        // El timer del dashboard puede estar vencido/desincronizado y volvería a
+        // apagarlo al minuto: alinearlo con la fecha real de la tienda.
+        await mirrorTgExpiryToDashboard(
+          supabase,
+          { routerId: peer.router_id, publicKey: peer.peer_public_key },
+          peer.expires_at,
+          { peerName: peer.peer_name, peerInterface: peer.wg_interface, allowedAddress: peer.allowed_address }
+        );
         return NextResponse.json({ success: true });
       }
 
@@ -345,6 +356,17 @@ export async function POST(request: Request) {
           .select()
           .single();
         if (assignError || !assigned) throw new Error(assignError?.message || "Failed to assign peer");
+
+        // Alinear el timer del dashboard con el que acaba de quedar en la tienda.
+        // Importante cuando expiresAtIso es null (peer sin timer): peer_metadata
+        // podía quedar con auto_disable_enabled y una fecha vieja, y el dashboard
+        // seguía apagando un peer que la tienda cree sin vencimiento.
+        await mirrorTgExpiryToDashboard(
+          supabase,
+          { routerId, publicKey },
+          expiresAtIso,
+          { peerName: assigned.peer_name, peerInterface: effectiveInterface, allowedAddress: assigned.allowed_address }
+        );
 
         if (notify) {
           let appUrl = "";

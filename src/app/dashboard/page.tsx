@@ -58,6 +58,7 @@ import {
 } from "lucide-react";
 import QRCodeLib from "qrcode";
 import { generateKeyPair } from "@/lib/wireguard-keys";
+import { convertToHours, convertToMilliseconds } from "@/lib/time-units";
 import type { Profile, Router as RouterType, WireGuardInterface, WireGuardPeer, PublicIP, PeerMetadata, UserCapabilities, TimeUnit, UserIpAccess } from "@/lib/types";
 
 interface TelegramBackButton {
@@ -66,34 +67,6 @@ interface TelegramBackButton {
   onClick: (cb: () => void) => void;
   offClick: (cb: () => void) => void;
 }
-
-// Helper function to convert time value + unit to hours
-const convertToHours = (value: number, unit: TimeUnit): number => {
-  switch (unit) {
-    case "seconds": return value / 3600;
-    case "minutes": return value / 60;
-    case "hours": return value;
-    case "days": return value * 24;
-    case "weeks": return value * 24 * 7;
-    case "months": return value * 24 * 30;
-    case "years": return value * 24 * 365;
-    default: return value;
-  }
-};
-
-// Helper function to convert time value + unit to milliseconds
-const convertToMilliseconds = (value: number, unit: TimeUnit): number => {
-  switch (unit) {
-    case "seconds": return value * 1000;
-    case "minutes": return value * 60 * 1000;
-    case "hours": return value * 60 * 60 * 1000;
-    case "days": return value * 24 * 60 * 60 * 1000;
-    case "weeks": return value * 7 * 24 * 60 * 60 * 1000;
-    case "months": return value * 30 * 24 * 60 * 60 * 1000;
-    case "years": return value * 365 * 24 * 60 * 60 * 1000;
-    default: return value * 60 * 60 * 1000;
-  }
-};
 
 // Helper function to format duration for display
 const formatDuration = (value: number, unit: TimeUnit): string => {
@@ -210,6 +183,14 @@ export default function DashboardPage() {
   const [routerDown, setRouterDown] = useState(false);
   const lastGoodFetchRef = useRef<number | null>(null);
   const fetchInFlightRef = useRef(false);
+  // Espejos de peers/metadata para el auto-disable: leerlos de refs evita que su
+  // efecto se re-cree en cada poll de 3s.
+  const peersRef = useRef<PeerWithMetadata[]>([]);
+  const peerMetadataRef = useRef<Record<string, PeerMetadata>>({});
+  const autoDisableInFlightRef = useRef(false);
+
+  useEffect(() => { peersRef.current = peers; }, [peers]);
+  useEffect(() => { peerMetadataRef.current = peerMetadata; }, [peerMetadata]);
 
   // Create peer dialog
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -996,37 +977,32 @@ export default function DashboardPage() {
   }, [selectedRouterId, fetchWireGuardData]);
 
   // Auto-disable expired peers and auto-enable scheduled peers
-  const autoDisableExpiredPeers = useCallback(async () => {
-    if (!selectedRouterId || Object.keys(peerMetadata).length === 0) return;
+  const runAutoDisable = useCallback(async (
+    candidatesToDisable: PeerWithMetadata[],
+    peersToEnable: PeerWithMetadata[]
+  ) => {
+    if (!selectedRouterId) return;
 
-    const now = new Date();
-    const peersToDisable: PeerWithMetadata[] = [];
-    const peersToEnable: PeerWithMetadata[] = [];
+    let peersToDisable = candidatesToDisable;
 
-    for (const peer of peers) {
-      const meta = peerMetadata[peer["public-key"]];
-      const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
+    // El snapshot en memoria puede estar viejo: fetchWireGuardData hace
+    // setPeers() y recién después await fetchPeerMetadata(), así que hay un
+    // render con el peer ya habilitado y la fecha vieja. Sin esta relectura, un
+    // peer recién renovado (en el dashboard o desde Telegram) se apagaba solo.
+    if (peersToDisable.length) {
+      const { data: fresh } = await supabase
+        .from("peer_metadata")
+        .select("peer_public_key, expires_at, auto_disable_enabled")
+        .eq("router_id", selectedRouterId)
+        .in("peer_public_key", peersToDisable.map((p) => p["public-key"]));
 
-      // Check for expired peers that need to be disabled
-      if (meta?.expires_at && meta.auto_disable_enabled) {
-        const expiresAt = new Date(meta.expires_at);
-        const isExpired = expiresAt < now;
-
-        // If peer is expired and still enabled, add to list to disable
-        if (isExpired && !isDisabled) {
-          peersToDisable.push(peer);
-        }
-      }
-
-      // Check for scheduled peers that need to be enabled
-      if (meta?.scheduled_enable_at && isDisabled) {
-        const scheduledEnableAt = new Date(meta.scheduled_enable_at);
-        const shouldEnable = scheduledEnableAt <= now;
-
-        if (shouldEnable) {
-          peersToEnable.push(peer);
-        }
-      }
+      const rows = (fresh || []) as Pick<PeerMetadata, "peer_public_key" | "expires_at" | "auto_disable_enabled">[];
+      const stillExpired = new Set(
+        rows
+          .filter((m) => m.auto_disable_enabled && m.expires_at && new Date(m.expires_at) < new Date())
+          .map((m) => m.peer_public_key)
+      );
+      peersToDisable = peersToDisable.filter((p) => stillExpired.has(p["public-key"]));
     }
 
     let hasChanges = false;
@@ -1079,27 +1055,69 @@ export default function DashboardPage() {
       fetchWireGuardData();
       fetchPeerMetadata();
     }
-  }, [selectedRouterId, peers, peerMetadata, fetchWireGuardData, fetchPeerMetadata, supabase]);
+  }, [selectedRouterId, fetchWireGuardData, fetchPeerMetadata, supabase]);
 
-  // Track metadata count for dependency array
-  const metadataCount = Object.keys(peerMetadata).length;
+  const autoDisableExpiredPeers = useCallback(async () => {
+    if (!selectedRouterId || autoDisableInFlightRef.current) return;
 
-  // Run auto-disable check when peers and metadata are loaded
-  // Also set up an interval to check periodically
-  useEffect(() => {
-    if (peers.length > 0 && metadataCount > 0) {
-      autoDisableExpiredPeers();
+    // Se lee de refs y no de las deps: así el efecto de abajo no se re-crea en
+    // cada poll de 3s (antes se recreaba, y lo que enforceaba era la llamada
+    // inmediata del efecto, no el intervalo de 60s).
+    const currentPeers = peersRef.current;
+    const currentMetadata = peerMetadataRef.current;
+    if (!currentPeers.length || Object.keys(currentMetadata).length === 0) return;
+
+    const now = new Date();
+    const peersToDisable: PeerWithMetadata[] = [];
+    const peersToEnable: PeerWithMetadata[] = [];
+
+    for (const peer of currentPeers) {
+      const meta = currentMetadata[peer["public-key"]];
+      const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
+
+      // Check for expired peers that need to be disabled
+      if (meta?.expires_at && meta.auto_disable_enabled) {
+        const expiresAt = new Date(meta.expires_at);
+        const isExpired = expiresAt < now;
+
+        // If peer is expired and still enabled, add to list to disable
+        if (isExpired && !isDisabled) {
+          peersToDisable.push(peer);
+        }
+      }
+
+      // Check for scheduled peers that need to be enabled
+      if (meta?.scheduled_enable_at && isDisabled) {
+        const scheduledEnableAt = new Date(meta.scheduled_enable_at);
+        const shouldEnable = scheduledEnableAt <= now;
+
+        if (shouldEnable) {
+          peersToEnable.push(peer);
+        }
+      }
     }
 
-    // Set up periodic check every 60 seconds
-    const intervalId = setInterval(() => {
-      if (peers.length > 0 && metadataCount > 0) {
-        autoDisableExpiredPeers();
-      }
-    }, 60000); // Check every minute
+    if (!peersToDisable.length && !peersToEnable.length) return;
+
+    // Sin el guard, un disablePeer lento por SSH se re-dispara para el mismo peer.
+    autoDisableInFlightRef.current = true;
+    try {
+      await runAutoDisable(peersToDisable, peersToEnable);
+    } finally {
+      autoDisableInFlightRef.current = false;
+    }
+  }, [selectedRouterId, runAutoDisable]);
+
+  // Chequeo periódico cada 60s. Deps solo [selectedRouterId, autoDisableExpiredPeers]
+  // para que el intervalo sobreviva a los polls: los datos entran por refs.
+  useEffect(() => {
+    if (!selectedRouterId) return;
+
+    autoDisableExpiredPeers();
+    const intervalId = setInterval(autoDisableExpiredPeers, 60000);
 
     return () => clearInterval(intervalId);
-  }, [peers.length, metadataCount, autoDisableExpiredPeers]);
+  }, [selectedRouterId, autoDisableExpiredPeers]);
 
   const fetchPublicIps = useCallback(async () => {
     if (!selectedRouterId || !profile) return;
@@ -1350,7 +1368,9 @@ export default function DashboardPage() {
     // If trying to enable a disabled peer, check if it's expired
     if (disabled) {
       const meta = peerMetadata[peer["public-key"]];
-      if (meta?.expires_at) {
+      // auto_disable_enabled importa: con el timer apagado la fecha vieja es
+      // decorativa y no debe bloquear el enable.
+      if (meta?.expires_at && meta.auto_disable_enabled) {
         const expiresAt = new Date(meta.expires_at);
         const isExpired = expiresAt < new Date();
 
@@ -1493,25 +1513,22 @@ export default function DashboardPage() {
     if (!selected.length || bulkExpValue <= 0) return;
     setBulkWorking(true);
     try {
-      const expDate = new Date(Date.now() + convertToMilliseconds(bulkExpValue, bulkExpUnit));
-      const rows = selected.map((peer) => ({
-        router_id: selectedRouterId,
-        peer_public_key: peer["public-key"],
-        peer_name: peer.name || null,
-        peer_interface: peer.interface || null,
-        allowed_address: peer["allowed-address"] || null,
-        created_by_email: profile?.email,
-        created_by_user_id: profile?.id,
-        expires_at: expDate.toISOString(),
-        auto_disable_enabled: true,
-        expiration_hours: convertToHours(bulkExpValue, bulkExpUnit),
-        expiration_value: bulkExpValue,
-        expiration_unit: bulkExpUnit,
-      }));
-      const { error } = await supabase
-        .from("peer_metadata")
-        .upsert(rows, { onConflict: "router_id,peer_public_key" });
-      if (error) throw new Error(error.message);
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setPeerExpiry",
+          routerId: selectedRouterId,
+          data: {
+            publicKeys: selected.map((peer) => peer["public-key"]),
+            mode: "set",
+            value: bulkExpValue,
+            unit: bulkExpUnit,
+          },
+        }),
+      });
+      const payload = await res.json();
+      if (!payload.success) throw new Error(payload.error || "Failed to set expiration");
       toast.success(`${selected.length} peer(s) expire in ${formatDuration(bulkExpValue, bulkExpUnit)}`);
       setBulkExpOpen(false);
       clearSelection();
@@ -1607,47 +1624,35 @@ export default function DashboardPage() {
 
     setSavingExpiration(true);
     try {
-      let expiresAt: string | null = null;
-      let scheduledEnableAt: string | null = null;
-      let expirationHours: number | null = null;
-      let expirationValue: number | null = null;
-      let expirationUnit: TimeUnit | null = null;
+      const hasTimer = editExpEnabled && editExpValue > 0;
+      const scheduledEnableAt = editExpScheduledEnable && editExpEnableDate
+        ? new Date(editExpEnableDate).toISOString()
+        : null;
 
-      if (editExpEnabled && editExpValue > 0) {
-        const expDate = new Date();
-        expDate.setTime(expDate.getTime() + convertToMilliseconds(editExpValue, editExpUnit));
-        expiresAt = expDate.toISOString();
-        expirationHours = convertToHours(editExpValue, editExpUnit);
-        expirationValue = editExpValue;
-        expirationUnit = editExpUnit;
-      }
+      // Por la API: es el único punto que escribe peer_metadata Y
+      // tg_customer_peers con la misma fecha.
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setPeerExpiry",
+          routerId: selectedRouterId,
+          data: {
+            publicKey: editingExpirationPeer["public-key"],
+            mode: "set",
+            ...(hasTimer ? { value: editExpValue, unit: editExpUnit } : { expiresAt: null }),
+            scheduledEnableAt,
+            peerName: editingExpirationPeer.name || null,
+            wgInterface: editingExpirationPeer.interface || null,
+            allowedAddress: editingExpirationPeer["allowed-address"] || null,
+          },
+        }),
+      });
+      const payload = await res.json();
 
-      if (editExpScheduledEnable && editExpEnableDate) {
-        scheduledEnableAt = new Date(editExpEnableDate).toISOString();
-      }
-
-      // Update metadata
-      const { error } = await supabase
-        .from("peer_metadata")
-        .upsert({
-          router_id: selectedRouterId,
-          peer_public_key: editingExpirationPeer["public-key"],
-          peer_name: editingExpirationPeer.name || null,
-          peer_interface: editingExpirationPeer.interface || null,
-          allowed_address: editingExpirationPeer["allowed-address"] || null,
-          created_by_email: profile?.email,
-          created_by_user_id: profile?.id,
-          expires_at: expiresAt,
-          auto_disable_enabled: editExpEnabled,
-          expiration_hours: expirationHours,
-          expiration_value: expirationValue,
-          expiration_unit: expirationUnit,
-          scheduled_enable_at: scheduledEnableAt,
-        }, { onConflict: "router_id,peer_public_key" });
-
-      if (error) {
-        console.error("Failed to save expiration:", error);
-        toast.error("Failed to save expiration settings");
+      if (!payload.success) {
+        console.error("Failed to save expiration:", payload.error);
+        toast.error(payload.error || "Failed to save expiration settings");
       } else {
         toast.success(editExpEnabled
           ? `Peer will expire in ${formatDuration(editExpValue, editExpUnit)}`
@@ -1669,6 +1674,9 @@ export default function DashboardPage() {
     if (!renewingPeer || !selectedRouterId) return;
 
     setRenewing(true);
+    // El peer queda habilitado con la fecha vieja hasta que responda
+    // setPeerExpiry: sin esto el auto-disable puede apagarlo en esa ventana.
+    autoDisableInFlightRef.current = true;
     try {
       // First, enable the peer
       const enableRes = await fetch("/api/wireguard", {
@@ -1680,29 +1688,36 @@ export default function DashboardPage() {
 
       if (!enableData.success) {
         toast.error(enableData.error || "Failed to enable peer");
+        autoDisableInFlightRef.current = false;
         setRenewing(false);
         return;
       }
 
-      // Calculate new expiration date
-      const newExpiresAt = new Date();
-      newExpiresAt.setTime(newExpiresAt.getTime() + convertToMilliseconds(renewValue, renewUnit));
+      // mode "extend": suma sobre max(ahora, fecha actual), igual que la tienda
+      // de Telegram. Antes acá se hacía `ahora + duración`, así que renovar por
+      // 1d a un peer con 20 días le RECORTABA el tiempo, y las dos fechas se
+      // volvían a separar.
+      const res = await fetch("/api/wireguard", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setPeerExpiry",
+          routerId: selectedRouterId,
+          data: {
+            publicKey: renewingPeer["public-key"],
+            mode: "extend",
+            value: renewValue,
+            unit: renewUnit,
+            peerName: renewingPeer.name || null,
+            wgInterface: renewingPeer.interface || null,
+            allowedAddress: renewingPeer["allowed-address"] || null,
+          },
+        }),
+      });
+      const payload = await res.json();
 
-      // Update metadata with new expiration
-      const { error } = await supabase
-        .from("peer_metadata")
-        .update({
-          expires_at: newExpiresAt.toISOString(),
-          expiration_hours: convertToHours(renewValue, renewUnit),
-          expiration_value: renewValue,
-          expiration_unit: renewUnit,
-          auto_disable_enabled: true
-        })
-        .eq("router_id", selectedRouterId)
-        .eq("peer_public_key", renewingPeer["public-key"]);
-
-      if (error) {
-        console.error("Failed to update metadata:", error);
+      if (!payload.success) {
+        console.error("Failed to update metadata:", payload.error);
         toast.warning("Peer enabled but failed to update expiration");
       } else {
         toast.success(`Peer renewed for ${formatDuration(renewValue, renewUnit)}`);
@@ -1711,10 +1726,13 @@ export default function DashboardPage() {
       setRenewDialogOpen(false);
       setRenewingPeer(null);
       fetchWireGuardData();
-      fetchPeerMetadata();
+      // Esperar la metadata nueva antes de soltar el auto-disable.
+      await fetchPeerMetadata();
     } catch (err) {
       console.error("Failed to renew peer:", err);
       toast.error("Failed to renew peer");
+    } finally {
+      autoDisableInFlightRef.current = false;
     }
     setRenewing(false);
   };
@@ -1958,14 +1976,14 @@ PersistentKeepalive = 25`;
   // Check if peer is expired
   const isPeerExpired = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    if (!meta?.expires_at) return false;
+    if (!meta?.expires_at || !meta.auto_disable_enabled) return false;
     return new Date(meta.expires_at) < new Date();
   };
 
   // Get time remaining for peer
   const getTimeRemaining = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    if (!meta?.expires_at) return null;
+    if (!meta?.expires_at || !meta.auto_disable_enabled) return null;
     const expiresAt = new Date(meta.expires_at);
     const now = new Date();
     const diff = expiresAt.getTime() - now.getTime();

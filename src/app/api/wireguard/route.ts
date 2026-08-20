@@ -5,7 +5,8 @@ import { MikroTikClient, clearClientCacheForRouter } from "@/lib/mikrotik";
 import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { cachedRouterRead, invalidateRouterReadCache } from "@/lib/router-read-cache";
 import { logActivity } from "@/lib/activity-logger";
-import type { ConnectionType, AuthMethod } from "@/lib/types";
+import { resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
+import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -41,10 +42,15 @@ export async function POST(request: Request) {
 
   const isAdmin = userProfile?.role === "admin";
   const canDelete = isAdmin || userProfile?.capabilities?.can_delete === true;
+  const canAutoExpire = isAdmin || userProfile?.capabilities?.can_auto_expire === true;
 
   // Check delete permission for delete actions
   if (action === "deletePeer" && !canDelete) {
     return NextResponse.json({ error: "You don't have permission to delete peers" }, { status: 403 });
+  }
+
+  if (action === "setPeerExpiry" && !canAutoExpire) {
+    return NextResponse.json({ error: "You don't have permission to set peer timers" }, { status: 403 });
   }
 
   // No demo mode - require real router
@@ -67,6 +73,99 @@ export async function POST(request: Request) {
 
   const connectionType: ConnectionType = router.connection_type || "api";
   const isLinux = connectionType === "linux-ssh";
+
+  // =====================================================
+  // TIMER DE EXPIRACIÓN (independiente de la plataforma)
+  // =====================================================
+  // Único punto de escritura de la fecha: actualiza peer_metadata Y
+  // tg_customer_peers con el MISMO valor. Tiene que vivir en el servidor porque
+  // el navegador usa el cliente con RLS y tg_customer_peers es admin-only vía
+  // service role.
+  if (action === "setPeerExpiry") {
+    const adminClient = getAdminClient();
+    if (!adminClient) {
+      return NextResponse.json({ error: "Service role key not configured" }, { status: 500 });
+    }
+
+    const publicKeys: string[] = Array.isArray(data?.publicKeys)
+      ? data.publicKeys
+      : data?.publicKey ? [data.publicKey] : [];
+    if (!publicKeys.length) {
+      return NextResponse.json({ error: "Missing publicKeys" }, { status: 400 });
+    }
+
+    const mode: ExpiryMode = data?.mode === "extend" ? "extend" : "set";
+    const duration =
+      data?.value && data?.unit ? { value: Number(data.value), unit: data.unit as TimeUnit } : null;
+
+    const results: Record<string, string | null> = {};
+    try {
+      for (const publicKey of publicKeys) {
+        // En "extend" la base es la fecha vigente, así que hay que leerla.
+        let current: string | null = null;
+        if (mode === "extend") {
+          const { data: meta } = await adminClient
+            .from("peer_metadata")
+            .select("expires_at")
+            .eq("router_id", routerId)
+            .eq("peer_public_key", publicKey)
+            .maybeSingle();
+          current = meta?.expires_at ?? null;
+          if (!current) {
+            // El peer puede venir de la tienda y no tener fila en peer_metadata.
+            const { data: tgPeer } = await adminClient
+              .from("tg_customer_peers")
+              .select("expires_at")
+              .eq("peer_public_key", publicKey)
+              .maybeSingle();
+            current = tgPeer?.expires_at ?? null;
+          }
+        }
+
+        const expiresAt = resolveExpiry({
+          current,
+          mode,
+          expiresAt: data?.expiresAt,
+          duration,
+        });
+
+        await setUnifiedExpiry(
+          adminClient,
+          { routerId, publicKey },
+          expiresAt,
+          {
+            duration,
+            scheduledEnableAt: data?.scheduledEnableAt,
+            identity: {
+              peerName: data?.peerName ?? null,
+              peerInterface: data?.wgInterface ?? null,
+              allowedAddress: data?.allowedAddress ?? null,
+              createdByEmail: user.email ?? null,
+              createdByUserId: user.id,
+            },
+          }
+        );
+        results[publicKey] = expiresAt;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to set peer timer";
+      console.error("[WireGuard API] setPeerExpiry failed:", message);
+      return NextResponse.json({ error: message }, { status: 500 });
+    }
+
+    await logActivity({
+      supabase,
+      userId: user.id,
+      routerId,
+      action: "update",
+      entityType: "peer",
+      entityId: publicKeys.length === 1 ? publicKeys[0] : null,
+      entityName: data?.peerName || null,
+      details: { timer_mode: mode, peers: publicKeys.length, expires_at: results[publicKeys[0]] },
+    });
+
+    return NextResponse.json({ success: true, expiry: results });
+  }
 
   // =====================================================
   // LINUX SSH HANDLING
