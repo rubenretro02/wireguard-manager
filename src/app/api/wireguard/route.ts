@@ -844,10 +844,10 @@ export async function POST(request: Request) {
             // peer_metadata está indexada por public key: sin esto el timer se
             // queda apuntando a la llave vieja y el peer aparece "sin timer".
             if (keyChanged) {
-              const adminClient = getAdminClient();
-              if (adminClient) {
-                await movePeerTimerToNewKey(adminClient, { oldKey: oldPubKey, newKey: effectivePubKey });
-              }
+              await movePeerTimerToNewKey(getAdminClient() || supabase, {
+                oldKey: oldPubKey,
+                newKey: effectivePubKey,
+              });
             }
 
             await logActivity({
@@ -1891,10 +1891,10 @@ export async function POST(request: Request) {
           // peer_metadata está indexada por public key: sin esto el timer se
           // queda apuntando a la llave vieja y el peer aparece "sin timer".
           if (oldPublicKey && oldPublicKey !== data["public-key"]) {
-            const adminClient = getAdminClient();
-            if (adminClient) {
-              await movePeerTimerToNewKey(adminClient, { oldKey: oldPublicKey, newKey: data["public-key"] });
-            }
+            await movePeerTimerToNewKey(getAdminClient() || supabase, {
+              oldKey: oldPublicKey,
+              newKey: data["public-key"],
+            });
           }
 
           await logActivity({
