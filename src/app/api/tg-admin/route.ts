@@ -10,6 +10,7 @@ import {
   getLiveStatusesForPeers,
   getServiceClient,
   reactivateCustomerPeerOnServer,
+  setCustomerPeerExpiry,
   type LivePeerStatus,
   removeCustomerPeerFromServer,
   renewCustomerPeer,
@@ -173,12 +174,31 @@ export async function POST(request: Request) {
       }
 
       case "extendPeer": {
-        const { id, days, notify } = data;
-        if (!id || !days) return NextResponse.json({ error: "Missing id or days" }, { status: 400 });
+        // mode "extend" (default) suma días; "set" fija la fecha exacta, que es
+        // la única forma de CORREGIR a la baja un peer extendido de más.
+        const { id, days, notify, mode, expiresAt } = data;
+        const isSet = mode === "set";
+        if (!id || (!isSet && !days)) {
+          return NextResponse.json({ error: "Missing id or days" }, { status: 400 });
+        }
         const { data: peer } = await supabase.from("tg_customer_peers").select("*").eq("id", id).single();
         if (!peer) return NextResponse.json({ error: "Peer not found" }, { status: 404 });
 
-        const renewed = await renewCustomerPeer({ supabase, peer: peer as TgCustomerPeer, durationDays: Number(days) });
+        let renewed: TgCustomerPeer;
+        if (isSet) {
+          // expiresAt null = sacarle el timer (no vence nunca)
+          let target: string | null = null;
+          if (expiresAt) {
+            const parsed = new Date(expiresAt);
+            if (Number.isNaN(parsed.getTime())) {
+              return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+            }
+            target = parsed.toISOString();
+          }
+          renewed = await setCustomerPeerExpiry({ supabase, peer: peer as TgCustomerPeer, expiresAt: target });
+        } else {
+          renewed = await renewCustomerPeer({ supabase, peer: peer as TgCustomerPeer, durationDays: Number(days) });
+        }
 
         await logActivity({
           supabase: authClient,
@@ -188,15 +208,21 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
-          details: { telegram_extend_days: days },
+          details: isSet
+            ? { timer_mode: "set", expires_at: renewed.expires_at, was: peer.expires_at }
+            : { timer_mode: "extend", telegram_extend_days: days, expires_at: renewed.expires_at },
         });
 
         if (notify) {
           const { data: customer } = await supabase.from("tg_customers").select("telegram_id, customer_type").eq("id", peer.customer_id).single();
           if (customer) {
+            // Sin fecha el peer no vence; el mensaje de "extendido hasta" no aplica
+            const message = renewed.expires_at
+              ? `🎁 Your peer <b>${renewed.peer_name}</b> is now valid until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`
+              : `🎁 Your peer <b>${renewed.peer_name}</b> no longer has an expiration date.`;
             await sendTelegramMessage(
               customer.telegram_id,
-              `🎁 Your peer <b>${renewed.peer_name}</b> was extended until <b>${new Date(renewed.expires_at as string).toLocaleDateString("en-US")}</b>.`,
+              message,
               {},
               botForCustomerType(customer.customer_type)
             );

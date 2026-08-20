@@ -515,6 +515,59 @@ export async function renewCustomerPeer(params: {
 }
 
 /**
+ * Fija la expiración a una fecha EXACTA (o la saca con null) y deja el servidor
+ * coherente con esa fecha.
+ *
+ * `renewCustomerPeer` solo suma, así que no había forma de corregir a la baja un
+ * peer al que se le extendió de más. Acá la fecha se reemplaza:
+ *   - futura (o null) -> el peer se re-asegura en WireGuard y queda 'active'
+ *   - pasada          -> se saca de WireGuard y queda 'expired'
+ */
+export async function setCustomerPeerExpiry(params: {
+  supabase?: SupabaseClient;
+  peer: TgCustomerPeer;
+  expiresAt: string | null;
+}): Promise<TgCustomerPeer> {
+  const supabase = params.supabase || getServiceClient();
+  const { peer, expiresAt } = params;
+
+  const isPast = Boolean(expiresAt) && new Date(expiresAt as string).getTime() <= Date.now();
+
+  if (isPast) {
+    // deactivateCustomerPeer ya escribe status + espeja linux_peers
+    await deactivateCustomerPeer({ supabase, peer, status: "expired" });
+  } else {
+    try {
+      await reactivateCustomerPeerOnServer(supabase, peer);
+    } catch (err) {
+      // Mismo criterio que renew: si ya estaba activo no se aborta la corrección
+      if (peer.status !== "active") throw err;
+      console.warn(
+        `[TgStore] setExpiry: no se pudo re-asegurar ${peer.peer_name}:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+    await supabase.from("tg_customer_peers").update({ status: "active" }).eq("id", peer.id);
+  }
+
+  // Una sola fecha: escribe tg_customer_peers Y peer_metadata
+  await mirrorTgExpiryToDashboard(
+    supabase,
+    { routerId: peer.router_id, publicKey: peer.peer_public_key },
+    expiresAt,
+    { peerName: peer.peer_name, peerInterface: peer.wg_interface, allowedAddress: peer.allowed_address }
+  );
+
+  const { data: updated, error } = await supabase
+    .from("tg_customer_peers")
+    .select("*")
+    .eq("id", peer.id)
+    .single();
+  if (error || !updated) throw new Error(`Failed to read back peer: ${error?.message}`);
+  return updated as TgCustomerPeer;
+}
+
+/**
  * Reactiva un peer en el servidor sin tocar fechas:
  * Linux re-agrega por SSH; MikroTik lo enable-a (o lo recrea con las mismas
  * llaves si fue borrado del router).

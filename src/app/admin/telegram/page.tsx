@@ -140,6 +140,15 @@ function fmtDate(iso: string | null): string {
   return iso ? new Date(iso).toLocaleDateString("en-US", { day: "numeric", month: "short", year: "numeric" }) : "—";
 }
 
+/** ISO -> "YYYY-MM-DDTHH:mm" en hora LOCAL, que es lo que espera datetime-local. */
+function toDatetimeLocal(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 const DAY_MS = 86_400_000;
 /** Whole days until expiry (negative = already past). null when the peer has no timer. */
 function daysLeft(iso: string | null): number | null {
@@ -237,6 +246,9 @@ function AdminTelegramPageContent() {
   const [extendPeerTarget, setExtendPeerTarget] = useState<AdminPeer | null>(null);
   const [extendDays, setExtendDays] = useState("30");
   const [extendNotify, setExtendNotify] = useState(true);
+  // "extend" suma sobre la fecha actual; "set" la reemplaza (para corregir a la baja)
+  const [extendMode, setExtendMode] = useState<"extend" | "set">("extend");
+  const [extendExactDate, setExtendExactDate] = useState("");
   const [extending, setExtending] = useState(false);
 
   const [busyPeerId, setBusyPeerId] = useState<string | null>(null);
@@ -593,8 +605,21 @@ function AdminTelegramPageContent() {
     if (!extendPeerTarget) return;
     setExtending(true);
     try {
-      await tgAdmin("extendPeer", { id: extendPeerTarget.id, days: Number(extendDays), notify: extendNotify });
-      toast.success(`Extended ${extendDays} days`);
+      if (extendMode === "set") {
+        // vacío = sacarle el timer. datetime-local viene en hora local, el
+        // servidor lo normaliza a ISO.
+        const expiresAt = extendExactDate ? new Date(extendExactDate).toISOString() : null;
+        await tgAdmin("extendPeer", {
+          id: extendPeerTarget.id,
+          mode: "set",
+          expiresAt,
+          notify: extendNotify,
+        });
+        toast.success(expiresAt ? `Expiration set to ${fmtDate(expiresAt)}` : "Timer removed");
+      } else {
+        await tgAdmin("extendPeer", { id: extendPeerTarget.id, days: Number(extendDays), notify: extendNotify });
+        toast.success(`Extended ${extendDays} days`);
+      }
       setExtendPeerTarget(null);
       await refreshPeers();
     } catch (err) {
@@ -1177,6 +1202,8 @@ function AdminTelegramPageContent() {
                                 setExtendPeerTarget(peer);
                                 setExtendDays("30");
                                 setExtendNotify(true);
+                                setExtendMode("extend");
+                                setExtendExactDate(toDatetimeLocal(peer.expires_at));
                               }}
                             >
                               <CalendarPlus className="w-4 h-4" />
@@ -1738,16 +1765,73 @@ function AdminTelegramPageContent() {
         <Dialog open={!!extendPeerTarget} onOpenChange={(open) => !open && setExtendPeerTarget(null)}>
           <DialogContent className="max-w-sm">
             <DialogHeader>
-              <DialogTitle>Extend {extendPeerTarget?.peer_name}</DialogTitle>
+              <DialogTitle>Timer — {extendPeerTarget?.peer_name}</DialogTitle>
               <DialogDescription>
-                Adds days to the expiration. If expired/disabled, it gets reactivated on the server.
+                {extendMode === "extend"
+                  ? "Adds days on top of the current expiration. If expired/disabled, it gets reactivated on the server."
+                  : "Replaces the expiration with an exact date — use this to correct a peer that was extended too far. A past date expires it immediately."}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label>Days</Label>
-                <Input type="number" min="1" value={extendDays} onChange={(e) => setExtendDays(e.target.value)} />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={extendMode === "extend" ? "default" : "outline"}
+                  onClick={() => setExtendMode("extend")}
+                  className="flex-1"
+                >
+                  Add days
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={extendMode === "set" ? "default" : "outline"}
+                  onClick={() => setExtendMode("set")}
+                  className="flex-1"
+                >
+                  Set exact date
+                </Button>
               </div>
+
+              {extendMode === "extend" ? (
+                <div className="space-y-1.5">
+                  <Label>Days to add</Label>
+                  <Input type="number" min="1" value={extendDays} onChange={(e) => setExtendDays(e.target.value)} />
+                  {extendPeerTarget?.expires_at && Number(extendDays) > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      New date:{" "}
+                      {fmtDate(
+                        new Date(
+                          Math.max(Date.now(), new Date(extendPeerTarget.expires_at).getTime()) +
+                            Number(extendDays) * 86400000
+                        ).toISOString()
+                      )}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>Expires on</Label>
+                  <Input
+                    type="datetime-local"
+                    value={extendExactDate}
+                    onChange={(e) => setExtendExactDate(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Current: {extendPeerTarget?.expires_at ? fmtDate(extendPeerTarget.expires_at) : "no timer"}
+                    {" · "}
+                    <button
+                      type="button"
+                      className="underline hover:text-foreground"
+                      onClick={() => setExtendExactDate("")}
+                    >
+                      remove timer (never expires)
+                    </button>
+                  </p>
+                </div>
+              )}
+
               <div className="flex items-center gap-2">
                 <Checkbox checked={extendNotify} onCheckedChange={(v) => setExtendNotify(v === true)} id="notify" />
                 <Label htmlFor="notify" className="flex items-center gap-1.5">
@@ -1759,9 +1843,12 @@ function AdminTelegramPageContent() {
               <Button variant="outline" onClick={() => setExtendPeerTarget(null)}>
                 Cancel
               </Button>
-              <Button onClick={doExtend} disabled={extending || !Number(extendDays)}>
+              <Button
+                onClick={doExtend}
+                disabled={extending || (extendMode === "extend" && !Number(extendDays))}
+              >
                 {extending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                Extend
+                {extendMode === "extend" ? "Extend" : "Save date"}
               </Button>
             </DialogFooter>
           </DialogContent>
