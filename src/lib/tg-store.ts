@@ -475,8 +475,22 @@ export async function renewCustomerPeer(params: {
   const base = Math.max(Date.now(), peer.expires_at ? new Date(peer.expires_at).getTime() : 0);
   const newExpiry = new Date(base + durationDays * 24 * 60 * 60 * 1000);
 
-  if (peer.status !== "active") {
+  // SIEMPRE se re-asegura en el servidor, sin mirar el status guardado.
+  // Antes era `if (peer.status !== "active")`, y con un status congelado en
+  // "active" (pasa cuando nadie abre la Mini App) el extend movía la fecha y
+  // NUNCA volvía a poner el peer en WireGuard: el cliente pagaba y se quedaba
+  // sin servicio. `wg set` es idempotente, así que re-agregar uno vivo no hace
+  // nada. Si el peer ya estaba activo y el servidor no responde, no se aborta la
+  // renovación (la fecha vale igual y el cobro no se puede perder); si estaba
+  // caído sí se propaga, para que Cryptomus reintente.
+  try {
     await reactivateCustomerPeerOnServer(supabase, peer);
+  } catch (err) {
+    if (peer.status !== "active") throw err;
+    console.warn(
+      `[TgStore] renew: no se pudo re-asegurar ${peer.peer_name} en el server (seguía activo):`,
+      err instanceof Error ? err.message : err
+    );
   }
 
   const { data: updated, error } = await supabase
