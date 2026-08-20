@@ -23,7 +23,8 @@ export type EntityType =
 
 interface LogActivityParams {
   supabase: SupabaseClient;
-  userId: string;
+  /** null = evento de sistema (cron, webhook). La columna es nullable. */
+  userId: string | null;
   routerId?: string | null;
   action: ActionType;
   entityType: EntityType;

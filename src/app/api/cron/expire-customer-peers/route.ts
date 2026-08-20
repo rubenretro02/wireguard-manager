@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logActivity } from "@/lib/activity-logger";
 import { botForCustomerType, sendTelegramMessage } from "@/lib/telegram";
 import {
   deactivateCustomerPeer,
@@ -40,6 +41,17 @@ export async function GET(request: Request) {
     try {
       await deactivateCustomerPeer({ supabase, peer, status: "expired" });
       results.push({ id: peer.id, name: peer.peer_name, ok: true });
+      // userId null = evento de sistema; la página de Logs lo muestra como "system"
+      await logActivity({
+        supabase,
+        userId: null,
+        routerId: peer.router_id,
+        action: "disable",
+        entityType: "peer",
+        entityId: peer.peer_public_key,
+        entityName: peer.peer_name,
+        details: { auto: true, reason: "store subscription expired", source: "cron expire-customer-peers", expires_at: peer.expires_at },
+      });
       if (peer.tg_customers?.telegram_id) {
         const isAgent = peer.tg_customers.customer_type === "agent";
         await sendTelegramMessage(

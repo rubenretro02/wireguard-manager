@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { logActivity } from "@/lib/activity-logger";
 import {
   buildLinuxClient,
   buildMikroTikClient,
@@ -117,6 +118,17 @@ export async function GET(request: Request) {
         await client.disableWireGuardPeer(rp[".id"]);
       }
       disabled.push(meta.peer_name || meta.peer_public_key);
+      // userId null = evento de sistema; la página de Logs lo muestra como "system"
+      await logActivity({
+        supabase,
+        userId: null,
+        routerId: meta.router_id,
+        action: "disable",
+        entityType: "peer",
+        entityId: meta.peer_public_key,
+        entityName: meta.peer_name,
+        details: { auto: true, reason: "timer expired", source: "cron enforce-peer-expiry" },
+      });
     } catch (err) {
       errors.push({
         peer: meta.peer_name || meta.peer_public_key,
@@ -157,6 +169,16 @@ export async function GET(request: Request) {
         .eq("router_id", meta.router_id)
         .eq("peer_public_key", meta.peer_public_key);
       enabled.push(meta.peer_name || meta.peer_public_key);
+      await logActivity({
+        supabase,
+        userId: null,
+        routerId: meta.router_id,
+        action: "enable",
+        entityType: "peer",
+        entityId: meta.peer_public_key,
+        entityName: meta.peer_name,
+        details: { auto: true, reason: "scheduled enable", source: "cron enforce-peer-expiry" },
+      });
     } catch (err) {
       errors.push({
         peer: meta.peer_name || meta.peer_public_key,
@@ -180,6 +202,16 @@ export async function GET(request: Request) {
       await reactivateCustomerPeerOnServer(supabase, peer);
       await supabase.from("tg_customer_peers").update({ status: "active" }).eq("id", peer.id);
       reactivated.push(peer.peer_name);
+      await logActivity({
+        supabase,
+        userId: null,
+        routerId: peer.router_id,
+        action: "enable",
+        entityType: "peer",
+        entityId: peer.peer_public_key,
+        entityName: peer.peer_name,
+        details: { auto: true, reason: "revived: still valid in store", source: "cron enforce-peer-expiry", expires_at: peer.expires_at },
+      });
     } catch (err) {
       errors.push({
         peer: peer.peer_name,
