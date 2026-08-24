@@ -55,23 +55,23 @@ export async function GET() {
   ]);
 
   const endpointDomain = profile?.endpoint_domain || null;
-  const records = (routers || []).map((r: { id: string; name: string; host: string; endpoint_slug: string | null; endpoint_domain: string | null }) => {
+
+  // Router rows that share a host+slug (one config per interface) are the same
+  // DNS record — list it once.
+  const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string }>();
+  for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_slug: string | null; endpoint_domain: string | null }>) {
     const slug = r.endpoint_slug || slugFromRouterName(r.name);
-    return {
-      routerId: r.id,
-      routerName: r.name,
-      slug,
-      host: buildEndpointHost(slug, endpointDomain || r.endpoint_domain),
-      target: r.host,
-    };
-  });
+    const host = buildEndpointHost(slug, endpointDomain || r.endpoint_domain);
+    if (!host || byHost.has(host)) continue;
+    byHost.set(host, { routerId: r.id, routerName: r.name, slug, host, target: r.host });
+  }
 
   return NextResponse.json({
     canConfigure: ctx.canConfigure,
     panelDomain: profile?.panel_domain || null,
     endpointDomain,
     brandName: profile?.brand_name || null,
-    records: records.filter((r: { host: string | null }) => r.host),
+    records: Array.from(byHost.values()),
   });
 }
 
