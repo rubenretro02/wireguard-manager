@@ -67,6 +67,7 @@ import {
 import { Progress } from "@/components/ui/progress";
 import { formatLogMessage, getActionColor } from "@/lib/activity-logger";
 import type { Profile, Router, ConnectionType, UserRole, PublicIP, UserRouter, WireGuardInterface, UserCapabilities } from "@/lib/types";
+import { normalizeDomain, slugFromRouterName } from "@/lib/endpoint-domain";
 import {
   AreaChart,
   Area,
@@ -306,6 +307,8 @@ export default function AdminPage() {
     wg_interface: "wg0",
     out_interface: "ether2",
     public_ip_mask: "/24",
+    endpoint_slug: "",
+    endpoint_domain: "",
   });
   const [savingRouter, setSavingRouter] = useState(false);
   const [detectedNetworkInterfaces, setDetectedNetworkInterfaces] = useState<string[]>([]);
@@ -928,6 +931,8 @@ export default function AdminPage() {
       wg_interface: router.wg_interface || (router.connection_type === "linux-ssh" ? "wg1" : "wg0"),
       out_interface: router.out_interface || (router.connection_type === "linux-ssh" ? "ens192" : "ether2"),
       public_ip_mask: router.public_ip_mask || "/24",
+      endpoint_slug: router.endpoint_slug || "",
+      endpoint_domain: router.endpoint_domain || "",
     });
     setDetectedNetworkInterfaces([]);
     setDetectedWgInterfaces([]);
@@ -1070,6 +1075,8 @@ export default function AdminPage() {
         wg_interface: editRouterData.wg_interface || (isLinux ? "wg1" : "wg0"),
         out_interface: editRouterData.out_interface || (isLinux ? "ens192" : "ether2"),
         public_ip_mask: editRouterData.public_ip_mask || "/24",
+        endpoint_slug: editRouterData.endpoint_slug?.trim() || null,
+        endpoint_domain: normalizeDomain(editRouterData.endpoint_domain || "") || null,
       };
 
       if (editRouterData.password) {
@@ -3688,6 +3695,33 @@ export default function AdminPage() {
                     onChange={(e) => setEditRouterData({ ...editRouterData, public_ip_mask: e.target.value })}
                     className="bg-secondary"
                   />
+                </div>
+                {/* v26 white-label: this server's DNS label inside each tenant's domain */}
+                <div className="space-y-2">
+                  <Label>Endpoint Slug</Label>
+                  <Input
+                    placeholder={slugFromRouterName(editRouterData.name || "")}
+                    value={editRouterData.endpoint_slug}
+                    onChange={(e) => setEditRouterData({ ...editRouterData, endpoint_slug: e.target.value })}
+                    className="bg-secondary font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Prefix used in peer endpoints: <span className="font-mono">
+                      {(editRouterData.endpoint_slug || slugFromRouterName(editRouterData.name || "")) + "." + (editRouterData.endpoint_domain || "tenant-domain.com")}
+                    </span>
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Default Endpoint Domain</Label>
+                  <Input
+                    placeholder="zone.blackgoatt.com"
+                    value={editRouterData.endpoint_domain}
+                    onChange={(e) => setEditRouterData({ ...editRouterData, endpoint_domain: e.target.value })}
+                    className="bg-secondary font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Used when the peer&apos;s creator has no domain of their own. Empty = use the public IP.
+                  </p>
                 </div>
               </div>
             </div>

@@ -1,0 +1,150 @@
+import { NextResponse } from "next/server";
+import { promises as dns } from "node:dns";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import {
+  buildEndpointHost,
+  invalidateEndpointDomainCache,
+  isValidDomain,
+  normalizeDomain,
+  slugFromRouterName,
+} from "@/lib/endpoint-domain";
+
+// node:dns is not available on Edge
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+interface Ctx {
+  userId: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  admin: any;
+  isAdmin: boolean;
+  canConfigure: boolean;
+}
+
+async function context(): Promise<{ ctx?: Ctx; error?: NextResponse }> {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+
+  const admin = createAdminClient();
+  if (!admin) return { error: NextResponse.json({ error: "Service role not configured" }, { status: 500 }) };
+
+  const { data: profile } = await admin
+    .from("profiles")
+    .select("role, capabilities")
+    .eq("id", user.id)
+    .single();
+
+  const isAdmin = profile?.role?.toLowerCase() === "admin";
+  // Semi-admins (those who manage their own users) get their own white label
+  const canConfigure = isAdmin || profile?.capabilities?.can_create_users === true;
+  return { ctx: { userId: user.id, admin, isAdmin, canConfigure } };
+}
+
+/**
+ * GET — current domains plus the exact DNS records the tenant has to create:
+ * one A record per server, since a hostname resolves to a single IP.
+ */
+export async function GET() {
+  const { ctx, error } = await context();
+  if (error || !ctx) return error!;
+
+  const [{ data: profile }, { data: routers }] = await Promise.all([
+    ctx.admin.from("profiles").select("panel_domain, endpoint_domain, brand_name").eq("id", ctx.userId).single(),
+    ctx.admin.from("routers").select("id, name, host, endpoint_slug, endpoint_domain").order("name"),
+  ]);
+
+  const endpointDomain = profile?.endpoint_domain || null;
+  const records = (routers || []).map((r: { id: string; name: string; host: string; endpoint_slug: string | null; endpoint_domain: string | null }) => {
+    const slug = r.endpoint_slug || slugFromRouterName(r.name);
+    return {
+      routerId: r.id,
+      routerName: r.name,
+      slug,
+      host: buildEndpointHost(slug, endpointDomain || r.endpoint_domain),
+      target: r.host,
+    };
+  });
+
+  return NextResponse.json({
+    canConfigure: ctx.canConfigure,
+    panelDomain: profile?.panel_domain || null,
+    endpointDomain,
+    brandName: profile?.brand_name || null,
+    records: records.filter((r: { host: string | null }) => r.host),
+  });
+}
+
+/**
+ * POST { panelDomain?, endpointDomain?, brandName? } — save the tenant's domains.
+ * POST { action: "check", host } — resolve a hostname and report the IPs it answers.
+ */
+export async function POST(request: Request) {
+  const { ctx, error } = await context();
+  if (error || !ctx) return error!;
+
+  const body = await request.json();
+
+  if (body.action === "check") {
+    const host = normalizeDomain(String(body.host || ""));
+    if (!isValidDomain(host)) return NextResponse.json({ error: "Invalid hostname" }, { status: 400 });
+    try {
+      const ips = await dns.resolve4(host);
+      return NextResponse.json({ host, ips });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code || "";
+      return NextResponse.json({ host, ips: [], notFound: code === "ENOTFOUND" || code === "NODATA" });
+    }
+  }
+
+  if (!ctx.canConfigure) {
+    return NextResponse.json({ error: "You don't have permission to configure domains" }, { status: 403 });
+  }
+
+  const update: Record<string, string | null> = {};
+
+  for (const field of ["panelDomain", "endpointDomain"] as const) {
+    if (!(field in body)) continue;
+    const raw = String(body[field] ?? "").trim();
+    const column = field === "panelDomain" ? "panel_domain" : "endpoint_domain";
+    if (!raw) {
+      update[column] = null;
+      continue;
+    }
+    const domain = normalizeDomain(raw);
+    if (!isValidDomain(domain)) {
+      return NextResponse.json({ error: `"${raw}" is not a valid domain` }, { status: 400 });
+    }
+    update[column] = domain;
+  }
+
+  if ("brandName" in body) {
+    const brand = String(body.brandName ?? "").trim();
+    update.brand_name = brand ? brand.slice(0, 60) : null;
+  }
+
+  if (Object.keys(update).length === 0) {
+    return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+  }
+
+  // panel_domain is unique across tenants: it decides whose brand a request shows
+  if (update.panel_domain) {
+    const { data: taken } = await ctx.admin
+      .from("profiles")
+      .select("id")
+      .ilike("panel_domain", update.panel_domain)
+      .neq("id", ctx.userId)
+      .limit(1);
+    if (taken && taken.length > 0) {
+      return NextResponse.json({ error: "That panel domain is already taken" }, { status: 409 });
+    }
+  }
+
+  const { error: dbError } = await ctx.admin.from("profiles").update(update).eq("id", ctx.userId);
+  if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
+
+  // Peers resolve their endpoint through a short-lived cache of this table
+  invalidateEndpointDomainCache();
+
+  return NextResponse.json({ success: true, ...update });
+}

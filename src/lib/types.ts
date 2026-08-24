@@ -72,6 +72,9 @@ export interface Router {
   ssh_port: number | null;
   ssh_key: string | null;
   ssh_auth_method: AuthMethod | null;
+  // White-label endpoints (v26): <endpoint_slug>.<tenant domain>
+  endpoint_slug?: string | null;
+  endpoint_domain?: string | null;
 }
 
 export interface PublicIP {
@@ -147,4 +150,6 @@ export interface WireGuardPeer {
   created_by_email?: string | null;
   created_by_user_id?: string | null;
   created_at?: string | null;
+  // White-label endpoint (v26): <router slug>.<creator's domain>, null = use the public IP
+  endpoint_host?: string | null;
 }

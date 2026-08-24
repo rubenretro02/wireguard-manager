@@ -1810,9 +1810,11 @@ export default function DashboardPage() {
     const iface = interfaces.find((i) => i.name === peer.interface);
     const selectedRouter = routers.find((r) => r.id === selectedRouterId);
     const privateKey = peer["private-key"] || "[CLIENT_PRIVATE_KEY]";
-    const endpointHost = peer.comment && /^\d+\.\d+\.\d+\.\d+$/.test(peer.comment)
-      ? peer.comment
-      : selectedRouter?.host || "server.example.com";
+    // White-label domain of whoever created the peer wins over the raw public IP
+    const endpointHost = peer.endpoint_host
+      || (peer.comment && /^\d+\.\d+\.\d+\.\d+$/.test(peer.comment)
+        ? peer.comment
+        : selectedRouter?.host || "server.example.com");
     const listenPort = iface?.["listen-port"] || 51820;
     const address = peer["allowed-address"]?.split(",")[0]?.split("/")[0] || "10.10.x.x";
 
@@ -2011,9 +2013,11 @@ PersistentKeepalive = 25`;
     const iface = interfaces.find((i) => i.name === peer.interface);
     const selectedRouter = routers.find((r) => r.id === selectedRouterId);
     const privateKey = peer["private-key"] || "[CLIENT_PRIVATE_KEY]";
-    const endpointHost = peer.comment && /^\d+\.\d+\.\d+\.\d+$/.test(peer.comment)
-      ? peer.comment
-      : selectedRouter?.host || "server.example.com";
+    // White-label domain of whoever created the peer wins over the raw public IP
+    const endpointHost = peer.endpoint_host
+      || (peer.comment && /^\d+\.\d+\.\d+\.\d+$/.test(peer.comment)
+        ? peer.comment
+        : selectedRouter?.host || "server.example.com");
     const listenPort = iface?.["listen-port"] || 51820;
 
     return `[Interface]

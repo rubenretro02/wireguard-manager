@@ -41,6 +41,39 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-24 — White-label: dominios por tenant (v26, fase 1)
+
+**Motivo:** cuando AT&T cambie el bloque de IPs no vamos a tener acceso al viejo, así que los
+endpoints por IP se mueren. Además cada semi-admin (homevpn) quiere su propia marca.
+
+**Migración SQL:** `scripts/migration-v26-white-label-domains.sql` — `profiles.endpoint_domain`,
+`profiles.panel_domain` (unique, case-insensitive), `profiles.brand_name`, y en `routers`:
+`endpoint_slug` (prefijo DNS del server) + `endpoint_domain` (default global).
+
+**Por qué `<slug>.<dominio>` y no un solo nombre:** un hostname resuelve a UNA IP; los peers viven
+en servers distintos, así que cada server necesita su propio registro A bajo el dominio del tenant
+(`tx.zone.homevpn.com`, `oh.zone.homevpn.com`). El tenant configura solo el dominio base.
+
+- `src/lib/endpoint-domain.ts` (nuevo): `normalizeDomain`, `isValidDomain`, `slugFromRouterName`,
+  `buildEndpointHost` y `buildEndpointResolver(admin, router)` — resuelve el dominio subiendo por
+  `created_by_user_id`: creador → padre → … → `routers.endpoint_domain` → null (= IP, como antes).
+  Cachea `profiles` 30s porque el dashboard pollea cada 3s; guard anti-ciclos.
+- `/api/wireguard getPeers` (Linux y MikroTik) adjunta `endpoint_host` a cada peer; el dashboard lo
+  usa en `generateConfig`/`generateEditableConfig` con fallback a la IP pública.
+- `/api/profile/domains` (nuevo, runtime nodejs): GET devuelve dominios + los registros A que hay que
+  crear (uno por server, con su IP destino); POST guarda (valida y normaliza) o hace `action:"check"`
+  que resuelve con `dns.resolve4` para verificar que apunta bien.
+- `/profile`: sección "Your domains" (solo admins y `can_create_users`) con los 3 campos, la lista de
+  registros DNS con copiar y "Check DNS".
+- Admin → editar router: campos **Endpoint Slug** y **Default Endpoint Domain**.
+
+**Gotchas:**
+- Sin correr la migración todo degrada solo (los selects fallan → `endpoint_host` null → se sigue
+  usando la IP). Nada se rompe.
+- Los configs YA entregados no cambian: el dominio solo aplica a lo que se descargue de ahora en más.
+- La Mini App de Telegram sigue usando `tg_customer_peers.public_ip` (fase 3).
+- Falta (fase 2): alta automática del dominio del panel en Dokploy y branding por Host header.
+
 ### 2026-08-20 — Un solo timer de expiración (dashboard ↔ tienda Telegram) v24
 
 **Síntoma:** los peers de `/admin/telegram?tab=peers` se apagaban solos aunque el admin les extendiera

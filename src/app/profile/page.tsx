@@ -9,8 +9,26 @@ import { DashboardLayout, PageHeader, PageContent } from "@/components/Dashboard
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe } from "lucide-react";
 import type { Profile } from "@/lib/types";
+
+interface DomainRecord {
+  routerId: string;
+  routerName: string;
+  slug: string;
+  host: string | null;
+  target: string;
+}
+
+interface DomainsPayload {
+  canConfigure: boolean;
+  panelDomain: string | null;
+  endpointDomain: string | null;
+  brandName: string | null;
+  records: DomainRecord[];
+}
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -23,6 +41,74 @@ export default function ProfilePage() {
   const [unlinking, setUnlinking] = useState(false);
   const [deepLink, setDeepLink] = useState<string | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+
+  // White-label domains
+  const [domains, setDomains] = useState<DomainsPayload | null>(null);
+  const [panelDomain, setPanelDomain] = useState("");
+  const [endpointDomain, setEndpointDomain] = useState("");
+  const [brandName, setBrandName] = useState("");
+  const [savingDomains, setSavingDomains] = useState(false);
+  const [checkingDns, setCheckingDns] = useState(false);
+  const [dnsResults, setDnsResults] = useState<Record<string, { ips: string[] }>>({});
+
+  const loadDomains = useCallback(async () => {
+    try {
+      const res = await fetch("/api/profile/domains");
+      if (!res.ok) return;
+      const data: DomainsPayload = await res.json();
+      setDomains(data);
+      setPanelDomain(data.panelDomain || "");
+      setEndpointDomain(data.endpointDomain || "");
+      setBrandName(data.brandName || "");
+    } catch {
+      // domains are optional — never block the profile page
+    }
+  }, []);
+
+  const saveDomains = async () => {
+    setSavingDomains(true);
+    try {
+      const res = await fetch("/api/profile/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ panelDomain, endpointDomain, brandName }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Domains saved");
+        setDnsResults({});
+        await loadDomains();
+      } else {
+        toast.error(json.error || "Couldn't save");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSavingDomains(false);
+    }
+  };
+
+  const checkDns = async () => {
+    if (!domains) return;
+    setCheckingDns(true);
+    const results: Record<string, { ips: string[] }> = {};
+    for (const record of domains.records) {
+      if (!record.host) continue;
+      try {
+        const res = await fetch("/api/profile/domains", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "check", host: record.host }),
+        });
+        const json = await res.json();
+        results[record.host] = { ips: json.ips || [] };
+      } catch {
+        results[record.host] = { ips: [] };
+      }
+    }
+    setDnsResults(results);
+    setCheckingDns(false);
+  };
 
   const loadProfile = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -44,7 +130,7 @@ export default function ProfilePage() {
     setLoading(false);
   }, [supabase, router]);
 
-  useEffect(() => { loadProfile(); }, [loadProfile]);
+  useEffect(() => { loadProfile(); loadDomains(); }, [loadProfile, loadDomains]);
 
   const handleConnect = async () => {
     setGenerating(true);
@@ -136,6 +222,124 @@ export default function ProfilePage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* White-label domains (admins and semi-admins) */}
+            {domains?.canConfigure && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <Globe className="w-4 h-4 text-primary" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">Your domains</CardTitle>
+                      <CardDescription>
+                        Use your own brand: your panel URL and the endpoint domain of every peer you
+                        (or your users) create.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="panel-domain">Panel domain</Label>
+                    <Input
+                      id="panel-domain"
+                      placeholder="vpn.yourbrand.com"
+                      value={panelDomain}
+                      onChange={(e) => setPanelDomain(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Point a CNAME to this panel and your users sign in on your own address.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="endpoint-domain">Endpoint domain</Label>
+                    <Input
+                      id="endpoint-domain"
+                      placeholder="zone.yourbrand.com"
+                      value={endpointDomain}
+                      onChange={(e) => setEndpointDomain(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Base domain for the peers you create. Each server gets its own name under it
+                      (a hostname can only answer with one IP), so create one A record per server.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="brand-name">Brand name</Label>
+                    <Input
+                      id="brand-name"
+                      placeholder="HomeVPN"
+                      value={brandName}
+                      onChange={(e) => setBrandName(e.target.value)}
+                    />
+                  </div>
+
+                  <Button onClick={saveDomains} disabled={savingDomains} className="gap-2">
+                    {savingDomains ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                    Save domains
+                  </Button>
+
+                  {domains.records.length > 0 && (
+                    <div className="space-y-2 pt-2 border-t border-border">
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-medium">DNS records to create</p>
+                        <Button variant="outline" size="sm" onClick={checkDns} disabled={checkingDns} className="gap-2">
+                          <RefreshCw className={`w-3.5 h-3.5 ${checkingDns ? "animate-spin" : ""}`} />
+                          Check DNS
+                        </Button>
+                      </div>
+                      <div className="rounded-lg border border-border overflow-hidden">
+                        {domains.records.map((r) => {
+                          const check = dnsResults[r.host!];
+                          const ok = check?.ips?.includes(r.target);
+                          return (
+                            <div
+                              key={r.routerId}
+                              className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 text-xs"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-mono truncate">{r.host}</div>
+                                <div className="text-muted-foreground">{r.routerName}</div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <Badge variant="outline" className="font-mono">A → {r.target}</Badge>
+                                {check && (
+                                  ok ? (
+                                    <span className="text-green-500 flex items-center gap-1">
+                                      <CheckCircle2 className="w-3.5 h-3.5" /> OK
+                                    </span>
+                                  ) : (
+                                    <span className="text-amber-400" title={check.ips?.join(", ") || "no answer"}>
+                                      {check.ips?.length ? `→ ${check.ips[0]}` : "not found"}
+                                    </span>
+                                  )
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6"
+                                  onClick={() => { navigator.clipboard.writeText(r.host!); toast.success("Copied"); }}
+                                >
+                                  <Copy className="w-3.5 h-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Peers already handed out keep working — the domain only applies to configs
+                        downloaded from now on.
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
             {/* Telegram access */}
             <Card>

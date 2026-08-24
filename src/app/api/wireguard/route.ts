@@ -6,6 +6,7 @@ import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { cachedRouterRead, invalidateRouterReadCache } from "@/lib/router-read-cache";
 import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
+import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
 
 // Lazy service-role client for reads that must bypass RLS
@@ -347,12 +348,16 @@ export async function POST(request: Request) {
               .map((m: LegacyMeta) => [m.peer_public_key, m])
           );
 
+          // White-label: the Endpoint domain follows whoever created each peer
+          const resolveEndpoint = await buildEndpointResolver(metaClient, router);
+
           // Merge live peers with stored metadata (linux_peers takes priority, peer_metadata as fallback)
           const formattedPeers = livePeers.map((peer, index) => {
             const stored = storedPeersMap.get(peer.publicKey) as StoredLinuxPeer | undefined;
             const legacy = legacyMetaMap.get(peer.publicKey);
             const fallbackName = legacy?.peer_name;
             return {
+              endpoint_host: resolveEndpoint(stored?.created_by_user_id || legacy?.created_by_user_id),
               ".id": stored?.id || `*${index + 1}`,
               "public-key": peer.publicKey,
               "private-key": stored?.private_key || undefined,
@@ -379,6 +384,7 @@ export async function POST(request: Request) {
           const disabledPeers = (storedPeers || [])
             .filter((p: any) => (p.disabled || routerDown) && !livePeerKeys.has(p.public_key))
             .map((stored: any) => ({
+              endpoint_host: resolveEndpoint(stored.created_by_user_id || legacyMetaMap.get(stored.public_key)?.created_by_user_id),
               ".id": stored.id,
               "public-key": stored.public_key,
               "private-key": stored.private_key || undefined,
@@ -1294,16 +1300,20 @@ export async function POST(request: Request) {
             // Creator info is cosmetic — never fail the peer list over it.
           }
           const mtMetaMap = new Map(mtMeta.map((m) => [m.peer_public_key, m]));
+          const resolveEndpoint = await buildEndpointResolver(getAdminClient() ?? supabase, router);
           const peersWithCreator = peers.map((p) => {
             const m = mtMetaMap.get(p["public-key"]);
-            return m
-              ? {
-                  ...p,
-                  created_by_email: m.created_by_email,
-                  created_by_user_id: m.created_by_user_id,
-                  created_at: m.created_at,
-                }
-              : p;
+            return {
+              ...p,
+              ...(m
+                ? {
+                    created_by_email: m.created_by_email,
+                    created_by_user_id: m.created_by_user_id,
+                    created_at: m.created_at,
+                  }
+                : {}),
+              endpoint_host: resolveEndpoint(m?.created_by_user_id),
+            };
           });
 
           return NextResponse.json({ peers: peersWithCreator, stale, fetchedAt, routerDown: stale, source: "live" });
