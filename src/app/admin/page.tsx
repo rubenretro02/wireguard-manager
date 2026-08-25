@@ -309,6 +309,7 @@ export default function AdminPage() {
     public_ip_mask: "/24",
     endpoint_slug: "",
     endpoint_domain: "",
+    endpoint_ip: "",
   });
   const [savingRouter, setSavingRouter] = useState(false);
   const [detectedNetworkInterfaces, setDetectedNetworkInterfaces] = useState<string[]>([]);
@@ -933,6 +934,7 @@ export default function AdminPage() {
       public_ip_mask: router.public_ip_mask || "/24",
       endpoint_slug: router.endpoint_slug || "",
       endpoint_domain: router.endpoint_domain || "",
+      endpoint_ip: router.endpoint_ip || "",
     });
     setDetectedNetworkInterfaces([]);
     setDetectedWgInterfaces([]);
@@ -1077,6 +1079,7 @@ export default function AdminPage() {
         public_ip_mask: editRouterData.public_ip_mask || "/24",
         endpoint_slug: editRouterData.endpoint_slug?.trim() || null,
         endpoint_domain: normalizeDomain(editRouterData.endpoint_domain || "") || null,
+        endpoint_ip: editRouterData.endpoint_ip?.trim() || null,
       };
 
       if (editRouterData.password) {
@@ -3695,6 +3698,20 @@ export default function AdminPage() {
                     onChange={(e) => setEditRouterData({ ...editRouterData, public_ip_mask: e.target.value })}
                     className="bg-secondary"
                   />
+                </div>
+                {/* v27: on CHR/gateway setups the SSH host is NOT the IP WireGuard listens on */}
+                <div className="space-y-2">
+                  <Label>Endpoint IP</Label>
+                  <Input
+                    placeholder={editRouterData.host || "same as host"}
+                    value={editRouterData.endpoint_ip}
+                    onChange={(e) => setEditRouterData({ ...editRouterData, endpoint_ip: e.target.value })}
+                    className="bg-secondary font-mono"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Where the endpoint DNS record points. Leave empty to use the host IP; set it when
+                    the host is a gateway that only port-forwards SSH.
+                  </p>
                 </div>
                 {/* v26 white-label: this server's DNS label inside each tenant's domain */}
                 <div className="space-y-2">

@@ -75,6 +75,9 @@ export interface Router {
   // White-label endpoints (v26): <endpoint_slug>.<tenant domain>
   endpoint_slug?: string | null;
   endpoint_domain?: string | null;
+  // v27: IP the endpoint A record points at. Null = host. Differs on servers
+  // behind a CHR/gateway, where `host` is the gateway and WG listens elsewhere.
+  endpoint_ip?: string | null;
 }
 
 export interface PublicIP {

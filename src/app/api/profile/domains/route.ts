@@ -56,7 +56,10 @@ export async function GET() {
     .single();
 
   // Only the servers this tenant actually has: never leak other tenants' hosts
-  let routerQuery = ctx.admin.from("routers").select("id, name, host, endpoint_slug, endpoint_domain").order("name");
+  let routerQuery = ctx.admin
+    .from("routers")
+    .select("id, name, host, endpoint_ip, endpoint_slug, endpoint_domain")
+    .order("name");
   if (!ctx.isAdmin) {
     const { data: access } = await ctx.admin
       .from("user_routers")
@@ -81,11 +84,13 @@ export async function GET() {
   // Router rows that share a host+slug (one config per interface) are the same
   // DNS record — list it once.
   const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string }>();
-  for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_slug: string | null; endpoint_domain: string | null }>) {
+  for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_ip: string | null; endpoint_slug: string | null; endpoint_domain: string | null }>) {
     const slug = r.endpoint_slug || slugFromRouterName(r.name);
     const host = buildEndpointHost(slug, endpointDomain || r.endpoint_domain);
     if (!host || byHost.has(host)) continue;
-    byHost.set(host, { routerId: r.id, routerName: r.name, slug, host, target: r.host });
+    // endpoint_ip !== host on servers behind a CHR/gateway, where `host` is the
+    // gateway (SSH arrives by port-forward) and WireGuard listens on the block's IPs
+    byHost.set(host, { routerId: r.id, routerName: r.name, slug, host, target: r.endpoint_ip || r.host });
   }
 
   return NextResponse.json({
