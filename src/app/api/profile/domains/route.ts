@@ -115,6 +115,25 @@ export async function POST(request: Request) {
   if (body.action === "check") {
     const host = normalizeDomain(String(body.host || ""));
     if (!isValidDomain(host)) return NextResponse.json({ error: "Invalid hostname" }, { status: 400 });
+    // DNS-over-HTTPS first: the container's resolver caches negative answers, so
+    // a record created after the first check looks missing for minutes even
+    // though it already resolves everywhere else. DoH also works where outbound
+    // UDP/53 is blocked.
+    try {
+      const res = await fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(host)}&type=A`, {
+        headers: { accept: "application/dns-json" },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as { Status: number; Answer?: Array<{ type: number; data: string }> };
+        const ips = (json.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
+        if (ips.length > 0) return NextResponse.json({ host, ips });
+        if (json.Status === 3) return NextResponse.json({ host, ips: [], notFound: true });
+      }
+    } catch {
+      // fall through to the system resolver
+    }
+
     try {
       const ips = await dns.resolve4(host);
       return NextResponse.json({ host, ips });
