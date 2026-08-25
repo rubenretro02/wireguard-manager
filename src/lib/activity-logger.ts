@@ -19,7 +19,9 @@ export type EntityType =
   | "user"
   | "interface"
   | "nat_rule"
-  | "session";
+  | "session"
+  | "socks5"
+  | "api_key";
 
 interface LogActivityParams {
   supabase: SupabaseClient;
@@ -97,6 +99,8 @@ export function formatLogMessage(
     interface: "interface",
     nat_rule: "NAT rule",
     session: "session",
+    socks5: "SOCKS5 proxy",
+    api_key: "API key",
   };
 
   const verb = actionVerbs[action] || action;

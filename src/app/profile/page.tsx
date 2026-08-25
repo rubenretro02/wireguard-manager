@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe } from "lucide-react";
+import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe, KeyRound } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
 interface DomainRecord {
@@ -20,6 +20,15 @@ interface DomainRecord {
   slug: string;
   host: string | null;
   target: string;
+}
+
+interface ApiKeyRow {
+  id: string;
+  name: string;
+  key_prefix: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
 }
 
 interface DomainsPayload {
@@ -51,6 +60,58 @@ export default function ProfilePage() {
   const [checkingDns, setCheckingDns] = useState(false);
   const [dnsResults, setDnsResults] = useState<Record<string, { ips: string[] }>>({});
 
+  // API keys
+  const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([]);
+  const [apiKeysEnabled, setApiKeysEnabled] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newKey, setNewKey] = useState<string | null>(null);
+  const [creatingKey, setCreatingKey] = useState(false);
+
+  const loadApiKeys = useCallback(async () => {
+    try {
+      const res = await fetch("/api/profile/api-keys");
+      if (!res.ok) return;
+      const data = await res.json();
+      setApiKeys(data.keys || []);
+      setApiKeysEnabled(Boolean(data.canIssue));
+    } catch {
+      // optional section
+    }
+  }, []);
+
+  const createApiKey = async () => {
+    setCreatingKey(true);
+    try {
+      const res = await fetch("/api/profile/api-keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newKeyName }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setNewKey(json.key);
+        setNewKeyName("");
+        await loadApiKeys();
+      } else {
+        toast.error(json.error || "Couldn't create the key");
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const revokeApiKey = async (id: string) => {
+    const res = await fetch(`/api/profile/api-keys?id=${id}`, { method: "DELETE" });
+    if (res.ok) {
+      toast.success("Key revoked");
+      await loadApiKeys();
+    } else {
+      toast.error("Couldn't revoke the key");
+    }
+  };
+
   const loadDomains = useCallback(async () => {
     try {
       const res = await fetch("/api/profile/domains");
@@ -60,6 +121,7 @@ export default function ProfilePage() {
       setPanelDomain(data.panelDomain || "");
       setEndpointDomain(data.endpointDomain || "");
       setBrandName(data.brandName || "");
+      return data.records;
     } catch {
       // domains are optional — never block the profile page
     }
@@ -77,7 +139,8 @@ export default function ProfilePage() {
       if (res.ok) {
         toast.success("Domains saved");
         setDnsResults({});
-        await loadDomains();
+        const records = await loadDomains();
+        if (records?.length) checkDns(records);
       } else {
         toast.error(json.error || "Couldn't save");
       }
@@ -88,27 +151,49 @@ export default function ProfilePage() {
     }
   };
 
-  const checkDns = async () => {
-    if (!domains) return;
+  // Resolve from the browser over DoH: the server's resolver caches negative
+  // answers, so a record created minutes ago would keep looking missing.
+  const resolveHost = async (host: string): Promise<string[]> => {
+    try {
+      const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=A`, {
+        headers: { accept: "application/dns-json" },
+      });
+      if (res.ok) {
+        const json = await res.json();
+        return (json.Answer || [])
+          .filter((a: { type: number }) => a.type === 1)
+          .map((a: { data: string }) => a.data);
+      }
+    } catch {
+      // DoH blocked on this network — ask the server instead
+    }
+    try {
+      const res = await fetch("/api/profile/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "check", host }),
+      });
+      const json = await res.json();
+      return json.ips || [];
+    } catch {
+      return [];
+    }
+  };
+
+  const checkDns = useCallback(async (records?: DomainRecord[]) => {
+    const list = records || domains?.records || [];
+    if (list.length === 0) return;
     setCheckingDns(true);
     const results: Record<string, { ips: string[] }> = {};
-    for (const record of domains.records) {
-      if (!record.host) continue;
-      try {
-        const res = await fetch("/api/profile/domains", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "check", host: record.host }),
-        });
-        const json = await res.json();
-        results[record.host] = { ips: json.ips || [] };
-      } catch {
-        results[record.host] = { ips: [] };
-      }
-    }
+    await Promise.all(
+      list.map(async (record) => {
+        if (record.host) results[record.host] = { ips: await resolveHost(record.host) };
+      })
+    );
     setDnsResults(results);
     setCheckingDns(false);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [domains]);
 
   const loadProfile = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -130,7 +215,13 @@ export default function ProfilePage() {
     setLoading(false);
   }, [supabase, router]);
 
-  useEffect(() => { loadProfile(); loadDomains(); }, [loadProfile, loadDomains]);
+  useEffect(() => {
+    loadProfile();
+    loadApiKeys();
+    // Check the records right away so the status survives a page reload
+    loadDomains().then((records) => { if (records?.length) checkDns(records); });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadProfile, loadDomains, loadApiKeys]);
 
   const handleConnect = async () => {
     setGenerating(true);
@@ -287,7 +378,7 @@ export default function ProfilePage() {
                     <div className="space-y-2 pt-2 border-t border-border">
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-medium">DNS records to create</p>
-                        <Button variant="outline" size="sm" onClick={checkDns} disabled={checkingDns} className="gap-2">
+                        <Button variant="outline" size="sm" onClick={() => checkDns()} disabled={checkingDns} className="gap-2">
                           <RefreshCw className={`w-3.5 h-3.5 ${checkingDns ? "animate-spin" : ""}`} />
                           Check DNS
                         </Button>
@@ -337,6 +428,96 @@ export default function ProfilePage() {
                       </p>
                     </div>
                   )}
+                </CardContent>
+              </Card>
+            )}
+
+            {/* API keys */}
+            {apiKeysEnabled && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <KeyRound className="w-4 h-4 text-primary" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">API keys</CardTitle>
+                      <CardDescription>
+                        Manage your peers, users and proxies from your own systems. A key acts with
+                        exactly your permissions — nothing more.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {newKey && (
+                    <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 space-y-2">
+                      <p className="text-xs text-emerald-400 font-medium">
+                        Copy it now — it is shown once and never again.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <code className="flex-1 font-mono text-xs break-all">{newKey}</code>
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          className="h-7 w-7 shrink-0"
+                          onClick={() => { navigator.clipboard.writeText(newKey); toast.success("Copied"); }}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Key name (e.g. my website)"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                    />
+                    <Button onClick={createApiKey} disabled={creatingKey} className="gap-2 shrink-0">
+                      {creatingKey ? <Loader2 className="w-4 h-4 animate-spin" /> : <KeyRound className="w-4 h-4" />}
+                      Create key
+                    </Button>
+                  </div>
+
+                  {apiKeys.length > 0 && (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      {apiKeys.map((k) => (
+                        <div
+                          key={k.id}
+                          className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium truncate">{k.name}</div>
+                            <div className="font-mono text-muted-foreground">{k.key_prefix}…</div>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="text-muted-foreground">
+                              {k.revoked_at
+                                ? "revoked"
+                                : k.last_used_at
+                                  ? `used ${new Date(k.last_used_at).toLocaleDateString()}`
+                                  : "never used"}
+                            </span>
+                            {!k.revoked_at && (
+                              <Button variant="ghost" size="sm" className="h-7 text-red-400" onClick={() => revokeApiKey(k.id)}>
+                                Revoke
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <a
+                    href="/api-docs"
+                    className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    API documentation
+                  </a>
                 </CardContent>
               </Card>
             )}

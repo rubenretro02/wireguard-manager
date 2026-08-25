@@ -14,6 +14,7 @@ import {
   type LivePeerStatus,
   removeCustomerPeerFromServer,
   renewCustomerPeer,
+  resolveTgEndpointHost,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
 import { botForCustomerType, getMiniAppUrl } from "@/lib/telegram";
@@ -332,6 +333,8 @@ export async function POST(request: Request) {
         let listenPort = 13231;
         let privateKey: string | null = null;
         let linuxPeerId: string | null = null;
+        // quién creó el peer: define el dominio white-label del endpoint (v29)
+        let linuxPeerCreatorId: string | null = null;
         // estado real del peer en el servidor al momento de asignar
         let enabledOnServer = true;
         if (isLinux) {
@@ -343,12 +346,13 @@ export async function POST(request: Request) {
 
           const { data: lp } = await supabase
             .from("linux_peers")
-            .select("id, private_key, disabled")
+            .select("id, private_key, disabled, created_by_user_id")
             .eq("router_id", routerId)
             .eq("public_key", publicKey)
             .maybeSingle();
           privateKey = lp?.private_key || null;
           linuxPeerId = lp?.id || null;
+          linuxPeerCreatorId = lp?.created_by_user_id || null;
           if (lp?.disabled) enabledOnServer = false;
         } else {
           const client = buildMikroTikClient(assignRouter as Router);
@@ -416,6 +420,8 @@ export async function POST(request: Request) {
             allowed_address: allowedAddress,
             wg_interface: effectiveInterface,
             public_ip: publicIpStr,
+            // v29: el cliente recibe el endpoint con el dominio de quien creó el peer
+            endpoint_host: await resolveTgEndpointHost(supabase, routerId, linuxPeerCreatorId),
             server_public_key: serverPublicKey,
             listen_port: listenPort,
             // refleja la realidad: expirado > disabled en server > active

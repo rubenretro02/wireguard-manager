@@ -3,6 +3,7 @@ import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
 import { MikroTikClient } from "@/lib/mikrotik";
 import { mirrorTgExpiryToDashboard, movePeerTimerToNewKey } from "@/lib/peer-expiry";
 import { cachedRouterRead } from "@/lib/router-read-cache";
+import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import { generateKeyPair } from "@/lib/wireguard-keys";
 import type { AuthMethod, PublicIP, Router, WireGuardPeer } from "@/lib/types";
 
@@ -61,6 +62,8 @@ export interface TgCustomerPeer {
   allowed_address: string;
   wg_interface: string;
   public_ip: string;
+  // v29: host white-label del Endpoint (<slug>.<dominio>). NULL = usar public_ip
+  endpoint_host: string | null;
   server_public_key: string;
   listen_port: number;
   dns: string;
@@ -172,8 +175,28 @@ DNS = ${peer.dns}
 [Peer]
 PublicKey = ${peer.server_public_key}
 AllowedIPs = 0.0.0.0/0
-Endpoint = ${peer.public_ip}:${peer.listen_port}
+Endpoint = ${peer.endpoint_host || peer.public_ip}:${peer.listen_port}
 PersistentKeepalive = 25`;
+}
+
+/**
+ * White-label host for a store peer (v29). Resolved when the peer is created,
+ * assigned or re-keyed, so the Mini App can build the config without touching
+ * the server. Falls back to the public IP when the tenant has no domain.
+ */
+export async function resolveTgEndpointHost(
+  supabase: SupabaseClient,
+  routerId: string,
+  creatorUserId?: string | null
+): Promise<string | null> {
+  const { data: router } = await supabase
+    .from("routers")
+    .select("name, endpoint_slug, endpoint_domain")
+    .eq("id", routerId)
+    .single();
+  if (!router) return null;
+  const resolve = await buildEndpointResolver(supabase, router);
+  return resolve(creatorUserId);
 }
 
 async function pickPublicIp(
@@ -426,6 +449,7 @@ export async function provisionPeerForCustomer(params: {
       allowed_address: allowedAddress,
       wg_interface: effectiveInterface,
       public_ip: publicIp.public_ip,
+      endpoint_host: await resolveTgEndpointHost(supabase, plan.router_id, null),
       server_public_key: serverPublicKey,
       listen_port: listenPort,
       status: "active",
@@ -659,9 +683,20 @@ export async function rotateCustomerPeerKeys(
     }
   }
 
+  // Al rotar se re-emite el config: aprovechamos para resolver el endpoint
+  // white-label (el peer pudo crearse antes de que el dueño tuviera dominio).
+  const { data: linuxPeer } = peer.linux_peer_id
+    ? await supabase.from("linux_peers").select("created_by_user_id").eq("id", peer.linux_peer_id).maybeSingle()
+    : { data: null };
+  const endpointHost = await resolveTgEndpointHost(supabase, peer.router_id, linuxPeer?.created_by_user_id);
+
   const { data: updated, error } = await supabase
     .from("tg_customer_peers")
-    .update({ peer_public_key: keyPair.publicKey, peer_private_key: keyPair.privateKey })
+    .update({
+      peer_public_key: keyPair.publicKey,
+      peer_private_key: keyPair.privateKey,
+      endpoint_host: endpointHost,
+    })
     .eq("id", peer.id)
     .select()
     .single();
