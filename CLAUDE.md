@@ -41,6 +41,33 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-08-25 — API pública v1 con API keys por usuario (v28/v29)
+
+**Qué es:** cada admin o semi-admin emite sus propias keys en `/profile` y maneja su cuenta desde
+afuera: peers, usuarios y proxies SOCKS5. Doc en `/api-docs`.
+
+**Migraciones:** `scripts/migration-v28-api-keys.sql` (tabla `api_keys`: SHA-256 de la key, prefijo
+visible, last_used/expires/revoked) y `scripts/migration-v29-tg-endpoint-host.sql`
+(`tg_customer_peers.endpoint_host` para que la Mini App arme el config con el dominio white-label).
+
+**El punto importante — el filtrado pasa al servidor.** `dashboard/page.tsx:350-390` filtraba los
+peers EN EL NAVEGADOR: `/api/wireguard getPeers` devuelve todos los peers del router y React esconde
+los ajenos. Para una API key eso era un agujero (un `curl` veía todo). `src/lib/access-scope.ts`
+resuelve las mismas reglas server-side: `allowedRouterIds`, `buildPeerScope` (creador → usuarios que
+creó → grupo → IPs de `user_ip_access`) y `peerInScope`.
+
+- `src/lib/api-auth.ts`: `Authorization: Bearer wgm_live_…` → perfil dueño. La key NO tiene permisos
+  propios: la request corre con el role + capabilities del usuario. Rate limit 120/min por key.
+- `src/lib/api-peers.ts`: listar (DB-first + estado vivo), crear (Linux y MikroTik), enable/disable,
+  borrar y `buildPeerConfig` (usa `wg_interfaces`; si falta la fila lee la interface del server).
+- Rutas: `/api/v1/{servers,ips,peers,users,proxies}` + `peers/{id}/{config,enable,disable,expiry}`.
+- `/api/profile/api-keys`: crear (se muestra UNA vez), listar y revocar. Máx 10 activas.
+- Todo queda en `activity_logs` con `details.source = "api"`.
+
+**Verificado en producción** con keys temporales: homevpn ve 3 servidores (no 9), 233 peers en Miami
+(92 suyos + 141 de leonaldo, su usuario) y NO los 5 del admin; servidor ajeno 403, peer ajeno 404,
+y crear un usuario con una capability que no tiene → 403.
+
 ### 2026-08-24 — White-label: dominios por tenant (v26, fase 1)
 
 **Motivo:** cuando AT&T cambie el bloque de IPs no vamos a tener acceso al viejo, así que los
