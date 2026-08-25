@@ -437,16 +437,39 @@ export async function buildPeerConfig(
   peer: ApiPeer,
   privateKey: string | null
 ): Promise<string> {
+  const interfaceName = peer.interface || router.wg_interface || "wg0";
   const { data: iface } = await admin
     .from("wg_interfaces")
     .select("public_key, listen_port")
     .eq("host", router.host)
-    .eq("interface_name", peer.interface || router.wg_interface)
+    .eq("interface_name", interfaceName)
     .maybeSingle();
+
+  let serverPublicKey: string | null = iface?.public_key || null;
+  let port: number | null = iface?.listen_port || null;
+
+  // Never hand out a config with a placeholder key: if the interface was never
+  // synced, read it from the server.
+  if (!serverPublicKey) {
+    try {
+      if (router.connection_type === "linux-ssh") {
+        const info = await buildLinuxClient(router, interfaceName).getInterfaceInfo();
+        serverPublicKey = info?.publicKey || null;
+        port = port || info?.listenPort || null;
+      } else {
+        const remote = (await buildMikroTikClient(router).getWireGuardInterfaces()).find(
+          (i) => i.name === interfaceName
+        );
+        serverPublicKey = remote?.["public-key"] || null;
+        port = port || remote?.["listen-port"] || null;
+      }
+    } catch {
+      // Server unreachable: fall through to the placeholder below
+    }
+  }
 
   const address = peer.address.split(",")[0].split("/")[0];
   const endpointHost = peer.endpoint || peer.publicIp;
-  const port = iface?.listen_port || 51820;
 
   return [
     "[Interface]",
@@ -455,9 +478,9 @@ export async function buildPeerConfig(
     "DNS = 8.8.8.8",
     "",
     "[Peer]",
-    `PublicKey = ${iface?.public_key || "[SERVER_PUBLIC_KEY]"}`,
+    `PublicKey = ${serverPublicKey || "[SERVER_PUBLIC_KEY]"}`,
     "AllowedIPs = 0.0.0.0/0",
-    `Endpoint = ${endpointHost}:${port}`,
+    `Endpoint = ${endpointHost}:${port || 51820}`,
     "PersistentKeepalive = 25",
   ].join("\n");
 }

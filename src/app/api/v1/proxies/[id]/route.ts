@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiError, authenticateApiKey, type ApiCaller } from "@/lib/api-auth";
 import { logActivity } from "@/lib/activity-logger";
-import { rebuildProxies } from "@/app/api/v1/proxies/route";
+import { rebuildProxies } from "@/lib/api-proxies";
 import type { Router } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -43,7 +43,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
   const { error: dbError } = await caller.admin.from("socks5_proxies").update(update).eq("id", loaded.proxy.id);
   if (dbError) return apiError(dbError.message, 500);
 
-  const result = await rebuildProxies(caller, loaded.router);
+  const result = await rebuildProxies(caller.admin, loaded.router);
   if (!result.success) return apiError(result.message, 502);
 
   await logActivity({
@@ -74,7 +74,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   const { error: dbError } = await caller.admin.from("socks5_proxies").delete().eq("id", loaded.proxy.id);
   if (dbError) return apiError(dbError.message, 500);
 
-  const result = await rebuildProxies(caller, loaded.router);
+  const result = await rebuildProxies(caller.admin, loaded.router);
   if (!result.success) return apiError(result.message, 502);
 
   await logActivity({
