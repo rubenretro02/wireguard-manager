@@ -8,6 +8,7 @@ import {
   normalizeDomain,
   slugFromRouterName,
 } from "@/lib/endpoint-domain";
+import { ensurePanelDomain, removePanelDomain } from "@/lib/dokploy";
 
 // node:dns is not available on Edge
 export const runtime = "nodejs";
@@ -186,11 +187,29 @@ export async function POST(request: Request) {
     }
   }
 
+  const { data: before } = await ctx.admin
+    .from("profiles")
+    .select("panel_domain")
+    .eq("id", ctx.userId)
+    .single();
+
   const { error: dbError } = await ctx.admin.from("profiles").update(update).eq("id", ctx.userId);
   if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
 
   // Peers resolve their endpoint through a short-lived cache of this table
   invalidateEndpointDomainCache();
 
-  return NextResponse.json({ success: true, ...update });
+  // Register the panel domain with Dokploy so it serves this app over HTTPS
+  let panelDomainStatus: string | null = null;
+  if ("panel_domain" in update && update.panel_domain !== before?.panel_domain) {
+    if (before?.panel_domain) await removePanelDomain(before.panel_domain);
+    if (update.panel_domain) {
+      const res = await ensurePanelDomain(update.panel_domain);
+      panelDomainStatus = res.ok
+        ? res.message
+        : `Saved, but the domain could not be registered automatically: ${res.message}`;
+    }
+  }
+
+  return NextResponse.json({ success: true, ...update, panelDomainStatus });
 }

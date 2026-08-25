@@ -137,7 +137,7 @@ export default function ProfilePage() {
       });
       const json = await res.json();
       if (res.ok) {
-        toast.success("Domains saved");
+        toast.success(json.panelDomainStatus || "Domains saved");
         setDnsResults({});
         const records = await loadDomains();
         if (records?.length) checkDns(records);
