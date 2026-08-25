@@ -49,10 +49,32 @@ export async function GET() {
   const { ctx, error } = await context();
   if (error || !ctx) return error!;
 
-  const [{ data: profile }, { data: routers }] = await Promise.all([
-    ctx.admin.from("profiles").select("panel_domain, endpoint_domain, brand_name").eq("id", ctx.userId).single(),
-    ctx.admin.from("routers").select("id, name, host, endpoint_slug, endpoint_domain").order("name"),
-  ]);
+  const { data: profile } = await ctx.admin
+    .from("profiles")
+    .select("panel_domain, endpoint_domain, brand_name")
+    .eq("id", ctx.userId)
+    .single();
+
+  // Only the servers this tenant actually has: never leak other tenants' hosts
+  let routerQuery = ctx.admin.from("routers").select("id, name, host, endpoint_slug, endpoint_domain").order("name");
+  if (!ctx.isAdmin) {
+    const { data: access } = await ctx.admin
+      .from("user_routers")
+      .select("router_id")
+      .eq("user_id", ctx.userId);
+    const ids = (access || []).map((a: { router_id: string }) => a.router_id);
+    if (ids.length === 0) {
+      return NextResponse.json({
+        canConfigure: ctx.canConfigure,
+        panelDomain: profile?.panel_domain || null,
+        endpointDomain: profile?.endpoint_domain || null,
+        brandName: profile?.brand_name || null,
+        records: [],
+      });
+    }
+    routerQuery = routerQuery.in("id", ids);
+  }
+  const { data: routers } = await routerQuery;
 
   const endpointDomain = profile?.endpoint_domain || null;
 
