@@ -405,13 +405,17 @@ export default function DashboardPage() {
     return new Set(allPublicIps.filter(ip => ip.restricted).map(ip => ip.public_ip));
   }, [allPublicIps]);
 
+  // StarVPN (v32): the server already scopes the slots (owner sees all, others
+  // only theirs) and there is nothing to edit — no peer_metadata, no IP access.
+  const isStarhomeRouter = routers.find((r) => r.id === selectedRouterId)?.connection_type === "starhome";
+
   // Get visible peers for this user (for stats calculation)
   // This uses the same filtering logic as filteredPeers but without search/status filters
   const visiblePeers = useMemo(() => {
     let visible = peers;
 
     // If admin or can_see_all_peers, show all peers
-    if (!canSeeAllPeers && profile) {
+    if (!canSeeAllPeers && profile && !isStarhomeRouter) {
       visible = visible.filter((peer) => {
         const meta = peerMetadata[peer["public-key"]];
         if (!meta) return false;
@@ -433,7 +437,7 @@ export default function DashboardPage() {
 
     // Filter by accessible IPs (new system based on user_ip_access)
     // Skip this filter if user can see all peers OR for peers created by users they manage
-    if (!isAdmin && !canSeeAllPeers) {
+    if (!isAdmin && !canSeeAllPeers && !isStarhomeRouter) {
       visible = visible.filter((peer) => {
         const peerIp = peer.comment || "";
         const meta = peerMetadata[peer["public-key"]];
@@ -448,7 +452,7 @@ export default function DashboardPage() {
     }
 
     return visible;
-  }, [peers, canSeeAllPeers, canSeeGroupPeers, canCreateUsers, createdUserIds, groupUserIds, profile, peerMetadata, isAdmin, accessibleIps]);
+  }, [peers, canSeeAllPeers, canSeeGroupPeers, canCreateUsers, createdUserIds, groupUserIds, profile, peerMetadata, isAdmin, accessibleIps, isStarhomeRouter]);
 
   // Calculate peer count and group peers per public IP (using comment field that stores the public IP)
   const { peerCountByIp, peersByIp } = useMemo(() => {
@@ -601,7 +605,7 @@ export default function DashboardPage() {
     }).length;
     const withTimer = visiblePeers.filter(p => {
       const meta = peerMetadata[p["public-key"]];
-      return meta?.expires_at && meta?.auto_disable_enabled;
+      return (meta?.expires_at && meta?.auto_disable_enabled) || Boolean(p.expires_at);
     }).length;
     const uniqueSubnets = new Set(
       visiblePeers.map(p => {
@@ -623,7 +627,7 @@ export default function DashboardPage() {
     let filtered = peers;
 
     // Filter by creator if user can't see all peers
-    if (!canSeeAllPeers && profile) {
+    if (!canSeeAllPeers && profile && !isStarhomeRouter) {
       filtered = filtered.filter((peer) => {
         const meta = peerMetadata[peer["public-key"]];
         // Only show peer if created by this user (has matching metadata)
@@ -647,7 +651,7 @@ export default function DashboardPage() {
 
     // Filter by accessible IPs (new system based on user_ip_access)
     // Skip this filter if user can see all peers OR for peers created by users they manage
-    if (!isAdmin && !canSeeAllPeers) {
+    if (!isAdmin && !canSeeAllPeers && !isStarhomeRouter) {
       filtered = filtered.filter((peer) => {
         const peerIp = peer.comment || "";
         const meta = peerMetadata[peer["public-key"]];
@@ -665,7 +669,7 @@ export default function DashboardPage() {
     filtered = filtered.filter((peer) => {
       const isDisabled = peer.disabled === true || String(peer.disabled) === "true";
       const meta = peerMetadata[peer["public-key"]];
-      const hasExpiration = meta?.expires_at && meta?.auto_disable_enabled;
+      const hasExpiration = (meta?.expires_at && meta?.auto_disable_enabled) || Boolean(peer.expires_at);
       const isConnected = !isDisabled && isPeerConnected(peer);
 
       if (statusFilter === "connected" && !isConnected) return false;
@@ -760,7 +764,7 @@ export default function DashboardPage() {
     });
 
     return sorted;
-  }, [peers, searchQuery, statusFilter, sortOrder, sortBy, canSeeAllPeers, canSeeGroupPeers, canCreateUsers, createdUserIds, groupUserIds, profile, peerMetadata, isAdmin, accessibleIps]);
+  }, [peers, searchQuery, statusFilter, sortOrder, sortBy, canSeeAllPeers, canSeeGroupPeers, canCreateUsers, createdUserIds, groupUserIds, profile, peerMetadata, isAdmin, accessibleIps, isStarhomeRouter]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -2132,9 +2136,12 @@ PersistentKeepalive = 25`;
   };
 
   // Check if peer is expired
+  // StarVPN slots (v32) carry their timer on the peer itself (peer.expires_at)
   const isPeerExpired = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    if (!meta?.expires_at || !meta.auto_disable_enabled) return false;
+    if (!meta?.expires_at || !meta.auto_disable_enabled) {
+      return peer.expires_at ? new Date(peer.expires_at) < new Date() : false;
+    }
     return new Date(meta.expires_at) < new Date();
   };
 
@@ -2142,7 +2149,7 @@ PersistentKeepalive = 25`;
   // panel de Telegram muestre exactamente lo mismo para el mismo peer.
   const getTimeRemaining = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    if (!meta?.auto_disable_enabled) return null;
+    if (!meta?.auto_disable_enabled) return peer.expires_at ? formatTimeRemaining(peer.expires_at) : null;
     return formatTimeRemaining(meta.expires_at);
   };
 
@@ -2367,10 +2374,12 @@ PersistentKeepalive = 25`;
               >
                 Force Refresh
               </Button>
-              <Button onClick={() => { setCreateDialogOpen(true); if (isAdmin) loadCustomers(); }} className="gap-2">
-                <Plus className="w-4 h-4" />
-                Add Peer
-              </Button>
+              {!isStarhomeRouter && (
+                <Button onClick={() => { setCreateDialogOpen(true); if (isAdmin) loadCustomers(); }} className="gap-2">
+                  <Plus className="w-4 h-4" />
+                  Add Peer
+                </Button>
+              )}
             </div>
           </div>
 
@@ -2698,6 +2707,17 @@ PersistentKeepalive = 25`;
                                 <X className="w-4 h-4" />
                               </Button>
                             </>
+                          ) : isStarhomeRouter ? (
+                            // StarVPN slot: timers and assignment live in SOCKS5, and the WG
+                            // config can't be built until the server endpoint is known.
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => setLogPeer(peer)}
+                              title="History"
+                            >
+                              <ScrollText className="w-4 h-4" />
+                            </Button>
                           ) : (
                             <>
                               <Button
@@ -2953,8 +2973,8 @@ PersistentKeepalive = 25`;
             {/* Customer (Telegram or manual): the peer shows up on their page across servers */}
             {isAdmin && (
               <div className="space-y-2">
-                <Label>Customer <span className="text-muted-foreground font-normal">(optional)</span></Label>
                 <CustomerCombobox
+                  label="Customer (optional)"
                   customers={bulkCustomers}
                   value={createCustomerId}
                   onChange={setCreateCustomerId}
@@ -3829,8 +3849,8 @@ PersistentKeepalive = 25"
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <Label>Customer</Label>
               <CustomerCombobox
+                label="Customer"
                 customers={bulkCustomers}
                 value={bulkAssignCustomerId}
                 onChange={setBulkAssignCustomerId}

@@ -101,7 +101,9 @@ export default function CustomersPage() {
         ),
       }))
       .filter(({ score }) => score >= 0);
+    // Searching ranks by relevance; otherwise the list is alphabetical
     if (search.trim()) scored.sort((a, b) => b.score - a.score);
+    else scored.sort((a, b) => displayName(a.c).replace(/^@/, "").localeCompare(displayName(b.c).replace(/^@/, ""), undefined, { sensitivity: "base" }));
     return scored.map((s) => s.c);
   }, [customers, search, sourceFilter]);
 

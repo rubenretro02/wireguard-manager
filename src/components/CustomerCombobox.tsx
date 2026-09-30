@@ -30,21 +30,27 @@ interface Props {
   onCreateNew?: () => void;
   allowNone?: boolean;
   placeholder?: string;
+  /** Renders "<label>  [Telegram N] [Manual N]" above the field; the chips filter the list */
+  label?: string;
 }
 
-const byLabel = (a: CustomerOption, b: CustomerOption) =>
+export const byCustomerName = (a: CustomerOption, b: CustomerOption) =>
   customerLabel(a).replace(/^@/, "").localeCompare(customerLabel(b).replace(/^@/, ""), undefined, { sensitivity: "base" });
 
 /** Searchable customer picker: type a name, @username, email, phone or Telegram id. */
-export function CustomerCombobox({ customers, value, onChange, onCreateNew, allowNone, placeholder }: Props) {
+export function CustomerCombobox({ customers, value, onChange, onCreateNew, allowNone, placeholder, label }: Props) {
   const [open, setOpen] = useState(false);
+  const [kind, setKind] = useState<"all" | "telegram" | "manual">("all");
   const selected = customers.find((c) => c.id === value);
 
-  // Two alphabetical groups: Telegram customers and manual ones
-  const groups = [
-    { heading: "Telegram", items: customers.filter((c) => c.telegram_id).sort(byLabel) },
-    { heading: "Manual", items: customers.filter((c) => !c.telegram_id).sort(byLabel) },
-  ].filter((g) => g.items.length > 0);
+  const counts = {
+    telegram: customers.filter((c) => c.telegram_id).length,
+    manual: customers.filter((c) => !c.telegram_id).length,
+  };
+  // One alphabetical list; the chips narrow it down
+  const items = customers
+    .filter((c) => kind === "all" || (kind === "telegram" ? Boolean(c.telegram_id) : !c.telegram_id))
+    .sort(byCustomerName);
 
   const renderItem = (c: CustomerOption) => {
     // Everything searchable goes into `value`; cmdk filters on it
@@ -70,6 +76,25 @@ export function CustomerCombobox({ customers, value, onChange, onCreateNew, allo
   };
 
   return (
+    <div className="space-y-1.5">
+    {label && (
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-medium">{label}</span>
+        {([["telegram", "Telegram", counts.telegram], ["manual", "Manual", counts.manual]] as const).map(([k, text, n]) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setKind(kind === k ? "all" : k)}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+              kind === k ? "border-primary bg-primary/15 text-primary" : "border-border text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {k === "telegram" ? <Send className="w-3 h-3" /> : <UserRound className="w-3 h-3" />}
+            {text} <span className="opacity-70">{n}</span>
+          </button>
+        ))}
+      </div>
+    )}
     <Popover open={open} onOpenChange={setOpen} modal>
       <PopoverTrigger asChild>
         <Button variant="outline" role="combobox" aria-expanded={open} className="w-full justify-between bg-secondary border-border font-normal">
@@ -121,14 +146,11 @@ export function CustomerCombobox({ customers, value, onChange, onCreateNew, allo
                 )}
               </CommandGroup>
             )}
-            {groups.map((g) => (
-              <CommandGroup key={g.heading} heading={`${g.heading} (${g.items.length})`}>
-                {g.items.map(renderItem)}
-              </CommandGroup>
-            ))}
+            <CommandGroup>{items.map(renderItem)}</CommandGroup>
           </CommandList>
         </Command>
       </PopoverContent>
     </Popover>
+    </div>
   );
 }
