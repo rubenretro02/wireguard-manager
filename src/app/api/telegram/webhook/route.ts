@@ -14,6 +14,7 @@ import {
   issueToken,
   linkTelegramToProfile,
 } from "@/lib/admin-tg-auth";
+import { consumeCustomerLinkToken, linkTelegramToCustomer } from "@/lib/customer-link";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,12 @@ export async function POST(request: Request) {
   const from = message?.from as TelegramUser | undefined;
   // Comando base sin args ni "@botname": /sso, /single-sign-on, /admin
   const command = text.split(/\s+/)[0].split("@")[0].toLowerCase();
+
+  // ---- Cliente manual que abre su link de vínculo (cualquier bot) ----
+  if (from && text.startsWith("/start clink_")) {
+    await handleCustomerLinkCommand(chatId, text.slice("/start clink_".length), from, bot);
+    return NextResponse.json({ ok: true });
+  }
 
   // ---- Login de admin (solo bot agent) ----
   if (bot === "agent" && from) {
@@ -108,6 +115,44 @@ async function handleLinkCommand(
     { reply_markup: { inline_keyboard: adminWelcomeKeyboard() } },
     bot
   );
+}
+
+/**
+ * Vincula el Telegram del que escribe al cliente manual dueño del token (v32).
+ * Después ve sus peers en la Mini App como cualquier cliente de la tienda.
+ */
+async function handleCustomerLinkCommand(
+  chatId: number,
+  token: string,
+  from: TelegramUser,
+  bot: BotKind
+): Promise<void> {
+  const claimed = await consumeCustomerLinkToken(token);
+  if (!claimed) {
+    await sendTelegramMessage(
+      chatId,
+      "⚠️ This link expired or was already used. Ask for a new one.",
+      {},
+      bot
+    );
+    return;
+  }
+
+  const linked = await linkTelegramToCustomer(claimed.customer_id, from);
+  if (!linked.ok) {
+    await sendTelegramMessage(chatId, `⚠️ ${linked.reason}`, {}, bot);
+    return;
+  }
+
+  await sendTelegramMessage(
+    chatId,
+    linked.merged
+      ? "✅ <b>Account linked.</b> Your existing account now also has the peers that were set up for you."
+      : "✅ <b>Account linked.</b> Your VPN peers are now in the app.",
+    {},
+    bot
+  );
+  await sendDefaultWelcome(chatId, from, bot);
 }
 
 /** Emite un link de un solo uso para entrar al panel (solo perfiles vinculados). */

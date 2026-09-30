@@ -79,6 +79,20 @@ tiempo. Se agregó registro donde no había: compra/renovación por Cryptomus, p
 **Extender activos.** El diálogo Renew (`extend`, suma sobre la fecha vigente) solo aparecía en
 expirados; el del calendario reemplaza la fecha desde ahora. Ahora los activos con timer tienen
 "Add time" (mismo diálogo, sin el `enablePeer` innecesario). Columna **Created** en la tabla.
+El diálogo del calendario (Edit Timer) tiene 4 modos: **+ Add** (extend), **− Remove** y **Exact
+date** (mode `set` + `expiresAt` calculado en el cliente) y **From now** (lo de antes); con timer
+corriendo abre en Add para que 1d/1w/1mo nunca reseteen el conteo. Preview de la fecha resultante.
+
+**Vincular cliente manual con Telegram por link (v32).** `scripts/migration-v32-customer-link-tokens.sql`
+(tabla `tg_customer_link_tokens`, un uso, 7 días). `src/lib/customer-link.ts`: `issueCustomerLinkToken`,
+`consumeCustomerLinkToken` (claim atómico) y `linkTelegramToCustomer` — si ese Telegram ya tenía
+cuenta en la tienda, **fusiona**: mueve `tg_customer_peers` y `tg_payments` a la cuenta existente,
+rellena email/phone/notes vacíos y borra la fila manual. `tg-admin createCustomerLinkToken` arma
+`t.me/<bot>?start=clink_<token>` (bot según `customer_type`); el webhook maneja `/start clink_` en
+ambos bots. Botón **Link Telegram** en `/customers/[id]` (QR + copiar + share). En la UI "Telegram"
+vs "Manual" se decide por `telegram_id`, no por `source`, porque un manual vinculado pasa a ser TG.
+Dashboard: selector de customer con buscador (`CustomerCombobox`, grupos Telegram/Manual
+alfabéticos) y "+ New customer" inline en Create Peer y en el bulk assign.
 
 ### 2026-08-25 — API pública v1 con API keys por usuario (v28/v29)
 

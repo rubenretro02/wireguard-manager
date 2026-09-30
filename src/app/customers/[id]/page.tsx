@@ -124,6 +124,23 @@ export default function CustomerDetailPage() {
   const [configPeer, setConfigPeer] = useState<CustomerPeer | null>(null);
   // History
   const [logPeer, setLogPeer] = useState<CustomerPeer | null>(null);
+
+  // Link Telegram (v32): one-time link the admin sends to a manual customer
+  const [linkInfo, setLinkInfo] = useState<{ deepLink: string; expiresAt: string; qr: string | null } | null>(null);
+  const [generatingLink, setGeneratingLink] = useState(false);
+
+  const generateLinkToken = async () => {
+    setGeneratingLink(true);
+    try {
+      const json = await tgAdmin("createCustomerLinkToken", { id: customerId });
+      const qr = await QRCode.toDataURL(json.deepLink, { width: 220, margin: 1, color: { dark: "#000000", light: "#ffffff" } });
+      setLinkInfo({ deepLink: json.deepLink, expiresAt: json.expiresAt, qr });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the link");
+    } finally {
+      setGeneratingLink(false);
+    }
+  };
   const [qr, setQr] = useState<string | null>(null);
 
   // Assign existing peer
@@ -407,7 +424,7 @@ export default function CustomerDetailPage() {
     <DashboardLayout userRole={profile.role} userEmail={profile.email} userCapabilities={profile.capabilities} onLogout={handleLogout}>
       <PageHeader
         title={displayName(customer)}
-        description={`${customer.source === "telegram" ? "Telegram customer" : "Manual customer"} · ${customer.customer_type}`}
+        description={`${customer.telegram_id ? "Telegram customer" : "Manual customer (no Telegram yet)"} · ${customer.customer_type}`}
       >
         <Button variant="outline" onClick={() => router.push("/customers")} className="gap-2">
           <ArrowLeft className="w-4 h-4" />
@@ -417,6 +434,12 @@ export default function CustomerDetailPage() {
           <Pencil className="w-4 h-4" />
           Edit
         </Button>
+        {!customer.telegram_id && (
+          <Button variant="outline" onClick={generateLinkToken} disabled={generatingLink} className="gap-2 text-sky-400 border-sky-400/50 hover:bg-sky-400/10">
+            {generatingLink ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Link Telegram
+          </Button>
+        )}
         <Button onClick={openAssign} className="gap-2">
           <Link2 className="w-4 h-4" />
           Assign existing peer
@@ -428,7 +451,7 @@ export default function CustomerDetailPage() {
         <Card className="bg-card border-border mb-6">
           <CardContent className="p-5 flex flex-wrap gap-6 items-start">
             <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-              {customer.source === "telegram" ? <Send className="w-5 h-5 text-primary" /> : <UserRound className="w-5 h-5 text-primary" />}
+              {customer.telegram_id ? <Send className="w-5 h-5 text-primary" /> : <UserRound className="w-5 h-5 text-primary" />}
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-2 text-sm flex-1">
               <div>
@@ -734,6 +757,43 @@ export default function CustomerDetailPage() {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Link Telegram */}
+      <Dialog open={!!linkInfo} onOpenChange={(o) => !o && setLinkInfo(null)}>
+        <DialogContent className="bg-card border-border max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Send className="w-5 h-5 text-sky-400" />Link Telegram</DialogTitle>
+            <DialogDescription>
+              Send this link to {displayName(customer)}. When they open it, their Telegram gets attached to this
+              customer and they see their peers in the app. One use, valid 7 days.
+            </DialogDescription>
+          </DialogHeader>
+          {linkInfo && (
+            <div className="space-y-3">
+              {linkInfo.qr && <div className="flex justify-center"><img src={linkInfo.qr} alt="QR" className="rounded-lg bg-white p-2" /></div>}
+              <div className="flex items-center gap-2">
+                <Input readOnly value={linkInfo.deepLink} className="bg-secondary font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
+                <Button variant="outline" size="icon" className="shrink-0" onClick={() => { navigator.clipboard.writeText(linkInfo.deepLink); toast.success("Link copied"); }}>
+                  <Copy className="w-4 h-4" />
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Expires {new Date(linkInfo.expiresAt).toLocaleString()}. If they already have an account in the bot, both are merged — nothing gets duplicated.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLinkInfo(null)}>Close</Button>
+            {linkInfo && (
+              <Button asChild className="gap-2">
+                <a href={`https://wa.me/?text=${encodeURIComponent(`Open this link to connect your VPN account: ${linkInfo.deepLink}`)}`} target="_blank" rel="noopener noreferrer">
+                  <Send className="w-4 h-4" /> Share
+                </a>
+              </Button>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

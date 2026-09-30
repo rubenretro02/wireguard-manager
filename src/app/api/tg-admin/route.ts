@@ -18,7 +18,8 @@ import {
   customerDisplayName,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
-import { botForCustomerType, getMiniAppUrl } from "@/lib/telegram";
+import { botForCustomerType, getBotUsername, getMiniAppUrl } from "@/lib/telegram";
+import { issueCustomerLinkToken } from "@/lib/customer-link";
 import type { Router } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -176,6 +177,33 @@ export async function POST(request: Request) {
           .single();
         if (error) throw new Error(error.message);
         return NextResponse.json({ customer });
+      }
+
+      // v32: link que el admin le manda a un cliente manual para vincular su Telegram
+      case "createCustomerLinkToken": {
+        const { id } = data;
+        if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
+        const { data: customer } = await supabase.from("tg_customers").select("*").eq("id", id).single();
+        if (!customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+        if (customer.telegram_id) {
+          return NextResponse.json({ error: "This customer is already linked to Telegram" }, { status: 400 });
+        }
+        const bot = botForCustomerType(customer.customer_type);
+        const [{ token, expiresAt }, botUsername] = await Promise.all([
+          issueCustomerLinkToken(id, supabase),
+          getBotUsername(bot),
+        ]);
+        const deepLink = `https://t.me/${botUsername}?start=clink_${token}`;
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          action: "create",
+          entityType: "user",
+          entityId: id,
+          entityName: customerDisplayName(customer),
+          details: { customer: true, telegram_link_token: true, expires_at: expiresAt },
+        });
+        return NextResponse.json({ deepLink, expiresAt, botUsername });
       }
 
       case "deleteCustomer": {

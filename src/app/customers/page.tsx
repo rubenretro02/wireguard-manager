@@ -32,6 +32,9 @@ interface CustomerRow {
   tg_customer_peers?: { id: string; status: string }[];
 }
 
+/** Linked to Telegram or not — a manual customer becomes "telegram" once they open their link (v32). */
+const kindOf = (c: CustomerRow): "telegram" | "manual" => (c.telegram_id ? "telegram" : "manual");
+
 function displayName(c: CustomerRow): string {
   if (c.username) return `@${c.username}`;
   const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
@@ -89,7 +92,7 @@ export default function CustomersPage() {
 
   const filtered = useMemo(() => {
     const scored = customers
-      .filter((c) => sourceFilter === "all" || c.source === sourceFilter)
+      .filter((c) => sourceFilter === "all" || kindOf(c) === sourceFilter)
       .map((c) => ({
         c,
         score: fuzzyScore(
@@ -133,8 +136,8 @@ export default function CustomersPage() {
 
   const counts = {
     all: customers.length,
-    telegram: customers.filter((c) => c.source === "telegram").length,
-    manual: customers.filter((c) => c.source === "manual").length,
+    telegram: customers.filter((c) => kindOf(c) === "telegram").length,
+    manual: customers.filter((c) => kindOf(c) === "manual").length,
   };
 
   return (
@@ -214,7 +217,7 @@ export default function CustomersPage() {
                       <TableCell>
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
-                            {c.source === "telegram" ? <Send className="w-4 h-4 text-primary" /> : <UserRound className="w-4 h-4 text-primary" />}
+                            {kindOf(c) === "telegram" ? <Send className="w-4 h-4 text-primary" /> : <UserRound className="w-4 h-4 text-primary" />}
                           </div>
                           <div className="min-w-0">
                             <div className="font-medium truncate">{displayName(c)}</div>
@@ -238,8 +241,8 @@ export default function CustomersPage() {
                         ) : "—"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className={c.source === "telegram" ? "text-sky-400 border-sky-400/50" : "text-violet-400 border-violet-400/50"}>
-                          {c.source}
+                        <Badge variant="outline" className={kindOf(c) === "telegram" ? "text-sky-400 border-sky-400/50" : "text-violet-400 border-violet-400/50"}>
+                          {kindOf(c)}
                         </Badge>
                       </TableCell>
                       <TableCell>
