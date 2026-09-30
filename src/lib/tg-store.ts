@@ -18,7 +18,8 @@ export type TgCustomerType = "client" | "agent";
 
 export interface TgCustomer {
   id: string;
-  telegram_id: number;
+  // NULL = cliente manual (v30): creado desde el panel, sin Telegram
+  telegram_id: number | null;
   username: string | null;
   first_name: string | null;
   last_name: string | null;
@@ -27,8 +28,22 @@ export interface TgCustomer {
   is_banned: boolean;
   // 'client' ve la tienda completa; 'agent' solo ve sus peers (sin precios)
   customer_type: TgCustomerType;
+  source: "telegram" | "manual";
+  email: string | null;
+  phone: string | null;
+  notes: string | null;
   created_at: string;
   last_seen_at: string;
+}
+
+/** Nombre para mostrar: @username > nombre completo > email > telegram_id. */
+export function customerDisplayName(c: Partial<TgCustomer> | null | undefined): string {
+  if (!c) return "—";
+  if (c.username) return `@${c.username}`;
+  const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
+  if (full) return full;
+  if (c.email) return c.email;
+  return c.telegram_id ? String(c.telegram_id) : "Customer";
 }
 
 export interface TgPlan {

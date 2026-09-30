@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { apiError, authenticateApiKey, type ApiCaller } from "@/lib/api-auth";
 import { logActivity } from "@/lib/activity-logger";
 import { invalidateEndpointDomainCache } from "@/lib/endpoint-domain";
+import { writeSharedPassword } from "@/lib/shared-password";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -50,6 +51,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (String(body.password).length < 8) return apiError("The password must be at least 8 characters", 400);
     const { error: pwError } = await caller.admin.auth.admin.updateUserById(id, { password: body.password });
     if (pwError) return apiError(pwError.message, 400);
+    // Mirror to the shared auth user so every portal's eye shows this password.
+    await writeSharedPassword(caller.admin, id, String(body.password));
   }
 
   if (Object.keys(update).length > 0) {

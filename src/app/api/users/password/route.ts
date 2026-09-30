@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createClient as createAdminClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { writeSharedPassword } from "@/lib/shared-password";
 
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -24,5 +25,7 @@ export async function POST(request: Request) {
   const adminClient = createAdminClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
   const { error } = await adminClient.auth.admin.updateUserById(userId, { password: newPassword });
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
-  return NextResponse.json({ success: true });
+  // Mirror to the shared auth user so every portal's eye shows this password.
+  const { otherPortal } = await writeSharedPassword(adminClient, userId, newPassword);
+  return NextResponse.json({ success: true, otherPortal });
 }

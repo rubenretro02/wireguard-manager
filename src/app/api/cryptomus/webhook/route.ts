@@ -108,9 +108,9 @@ export async function POST(request: Request) {
         durationDays,
       });
 
-      if (customer) {
+      if (customer && (customer as TgCustomer).telegram_id) {
         await sendTelegramMessage(
-          (customer as TgCustomer).telegram_id,
+          (customer as TgCustomer).telegram_id as number,
           `✅ <b>Renewal successful</b>\n\nYour peer <b>${renewed.peer_name}</b> was renewed until <b>${new Date(renewed.expires_at as string).toLocaleDateString("en-US")}</b>.`
         );
       }
@@ -130,8 +130,10 @@ export async function POST(request: Request) {
 
       await supabase.from("tg_payments").update({ customer_peer_id: peer.id }).eq("id", payment.id);
 
-      await sendTelegramMessage(
-        (customer as TgCustomer).telegram_id,
+      // Purchases only happen inside the Mini App, so a Telegram id is always
+      // there — the guard just keeps the manual-customer type honest.
+      if ((customer as TgCustomer).telegram_id) await sendTelegramMessage(
+        (customer as TgCustomer).telegram_id as number,
         `✅ <b>Payment received</b>\n\nYour peer <b>${peer.peer_name}</b> is ready. Open the app to download your configuration.\n\nExpires: <b>${new Date(peer.expires_at as string).toLocaleDateString("en-US")}</b>`
       );
     }

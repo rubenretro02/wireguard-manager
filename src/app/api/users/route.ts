@@ -63,6 +63,8 @@ export async function POST(request: Request) {
       email_confirm: true,
       user_metadata: {
         username: username || email.split("@")[0],
+        // Shared reference copy every portal reads for the eye/copy.
+        login_password: password,
       },
     });
 

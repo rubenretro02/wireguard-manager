@@ -1312,10 +1312,39 @@ export default function DashboardPage() {
         }
         // Save metadata
         await savePeerMetadata(data.peer, expiresAt, expirationValue, expirationUnit);
+        // Hand the new peer to the chosen customer (Telegram or manual) right away
+        if (createCustomerId) {
+          try {
+            const res2 = await fetch("/api/tg-admin", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "assignPeerToCustomer",
+                data: {
+                  customerId: createCustomerId,
+                  routerId: selectedRouterId,
+                  publicKey: data.peer["public-key"],
+                  name: data.peer.name,
+                  allowedAddress: data.assignedIp,
+                  wgInterface: data.peer.interface,
+                  comment: data.publicIp,
+                  days: null,
+                  notify: true,
+                },
+              }),
+            });
+            const assigned = await res2.json();
+            if (!res2.ok) toast.warning(`Peer created but not assigned: ${assigned.error || res2.status}`);
+            else fetchTgAssigned();
+          } catch {
+            toast.warning("Peer created but could not be assigned to the customer");
+          }
+        }
         toast.success(`Peer created! IP: ${data.assignedIp}${expiresAt ? ` (expires in ${formatDuration(expirationValue, expirationUnit)})` : ""}`);
         setCreateDialogOpen(false);
         setNewPeer({ interface: interfaces[0]?.name || "", name: "", "allowed-address": "", comment: "" });
         setSelectedPublicIpId("");
+        setCreateCustomerId("");
         setEnableExpiration(false);
         setExpirationValue(24);
         setExpirationUnit("hours");
@@ -2806,6 +2835,26 @@ PersistentKeepalive = 25`;
                 className="bg-secondary border-border"
               />
             </div>
+            {/* Customer (Telegram or manual): the peer shows up on their page across servers */}
+            {isAdmin && (
+              <div className="space-y-2">
+                <Label>Customer <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                <Select value={createCustomerId || "_none"} onValueChange={(v) => setCreateCustomerId(v === "_none" ? "" : v)}>
+                  <SelectTrigger className="bg-secondary border-border">
+                    <SelectValue placeholder="No customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="_none">No customer</SelectItem>
+                    {bulkCustomers.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.username ? `@${c.username}` : c.first_name || c.telegram_id || "Customer"}
+                        {c.telegram_id ? "" : " · manual"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Expiration Settings */}
             {canAutoExpire && (

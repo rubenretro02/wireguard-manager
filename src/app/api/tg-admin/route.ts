@@ -15,6 +15,7 @@ import {
   removeCustomerPeerFromServer,
   renewCustomerPeer,
   resolveTgEndpointHost,
+  customerDisplayName,
   type TgCustomerPeer,
 } from "@/lib/tg-store";
 import { botForCustomerType, getMiniAppUrl } from "@/lib/telegram";
@@ -117,6 +118,83 @@ export async function POST(request: Request) {
         return NextResponse.json({ customers });
       }
 
+      case "getCustomer": {
+        const { id } = data;
+        if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
+        const { data: customer, error } = await supabase.from("tg_customers").select("*").eq("id", id).single();
+        if (error || !customer) return NextResponse.json({ error: "Customer not found" }, { status: 404 });
+        return NextResponse.json({ customer });
+      }
+
+      // v30: cliente manual — misma tabla que los de Telegram, sin telegram_id
+      case "createCustomer": {
+        const { firstName, lastName, email, phone, notes, customerType } = data;
+        const first = String(firstName || "").trim();
+        if (!first) return NextResponse.json({ error: "Name is required" }, { status: 400 });
+        const { data: customer, error } = await supabase
+          .from("tg_customers")
+          .insert({
+            telegram_id: null,
+            source: "manual",
+            first_name: first.slice(0, 80),
+            last_name: String(lastName || "").trim().slice(0, 80) || null,
+            email: String(email || "").trim().toLowerCase().slice(0, 120) || null,
+            phone: String(phone || "").trim().slice(0, 40) || null,
+            notes: String(notes || "").trim().slice(0, 2000) || null,
+            customer_type: customerType === "agent" ? "agent" : "client",
+            created_by_user_id: user.id,
+          })
+          .select()
+          .single();
+        if (error) throw new Error(error.message);
+        await logActivity({
+          supabase: authClient,
+          userId: user.id,
+          action: "create",
+          entityType: "user",
+          entityId: customer.id,
+          entityName: customerDisplayName(customer),
+          details: { customer: true, source: "manual" },
+        });
+        return NextResponse.json({ customer });
+      }
+
+      case "updateCustomer": {
+        const { id, firstName, lastName, email, phone, notes } = data;
+        if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
+        const update: Record<string, string | null> = {};
+        if (firstName !== undefined) update.first_name = String(firstName).trim().slice(0, 80) || null;
+        if (lastName !== undefined) update.last_name = String(lastName).trim().slice(0, 80) || null;
+        if (email !== undefined) update.email = String(email).trim().toLowerCase().slice(0, 120) || null;
+        if (phone !== undefined) update.phone = String(phone).trim().slice(0, 40) || null;
+        if (notes !== undefined) update.notes = String(notes).trim().slice(0, 2000) || null;
+        const { data: customer, error } = await supabase
+          .from("tg_customers")
+          .update(update)
+          .eq("id", id)
+          .select()
+          .single();
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ customer });
+      }
+
+      case "deleteCustomer": {
+        // Solo si no tiene peers: quitarle los peers primero deja los peers
+        // intactos en el server (unassignPeer), así nunca se borra nada por accidente
+        const { id } = data;
+        if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
+        const { count } = await supabase
+          .from("tg_customer_peers")
+          .select("id", { count: "exact", head: true })
+          .eq("customer_id", id);
+        if ((count || 0) > 0) {
+          return NextResponse.json({ error: `This customer still has ${count} peer(s). Unassign them first.` }, { status: 409 });
+        }
+        const { error } = await supabase.from("tg_customers").delete().eq("id", id);
+        if (error) throw new Error(error.message);
+        return NextResponse.json({ success: true });
+      }
+
       case "setCustomerType": {
         const { id, type } = data;
         if (!id || !["client", "agent"].includes(type)) {
@@ -143,10 +221,13 @@ export async function POST(request: Request) {
 
       /* ================= PEERS DE CLIENTES ================= */
       case "listCustomerPeers": {
-        const { data: peers, error } = await supabase
+        let peersQuery = supabase
           .from("tg_customer_peers")
-          .select("*, tg_customers(telegram_id, username, first_name), tg_plans(name), routers(name)")
+          .select("*, tg_customers(telegram_id, username, first_name, last_name, email, source), tg_plans(name), routers(name)")
           .order("created_at", { ascending: false });
+        // v30: la página de un cliente pide solo los suyos
+        if (data?.customerId) peersQuery = peersQuery.eq("customer_id", data.customerId);
+        const { data: peers, error } = await peersQuery;
         if (error) throw new Error(error.message);
 
         // Sin esto la tabla muestra el último status persistido, que solo se
@@ -216,7 +297,8 @@ export async function POST(request: Request) {
 
         if (notify) {
           const { data: customer } = await supabase.from("tg_customers").select("telegram_id, customer_type").eq("id", peer.customer_id).single();
-          if (customer) {
+          // Manual customers (v30) have no Telegram to notify
+          if (customer?.telegram_id) {
             // Sin fecha el peer no vence; el mensaje de "extendido hasta" no aplica
             const message = renewed.expires_at
               ? `🎁 Your peer <b>${renewed.peer_name}</b> is now valid until <b>${new Date(renewed.expires_at).toLocaleDateString("en-US")}</b>.`
@@ -445,7 +527,7 @@ export async function POST(request: Request) {
           { peerName: assigned.peer_name, peerInterface: effectiveInterface, allowedAddress: assigned.allowed_address }
         );
 
-        if (notify) {
+        if (notify && customer.telegram_id) {
           let appUrl = "";
           try { appUrl = getMiniAppUrl(); } catch { /* optional */ }
           const isAgentCustomer = customer.customer_type === "agent";
@@ -465,7 +547,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: assigned.id,
           entityName: assigned.peer_name,
-          details: { assigned_to_telegram: customer.telegram_id, days },
+          details: { assigned_to_customer: customerId, assigned_to_telegram: customer.telegram_id, days, publicKey },
         });
 
         return NextResponse.json({ peer: assigned });

@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const auth = await authenticateTgRequest(request);
   if ("error" in auth) return auth.error;
-  const profile = await getProfileByTelegramId(auth.customer.telegram_id);
+  // A Mini App session always carries a Telegram id (it comes from initData)
+  const profile = auth.customer.telegram_id ? await getProfileByTelegramId(auth.customer.telegram_id) : null;
   return NextResponse.json({ customer: auth.customer, isAdmin: !!profile });
 }
