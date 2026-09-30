@@ -122,6 +122,13 @@ const setInterfaceCache = (routerId: string, interfaces: WireGuardInterface[]) =
 // Last known peer list per router (persisted in localStorage, same pattern as
 // the interface cache): the table renders instantly on load and survives a
 // router/server outage — failures show as staleness, never as an empty list.
+/** ISO → value for <input type="datetime-local"> in the browser's timezone. */
+const toLocalDateTimeInput = (iso: string): string => {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
 const PEER_CACHE_KEY = "wg_peer_cache";
 // Per-router timestamp of the last successful (live) fetch, so after a page
 // reload the "Server down" banner can show the real last-connection time.
@@ -250,6 +257,9 @@ export default function DashboardPage() {
   const [editExpUnit, setEditExpUnit] = useState<TimeUnit>("hours");
   const [editExpScheduledEnable, setEditExpScheduledEnable] = useState(false);
   const [editExpEnableDate, setEditExpEnableDate] = useState<string>("");
+  // How the duration applies: add to / subtract from the current date, restart from now, or an exact date
+  const [editExpMode, setEditExpMode] = useState<"add" | "subtract" | "fromNow" | "exact">("add");
+  const [editExpExactDate, setEditExpExactDate] = useState<string>("");
   const [savingExpiration, setSavingExpiration] = useState(false);
 
   // ===== Bulk selection =====
@@ -1673,13 +1683,31 @@ export default function DashboardPage() {
   // Open edit expiration dialog
   const openEditExpiration = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
+    const hasActiveTimer = Boolean(meta?.auto_disable_enabled && meta?.expires_at && !isPeerExpired(peer));
     setEditingExpirationPeer(peer);
     setEditExpEnabled(!!meta?.auto_disable_enabled);
     setEditExpValue(meta?.expiration_value || 24);
     setEditExpUnit(meta?.expiration_unit || "hours");
+    // A running timer defaults to "add" so the quick buttons never reset the countdown
+    setEditExpMode(hasActiveTimer ? "add" : "fromNow");
+    setEditExpExactDate(meta?.expires_at ? toLocalDateTimeInput(meta.expires_at) : "");
     setEditExpScheduledEnable(false);
     setEditExpEnableDate("");
     setEditExpirationOpen(true);
+  };
+
+  /** What the timer will be after saving, for the summary and the request. */
+  const previewExpiry = (): Date | null => {
+    if (!editingExpirationPeer || !editExpEnabled) return null;
+    const current = peerMetadata[editingExpirationPeer["public-key"]]?.expires_at;
+    const currentMs = current ? new Date(current).getTime() : 0;
+    const deltaMs = convertToMilliseconds(editExpValue, editExpUnit);
+    switch (editExpMode) {
+      case "add": return new Date(Math.max(Date.now(), currentMs) + deltaMs);
+      case "subtract": return new Date(currentMs - deltaMs);
+      case "exact": return editExpExactDate ? new Date(editExpExactDate) : null;
+      default: return new Date(Date.now() + deltaMs);
+    }
   };
 
   // Save expiration settings for existing peer
@@ -1688,10 +1716,29 @@ export default function DashboardPage() {
 
     setSavingExpiration(true);
     try {
-      const hasTimer = editExpEnabled && editExpValue > 0;
+      const hasTimer = editExpEnabled && (editExpMode === "exact" ? Boolean(editExpExactDate) : editExpValue > 0);
       const scheduledEnableAt = editExpScheduledEnable && editExpEnableDate
         ? new Date(editExpEnableDate).toISOString()
         : null;
+
+      // "add" is the backend's extend (max(now, current) + duration); "subtract"
+      // and "exact" send the computed date; "fromNow" is the old behaviour.
+      let timerFields: Record<string, unknown>;
+      if (!hasTimer) {
+        timerFields = { mode: "set", expiresAt: null };
+      } else if (editExpMode === "add") {
+        timerFields = { mode: "extend", value: editExpValue, unit: editExpUnit };
+      } else if (editExpMode === "fromNow") {
+        timerFields = { mode: "set", value: editExpValue, unit: editExpUnit };
+      } else {
+        const target = previewExpiry();
+        if (!target || Number.isNaN(target.getTime())) {
+          toast.error("Pick a valid date");
+          setSavingExpiration(false);
+          return;
+        }
+        timerFields = { mode: "set", expiresAt: target.toISOString() };
+      }
 
       // Por la API: es el único punto que escribe peer_metadata Y
       // tg_customer_peers con la misma fecha.
@@ -1703,8 +1750,7 @@ export default function DashboardPage() {
           routerId: selectedRouterId,
           data: {
             publicKey: editingExpirationPeer["public-key"],
-            mode: "set",
-            ...(hasTimer ? { value: editExpValue, unit: editExpUnit } : { expiresAt: null }),
+            ...timerFields,
             scheduledEnableAt,
             peerName: editingExpirationPeer.name || null,
             wgInterface: editingExpirationPeer.interface || null,
@@ -1718,9 +1764,14 @@ export default function DashboardPage() {
         console.error("Failed to save expiration:", payload.error);
         toast.error(payload.error || "Failed to save expiration settings");
       } else {
-        toast.success(editExpEnabled
-          ? `Peer will expire in ${formatDuration(editExpValue, editExpUnit)}`
-          : "Expiration disabled for this peer"
+        const result = previewExpiry();
+        toast.success(!hasTimer
+          ? "Expiration disabled for this peer"
+          : editExpMode === "add"
+            ? `Added ${formatDuration(editExpValue, editExpUnit)} — expires ${result?.toLocaleString()}`
+            : editExpMode === "subtract"
+              ? `Removed ${formatDuration(editExpValue, editExpUnit)} — expires ${result?.toLocaleString()}`
+              : `Peer expires ${result?.toLocaleString()}`
         );
         setEditExpirationOpen(false);
         setEditingExpirationPeer(null);
@@ -3361,9 +3412,42 @@ PersistentKeepalive = 25"
 
                 {editExpEnabled && (
                   <div className="space-y-3 pl-6">
+                    {/* How the duration applies — the old dialog always restarted from now */}
+                    <div className="grid grid-cols-4 gap-1">
+                      {([
+                        { key: "add", label: "+ Add", hint: "on top of the current date" },
+                        { key: "subtract", label: "− Remove", hint: "from the current date" },
+                        { key: "fromNow", label: "From now", hint: "restart the countdown" },
+                        { key: "exact", label: "Exact date", hint: "pick a date" },
+                      ] as Array<{ key: typeof editExpMode; label: string; hint: string }>).map((m) => (
+                        <Button
+                          key={m.key}
+                          size="sm"
+                          variant={editExpMode === m.key ? "default" : "outline"}
+                          onClick={() => setEditExpMode(m.key)}
+                          title={m.hint}
+                          className="text-xs"
+                          disabled={(m.key === "add" || m.key === "subtract") && !peerMetadata[editingExpirationPeer["public-key"]]?.expires_at}
+                        >
+                          {m.label}
+                        </Button>
+                      ))}
+                    </div>
                     <p className="text-sm text-muted-foreground">
-                      The peer will be automatically disabled after the specified time.
+                      {editExpMode === "add" && "Time is added on top of the current expiry — the countdown is not reset."}
+                      {editExpMode === "subtract" && "Time is taken off the current expiry."}
+                      {editExpMode === "fromNow" && "The countdown restarts: the peer expires this long from now."}
+                      {editExpMode === "exact" && "The peer expires exactly at this date and time."}
                     </p>
+                    {editExpMode === "exact" ? (
+                      <Input
+                        type="datetime-local"
+                        value={editExpExactDate}
+                        onChange={(e) => setEditExpExactDate(e.target.value)}
+                        className="bg-secondary"
+                      />
+                    ) : (
+                    <>
                     <div className="flex gap-2 flex-wrap">
                       {[
                         { value: 1, unit: "days" as TimeUnit, label: "1d" },
@@ -3378,7 +3462,7 @@ PersistentKeepalive = 25"
                           onClick={() => { setEditExpValue(value); setEditExpUnit(unit); }}
                           className="w-full"
                         >
-                          {label}
+                          {editExpMode === "add" ? `+${label}` : editExpMode === "subtract" ? `−${label}` : label}
                         </Button>
                       ))}
                     </div>
@@ -3407,6 +3491,8 @@ PersistentKeepalive = 25"
                       </Select>
                       <span className="text-sm text-muted-foreground">{formatDuration(editExpValue, editExpUnit)}</span>
                     </div>
+                    </>
+                    )}
                   </div>
                 )}
               </div>
@@ -3447,11 +3533,25 @@ PersistentKeepalive = 25"
               {(editExpEnabled || editExpScheduledEnable) && (
                 <div className="p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-lg space-y-1">
                   <p className="text-sm font-medium text-cyan-400">Summary</p>
-                  {editExpEnabled && (
-                    <p className="text-sm text-muted-foreground">
-                      Peer will auto-disable in {formatDuration(editExpValue, editExpUnit)}
-                    </p>
-                  )}
+                  {editExpEnabled && (() => {
+                    const target = previewExpiry();
+                    const current = peerMetadata[editingExpirationPeer["public-key"]]?.expires_at;
+                    if (!target || Number.isNaN(target.getTime())) {
+                      return <p className="text-sm text-muted-foreground">Pick a date.</p>;
+                    }
+                    const past = target.getTime() <= Date.now();
+                    return (
+                      <div className="text-sm text-muted-foreground space-y-0.5">
+                        {current && editExpMode !== "exact" && (
+                          <p>Now: {new Date(current).toLocaleString()} ({getTimeRemaining(editingExpirationPeer)})</p>
+                        )}
+                        <p className={past ? "text-red-400" : "text-foreground"}>
+                          After saving: <span className="font-medium">{target.toLocaleString()}</span>
+                          {past && " — that is in the past, the peer will be disabled right away"}
+                        </p>
+                      </div>
+                    );
+                  })()}
                   {editExpScheduledEnable && editExpEnableDate && (
                     <p className="text-sm text-muted-foreground">
                       Peer will auto-enable at {new Date(editExpEnableDate).toLocaleString()}
