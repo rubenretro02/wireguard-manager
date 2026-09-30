@@ -113,10 +113,14 @@ export function PeerLogDialog({ open, onOpenChange, publicKey, peerName, subtitl
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             {summary && (
-              <span>
-                {summary.sessions} session{summary.sessions === 1 ? "" : "s"} · {fmtDuration(summary.totalOnlineMs)} total
-                {summary.onlineNow ? <span className="text-emerald-400"> · online now</span> : null}
-              </span>
+              summary.sessions === 0 ? (
+                <span title="Connections are recorded by the presence cron">no sessions recorded yet</span>
+              ) : (
+                <span>
+                  {summary.sessions} session{summary.sessions === 1 ? "" : "s"} · {fmtDuration(summary.totalOnlineMs)} online
+                  {summary.onlineNow ? <span className="text-emerald-400"> · online now</span> : null}
+                </span>
+              )
             )}
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={load} disabled={loading}>
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />

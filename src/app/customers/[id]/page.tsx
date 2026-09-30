@@ -197,6 +197,26 @@ export default function CustomerDetailPage() {
     servers: new Set(peers.map((p) => p.router_id)).size,
   }), [peers]);
 
+  // Stat cards double as filters
+  type PeerFilter = "all" | "online" | "active" | "down";
+  const [peerFilter, setPeerFilter] = useState<PeerFilter>("all");
+  const [serverFilter, setServerFilter] = useState<string>("all");
+  const [showServers, setShowServers] = useState(false);
+
+  const serverOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const p of peers) map.set(p.router_id, p.routers?.name || p.router_id);
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [peers]);
+
+  const visiblePeers = useMemo(() => peers.filter((p) => {
+    if (serverFilter !== "all" && p.router_id !== serverFilter) return false;
+    if (peerFilter === "online") return Boolean(p.connected);
+    if (peerFilter === "active") return p.status === "active";
+    if (peerFilter === "down") return p.status !== "active";
+    return true;
+  }), [peers, peerFilter, serverFilter]);
+
   /* ---------- customer edit ---------- */
   const openEdit = () => {
     if (!customer) return;
@@ -437,30 +457,70 @@ export default function CustomerDetailPage() {
           </CardContent>
         </Card>
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-          {[
-            { label: "Peers", value: stats.total, cls: "text-foreground" },
-            { label: "Online now", value: stats.online, cls: "text-emerald-400" },
-            { label: "Active", value: stats.active, cls: "text-cyan-400" },
-            { label: "Expired / disabled", value: stats.down, cls: "text-red-400" },
-            { label: "Servers", value: stats.servers, cls: "text-foreground" },
-          ].map((s) => (
-            <Card key={s.label} className="bg-card border-border">
+        {/* Stats — click to filter the table */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+          {([
+            { key: "all", label: "Peers", value: stats.total, cls: "text-foreground", ring: "border-primary" },
+            { key: "online", label: "Online now", value: stats.online, cls: "text-emerald-400", ring: "border-emerald-500" },
+            { key: "active", label: "Active", value: stats.active, cls: "text-cyan-400", ring: "border-cyan-500" },
+            { key: "down", label: "Expired / disabled", value: stats.down, cls: "text-red-400", ring: "border-red-500" },
+          ] as Array<{ key: PeerFilter; label: string; value: number; cls: string; ring: string }>).map((s) => (
+            <Card
+              key={s.key}
+              role="button"
+              onClick={() => setPeerFilter(s.key)}
+              className={`bg-card cursor-pointer transition-colors hover:bg-secondary/40 ${peerFilter === s.key ? `${s.ring} border-2` : "border-border"}`}
+            >
               <CardContent className="p-4">
                 <div className="text-xs text-muted-foreground uppercase tracking-wide">{s.label}</div>
                 <div className={`text-2xl font-bold ${s.cls}`}>{s.value}</div>
               </CardContent>
             </Card>
           ))}
+          <Card
+            role="button"
+            onClick={() => setShowServers((v) => !v)}
+            className={`bg-card cursor-pointer transition-colors hover:bg-secondary/40 ${serverFilter !== "all" || showServers ? "border-primary border-2" : "border-border"}`}
+          >
+            <CardContent className="p-4">
+              <div className="text-xs text-muted-foreground uppercase tracking-wide">Servers</div>
+              <div className="text-2xl font-bold">{stats.servers}</div>
+              {serverFilter !== "all" && (
+                <div className="text-xs text-primary truncate">{serverOptions.find(([id]) => id === serverFilter)?.[1]}</div>
+              )}
+            </CardContent>
+          </Card>
         </div>
+
+        {showServers && (
+          <div className="flex flex-wrap gap-1.5 mb-4">
+            <Button size="sm" variant={serverFilter === "all" ? "default" : "outline"} onClick={() => setServerFilter("all")} className="h-7 text-xs">
+              All servers
+            </Button>
+            {serverOptions.map(([id, name]) => (
+              <Button key={id} size="sm" variant={serverFilter === id ? "default" : "outline"} onClick={() => setServerFilter(id)} className="h-7 text-xs gap-1">
+                <Server className="w-3 h-3" />
+                {name} <span className="opacity-60">{peers.filter((p) => p.router_id === id).length}</span>
+              </Button>
+            ))}
+          </div>
+        )}
 
         {/* Peers across every server */}
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">Peers <span className="text-muted-foreground text-sm">({peers.length})</span></h3>
-          <Button variant="outline" size="icon" onClick={refresh} disabled={refreshing}>
-            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
-          </Button>
+          <h3 className="text-lg font-semibold">
+            Peers <span className="text-muted-foreground text-sm">({visiblePeers.length}{visiblePeers.length !== peers.length ? ` of ${peers.length}` : ""})</span>
+          </h3>
+          <div className="flex items-center gap-2">
+            {(peerFilter !== "all" || serverFilter !== "all") && (
+              <Button variant="ghost" size="sm" onClick={() => { setPeerFilter("all"); setServerFilter("all"); }} className="h-8 text-xs">
+                Clear filters
+              </Button>
+            )}
+            <Button variant="outline" size="icon" onClick={refresh} disabled={refreshing}>
+              <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+            </Button>
+          </div>
         </div>
         <div className="bg-card border border-border rounded-xl overflow-hidden">
           <Table>

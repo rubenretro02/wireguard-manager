@@ -2481,7 +2481,12 @@ PersistentKeepalive = 25`;
                             placeholder="10.10.200.x/32"
                           />
                         ) : (
-                          <span className="font-mono text-sm text-cyan-400">
+                          // Multi-address peers ("10.10.99.3/32,10.79.0.0/24") used to
+                          // widen this column until Traffic wrapped into two lines
+                          <span
+                            className="font-mono text-sm text-cyan-400 block max-w-[170px] truncate"
+                            title={peer["allowed-address"]}
+                          >
                             {peer["allowed-address"]}
                           </span>
                         )}
@@ -2505,13 +2510,13 @@ PersistentKeepalive = 25`;
 
                       {/* Traffic Column */}
                       <TableCell className="text-sm">
-                        <div className="flex flex-col gap-0.5">
+                        <div className="flex flex-col gap-0.5 whitespace-nowrap">
                           <div className="flex items-center gap-1">
-                            <ArrowUp className="w-3 h-3 text-emerald-400" />
+                            <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />
                             <span className="text-emerald-400 text-xs">{formatBytes(peer.rx)}</span>
                           </div>
                           <div className="flex items-center gap-1">
-                            <ArrowUp className="w-3 h-3 text-blue-400 rotate-180" />
+                            <ArrowUp className="w-3 h-3 text-blue-400 rotate-180 shrink-0" />
                             <span className="text-blue-400 text-xs">{formatBytes(peer.tx)}</span>
                           </div>
                         </div>
