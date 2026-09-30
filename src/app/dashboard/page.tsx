@@ -273,6 +273,36 @@ export default function DashboardPage() {
   // Per-peer history dialog (v31)
   const [logPeer, setLogPeer] = useState<PeerWithMetadata | null>(null);
 
+  // Quick "new customer" from the assign / create dialogs: creates a manual
+  // customer (no Telegram) and selects it where it was asked for.
+  const [quickCustomerFor, setQuickCustomerFor] = useState<"bulk" | "create" | null>(null);
+  const [quickCustomer, setQuickCustomer] = useState({ firstName: "", lastName: "", email: "", phone: "" });
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+
+  const createQuickCustomer = async () => {
+    if (!quickCustomer.firstName.trim()) { toast.error("Name is required"); return; }
+    setCreatingCustomer(true);
+    try {
+      const res = await fetch("/api/tg-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "createCustomer", data: quickCustomer }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to create customer");
+      await loadCustomers();
+      if (quickCustomerFor === "bulk") setBulkAssignCustomerId(json.customer.id);
+      else setCreateCustomerId(json.customer.id);
+      toast.success(`Customer "${quickCustomer.firstName}" created and selected`);
+      setQuickCustomerFor(null);
+      setQuickCustomer({ firstName: "", lastName: "", email: "", phone: "" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to create customer");
+    } finally {
+      setCreatingCustomer(false);
+    }
+  };
+
   const loadCustomers = useCallback(async () => {
     try {
       const res = await fetch("/api/tg-admin", {
@@ -2937,6 +2967,13 @@ PersistentKeepalive = 25`;
                     ))}
                   </SelectContent>
                 </Select>
+                <button
+                  type="button"
+                  onClick={() => setQuickCustomerFor("create")}
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" /> New customer (no Telegram)
+                </button>
               </div>
             )}
 
@@ -3740,6 +3777,50 @@ PersistentKeepalive = 25"
         </DialogContent>
       </Dialog>
 
+      {/* Quick new customer (manual) from the assign / create dialogs */}
+      <Dialog open={quickCustomerFor !== null} onOpenChange={(o) => !o && setQuickCustomerFor(null)}>
+        <DialogContent className="bg-card border-border max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-primary" />
+              New customer
+            </DialogTitle>
+            <DialogDescription>
+              A customer without Telegram. It gets its own page with all its peers across servers.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>First name *</Label>
+                <Input autoFocus value={quickCustomer.firstName} onChange={(e) => setQuickCustomer({ ...quickCustomer, firstName: e.target.value })} className="bg-secondary" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Last name</Label>
+                <Input value={quickCustomer.lastName} onChange={(e) => setQuickCustomer({ ...quickCustomer, lastName: e.target.value })} className="bg-secondary" />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Email</Label>
+                <Input type="email" value={quickCustomer.email} onChange={(e) => setQuickCustomer({ ...quickCustomer, email: e.target.value })} className="bg-secondary" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Phone</Label>
+                <Input value={quickCustomer.phone} onChange={(e) => setQuickCustomer({ ...quickCustomer, phone: e.target.value })} className="bg-secondary" />
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuickCustomerFor(null)}>Cancel</Button>
+            <Button onClick={createQuickCustomer} disabled={creatingCustomer} className="gap-2">
+              {creatingCustomer ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+              Create & select
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Per-peer history */}
       <PeerLogDialog
         open={!!logPeer}
@@ -3775,6 +3856,13 @@ PersistentKeepalive = 25"
                   ))}
                 </SelectContent>
               </Select>
+              <button
+                type="button"
+                onClick={() => setQuickCustomerFor("bulk")}
+                className="text-xs text-primary hover:underline flex items-center gap-1"
+              >
+                <Plus className="w-3 h-3" /> New customer (no Telegram)
+              </button>
             </div>
             <div className="grid grid-cols-2 gap-3 items-end">
               <div className="space-y-1.5">
