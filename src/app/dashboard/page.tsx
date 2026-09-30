@@ -255,7 +255,23 @@ export default function DashboardPage() {
   const [bulkWorking, setBulkWorking] = useState(false);
   // Bulk assign to Telegram customer
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
-  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number; username: string | null; first_name: string | null; customer_type?: string }[]>([]);
+  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; username: string | null; first_name: string | null; customer_type?: string; source?: string }[]>([]);
+  // Customer picked in Create Peer (v30) — the peer is assigned to them on creation
+  const [createCustomerId, setCreateCustomerId] = useState("");
+
+  const loadCustomers = useCallback(async () => {
+    try {
+      const res = await fetch("/api/tg-admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "listCustomers", data: {} }),
+      });
+      const json = await res.json();
+      if (res.ok) setBulkCustomers(json.customers || []);
+    } catch {
+      // the selector just stays empty
+    }
+  }, []);
   const [bulkAssignCustomerId, setBulkAssignCustomerId] = useState("");
   const [bulkAssignDays, setBulkAssignDays] = useState("");
   const [bulkAssignPrice, setBulkAssignPrice] = useState("");
@@ -2265,7 +2281,7 @@ PersistentKeepalive = 25`;
               >
                 Force Refresh
               </Button>
-              <Button onClick={() => setCreateDialogOpen(true)} className="gap-2">
+              <Button onClick={() => { setCreateDialogOpen(true); if (isAdmin) loadCustomers(); }} className="gap-2">
                 <Plus className="w-4 h-4" />
                 Add Peer
               </Button>
@@ -2283,7 +2299,7 @@ PersistentKeepalive = 25`;
                 <>
                   {isAdmin && (
                     <Button size="sm" variant="outline" onClick={openBulkAssign}>
-                      <UserPlus className="w-4 h-4 mr-1.5" /> Assign to TG customer
+                      <UserPlus className="w-4 h-4 mr-1.5" /> Assign to customer
                     </Button>
                   )}
                   <Button size="sm" variant="outline" onClick={() => bulkToggle(true)}>
@@ -3611,9 +3627,9 @@ PersistentKeepalive = 25"
       <Dialog open={bulkAssignOpen} onOpenChange={setBulkAssignOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Assign {selectedPeerIds.size} peer(s) to a Telegram customer</DialogTitle>
+            <DialogTitle>Assign {selectedPeerIds.size} peer(s) to a customer</DialogTitle>
             <DialogDescription>
-              The customer will see them in the Mini App: live status, time left and self-renewal.
+              They show up on the customer&apos;s page across servers. Telegram customers also see them in the Mini App.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
@@ -3626,7 +3642,8 @@ PersistentKeepalive = 25"
                 <SelectContent>
                   {bulkCustomers.map((c) => (
                     <SelectItem key={c.id} value={c.id}>
-                      {c.username ? `@${c.username}` : c.first_name || c.telegram_id} ({c.telegram_id})
+                      {c.username ? `@${c.username}` : c.first_name || c.telegram_id || "Customer"}
+                      {c.telegram_id ? ` (${c.telegram_id})` : " · manual"}
                       {c.customer_type === "agent" ? " · agent" : ""}
                     </SelectItem>
                   ))}

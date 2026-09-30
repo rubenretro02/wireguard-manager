@@ -151,7 +151,7 @@ export default function CustomerDetailPage() {
       tgAdmin("getCustomer", { id: customerId }),
       tgAdmin("listCustomerPeers", { customerId }),
     ]);
-    setCustomer(c.customer);
+    setCustomer({ ...c.customer, source: c.customer.source || "telegram" });
     setPeers(p.peers || []);
   }, [tgAdmin, customerId]);
 

@@ -68,7 +68,8 @@ export default function CustomersPage() {
   const loadCustomers = useCallback(async () => {
     try {
       const json = await tgAdmin("listCustomers");
-      setCustomers(json.customers || []);
+      // Before migration v30 runs there is no `source` column: everything is Telegram
+      setCustomers((json.customers || []).map((c: CustomerRow) => ({ ...c, source: c.source || "telegram" })));
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load customers");
     }

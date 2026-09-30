@@ -131,9 +131,10 @@ const emptyPlanForm = {
   sort_order: "0",
 };
 
-function customerLabel(c?: { telegram_id: number; username: string | null; first_name: string | null } | null): string {
+function customerLabel(c?: { telegram_id: number | null; username: string | null; first_name: string | null } | null): string {
   if (!c) return "—";
-  return c.username ? `@${c.username}` : c.first_name || String(c.telegram_id);
+  // Manual customers (v30) have no telegram_id
+  return c.username ? `@${c.username}` : c.first_name || (c.telegram_id ? String(c.telegram_id) : "Customer");
 }
 
 function fmtDate(iso: string | null): string {
