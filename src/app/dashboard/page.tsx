@@ -17,6 +17,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
 import { PeerLogDialog } from "@/components/PeerLogDialog";
+import { CustomerCombobox } from "@/components/CustomerCombobox";
 import { StatCard } from "@/components/StatCard";
 import {
   Users,
@@ -267,7 +268,7 @@ export default function DashboardPage() {
   const [bulkWorking, setBulkWorking] = useState(false);
   // Bulk assign to Telegram customer
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
-  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; username: string | null; first_name: string | null; customer_type?: string; source?: string }[]>([]);
+  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; username: string | null; first_name: string | null; last_name?: string | null; email?: string | null; phone?: string | null; customer_type?: string; source?: string }[]>([]);
   // Customer picked in Create Peer (v30) — the peer is assigned to them on creation
   const [createCustomerId, setCreateCustomerId] = useState("");
   // Per-peer history dialog (v31)
@@ -2953,27 +2954,14 @@ PersistentKeepalive = 25`;
             {isAdmin && (
               <div className="space-y-2">
                 <Label>Customer <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                <Select value={createCustomerId || "_none"} onValueChange={(v) => setCreateCustomerId(v === "_none" ? "" : v)}>
-                  <SelectTrigger className="bg-secondary border-border">
-                    <SelectValue placeholder="No customer" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="_none">No customer</SelectItem>
-                    {bulkCustomers.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.username ? `@${c.username}` : c.first_name || c.telegram_id || "Customer"}
-                        {c.telegram_id ? "" : " · manual"}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <button
-                  type="button"
-                  onClick={() => setQuickCustomerFor("create")}
-                  className="text-xs text-primary hover:underline flex items-center gap-1"
-                >
-                  <Plus className="w-3 h-3" /> New customer (no Telegram)
-                </button>
+                <CustomerCombobox
+                  customers={bulkCustomers}
+                  value={createCustomerId}
+                  onChange={setCreateCustomerId}
+                  onCreateNew={() => setQuickCustomerFor("create")}
+                  allowNone
+                  placeholder="No customer"
+                />
               </div>
             )}
 
@@ -3842,27 +3830,12 @@ PersistentKeepalive = 25"
           <div className="space-y-3">
             <div className="space-y-1.5">
               <Label>Customer</Label>
-              <Select value={bulkAssignCustomerId} onValueChange={setBulkAssignCustomerId}>
-                <SelectTrigger>
-                  <SelectValue placeholder={bulkCustomers.length ? "Select a customer" : "Loading customers…"} />
-                </SelectTrigger>
-                <SelectContent>
-                  {bulkCustomers.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.username ? `@${c.username}` : c.first_name || c.telegram_id || "Customer"}
-                      {c.telegram_id ? ` (${c.telegram_id})` : " · manual"}
-                      {c.customer_type === "agent" ? " · agent" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <button
-                type="button"
-                onClick={() => setQuickCustomerFor("bulk")}
-                className="text-xs text-primary hover:underline flex items-center gap-1"
-              >
-                <Plus className="w-3 h-3" /> New customer (no Telegram)
-              </button>
+              <CustomerCombobox
+                customers={bulkCustomers}
+                value={bulkAssignCustomerId}
+                onChange={setBulkAssignCustomerId}
+                onCreateNew={() => setQuickCustomerFor("bulk")}
+              />
             </div>
             <div className="grid grid-cols-2 gap-3 items-end">
               <div className="space-y-1.5">

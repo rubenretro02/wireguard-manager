@@ -537,14 +537,16 @@ export default function CustomerDetailPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {peers.length === 0 ? (
+              {visiblePeers.length === 0 ? (
                 <TableRow className="border-border">
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
-                    No peers yet — use &quot;Assign existing peer&quot; or pick this customer when creating one in the Dashboard.
+                    {peers.length === 0
+                      ? "No peers yet — use \"Assign existing peer\" or pick this customer when creating one in the Dashboard."
+                      : "No peers match this filter."}
                   </TableCell>
                 </TableRow>
               ) : (
-                peers.map((p) => {
+                visiblePeers.map((p) => {
                   const left = timeLeft(p.expires_at);
                   const busy = busyId === p.id;
                   return (
