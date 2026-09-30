@@ -1692,24 +1692,28 @@ export default function DashboardPage() {
     // El peer queda habilitado con la fecha vieja hasta que responda
     // setPeerExpiry: sin esto el auto-disable puede apagarlo en esa ventana.
     autoDisableInFlightRef.current = true;
+    const wasDisabled = renewingPeer.disabled === true || String(renewingPeer.disabled) === "true";
     try {
-      // First, enable the peer
-      const enableRes = await fetch("/api/wireguard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "enablePeer",
-          routerId: selectedRouterId,
-          data: { id: renewingPeer[".id"], name: renewingPeer.name || null, publicKey: renewingPeer["public-key"] },
-        })
-      });
-      const enableData = await enableRes.json();
+      // Only a disabled (expired) peer needs to go back on the server; an
+      // early renewal of an active peer just moves the date.
+      if (wasDisabled) {
+        const enableRes = await fetch("/api/wireguard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "enablePeer",
+            routerId: selectedRouterId,
+            data: { id: renewingPeer[".id"], name: renewingPeer.name || null, publicKey: renewingPeer["public-key"] },
+          })
+        });
+        const enableData = await enableRes.json();
 
-      if (!enableData.success) {
-        toast.error(enableData.error || "Failed to enable peer");
-        autoDisableInFlightRef.current = false;
-        setRenewing(false);
-        return;
+        if (!enableData.success) {
+          toast.error(enableData.error || "Failed to enable peer");
+          autoDisableInFlightRef.current = false;
+          setRenewing(false);
+          return;
+        }
       }
 
       // mode "extend": suma sobre max(ahora, fecha actual), igual que la tienda
@@ -1737,9 +1741,11 @@ export default function DashboardPage() {
 
       if (!payload.success) {
         console.error("Failed to update metadata:", payload.error);
-        toast.warning("Peer enabled but failed to update expiration");
+        toast.warning(wasDisabled ? "Peer enabled but failed to update expiration" : "Failed to extend the subscription");
       } else {
-        toast.success(`Peer renewed for ${formatDuration(renewValue, renewUnit)}`);
+        toast.success(wasDisabled
+          ? `Peer renewed for ${formatDuration(renewValue, renewUnit)}`
+          : `Added ${formatDuration(renewValue, renewUnit)} to the subscription`);
       }
 
       setRenewDialogOpen(false);
@@ -2312,6 +2318,12 @@ PersistentKeepalive = 25`;
                       Created By
                     </div>
                   </TableHead>
+                  <TableHead className="text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Calendar className="w-3 h-3" />
+                      Created
+                    </div>
+                  </TableHead>
                   {canAutoExpire && (
                     <TableHead className="text-muted-foreground">
                       <div className="flex items-center gap-1">
@@ -2472,6 +2484,20 @@ PersistentKeepalive = 25`;
                         })()}
                       </TableCell>
 
+                      {/* Created date */}
+                      <TableCell className="text-sm">
+                        {(() => {
+                          const createdAt = meta?.created_at || peer.created_at;
+                          if (!createdAt) return <span className="text-muted-foreground">-</span>;
+                          const d = new Date(createdAt);
+                          return (
+                            <span className="whitespace-nowrap" title={d.toLocaleString()}>
+                              {d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}
+                            </span>
+                          );
+                        })()}
+                      </TableCell>
+
                       {/* Expires Column */}
                       {canAutoExpire && (
                         <TableCell className="text-sm">
@@ -2570,8 +2596,8 @@ PersistentKeepalive = 25`;
                               >
                                 <Eye className="w-4 h-4" />
                               </Button>
-                              {/* Show Renew button for expired peers */}
-                              {expired && isDisabled && (
+                              {/* Renew (expired) / Extend (active with a timer): both ADD time */}
+                              {canAutoExpire && ((expired && isDisabled) || (!expired && meta?.auto_disable_enabled && meta?.expires_at)) && (
                                 <Button
                                   variant="ghost"
                                   size="icon"
@@ -2581,8 +2607,8 @@ PersistentKeepalive = 25`;
                                     setRenewUnit(meta?.expiration_unit || "hours");
                                     setRenewDialogOpen(true);
                                   }}
-                                  title="Renew expired peer"
-                                  className="text-amber-400 hover:text-amber-300"
+                                  title={expired ? "Renew expired peer" : "Add time to subscription"}
+                                  className={expired ? "text-amber-400 hover:text-amber-300" : "text-emerald-400 hover:text-emerald-300"}
                                 >
                                   <RotateCcw className="w-4 h-4" />
                                 </Button>
@@ -2962,8 +2988,8 @@ PersistentKeepalive = 25`;
                   </Button>
                 )}
 
-                {/* Renew if Expired */}
-                {isPeerExpired(managingPeer) && (managingPeer.disabled === true || String(managingPeer.disabled) === "true") && (
+                {/* Renew (expired) / Extend (active with a timer) */}
+                {canAutoExpire && peerMetadata[managingPeer["public-key"]]?.expires_at && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -2975,10 +3001,12 @@ PersistentKeepalive = 25`;
                       setRenewDialogOpen(true);
                       setPeerManageOpen(false);
                     }}
-                    className="gap-1 text-amber-400 border-amber-400 hover:bg-amber-400/10"
+                    className={isPeerExpired(managingPeer)
+                      ? "gap-1 text-amber-400 border-amber-400 hover:bg-amber-400/10"
+                      : "gap-1 text-emerald-400 border-emerald-400 hover:bg-emerald-400/10"}
                   >
                     <RotateCcw className="w-4 h-4" />
-                    Renew Expired
+                    {isPeerExpired(managingPeer) ? "Renew Expired" : "Add time"}
                   </Button>
                 )}
 
@@ -3090,11 +3118,13 @@ PersistentKeepalive = 25"
         <DialogContent className="bg-card border-border">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Timer className="w-5 h-5 text-amber-400" />
-              Renew Expired Peer
+              <Timer className={`w-5 h-5 ${renewingPeer && isPeerExpired(renewingPeer) ? "text-amber-400" : "text-emerald-400"}`} />
+              {renewingPeer && isPeerExpired(renewingPeer) ? "Renew Expired Peer" : "Extend Subscription"}
             </DialogTitle>
             <DialogDescription>
-              This peer has expired. Choose how long to renew it for.
+              {renewingPeer && isPeerExpired(renewingPeer)
+                ? "This peer has expired. Choose how long to renew it for."
+                : "Time is added on top of the current expiry date — renewing early never loses days."}
             </DialogDescription>
           </DialogHeader>
           {renewingPeer && (
@@ -3106,9 +3136,15 @@ PersistentKeepalive = 25"
                   Public IP: <span className="text-emerald-400">{renewingPeer.comment || "-"}</span>
                 </p>
                 {peerMetadata[renewingPeer["public-key"]]?.expires_at && (
-                  <p className="text-sm text-red-400">
-                    Expired: {formatDate(peerMetadata[renewingPeer["public-key"]]?.expires_at)}
-                  </p>
+                  isPeerExpired(renewingPeer) ? (
+                    <p className="text-sm text-red-400">
+                      Expired: {formatDate(peerMetadata[renewingPeer["public-key"]]?.expires_at)}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-amber-400">
+                      Currently expires: {formatDate(peerMetadata[renewingPeer["public-key"]]?.expires_at)} ({getTimeRemaining(renewingPeer)})
+                    </p>
+                  )
                 )}
               </div>
 
@@ -3161,7 +3197,9 @@ PersistentKeepalive = 25"
 
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
                 <p className="text-sm text-amber-400">
-                  The peer will be enabled and set to expire in {formatDuration(renewValue, renewUnit)}.
+                  {isPeerExpired(renewingPeer)
+                    ? `The peer will be enabled and set to expire in ${formatDuration(renewValue, renewUnit)}.`
+                    : `${formatDuration(renewValue, renewUnit)} will be added to the current expiry date.`}
                 </p>
               </div>
             </div>
@@ -3174,12 +3212,17 @@ PersistentKeepalive = 25"
               {renewing ? (
                 <>
                   <RefreshCw className="w-4 h-4 animate-spin" />
-                  Renewing...
+                  {renewingPeer && isPeerExpired(renewingPeer) ? "Renewing..." : "Extending..."}
                 </>
-              ) : (
+              ) : renewingPeer && isPeerExpired(renewingPeer) ? (
                 <>
                   <Power className="w-4 h-4" />
                   Renew & Enable
+                </>
+              ) : (
+                <>
+                  <Timer className="w-4 h-4" />
+                  Add time
                 </>
               )}
             </Button>
