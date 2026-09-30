@@ -1,5 +1,5 @@
 -- ============================================================
--- Migration v32: vincular un cliente manual con Telegram por link
+-- Migration v33: vincular un cliente manual con Telegram por link
 --
 -- El admin genera un link (t.me/<bot>?start=clink_<token>) desde la página
 -- del cliente y se lo manda. Cuando el cliente lo abre, el webhook vincula su

@@ -41,6 +41,60 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-09-30 — Cuentas StarHome (StarVPN) con slots residenciales (v32)
+
+**Qué es:** un admin o semi-admin (`can_create_users`) pega el email + auth token de su cuenta
+StarHome en `/starhome` y sus slots (70 en el caso de homevpn) aparecen como proxies SOCKS5
+(`proxy.starzone.io:puerto`) con país/región/ISP y login. Desde ahí rota la IP, asigna slots a los
+usuarios que creó y les pone timer. Página propia (no va en Dashboard ni en SOCKS5: un slot no es
+un peer WG ni un proxy nuestro). El usuario asignado ve sus slots en "My slots" de la misma página.
+
+**Migración SQL:** `scripts/migration-v32-starhome.sql` — `starhome_accounts` (owner, email,
+auth_token en claro como `routers.password`, package/status/next_due_date/total_slots, last_synced)
+y `starhome_slots` (slot_number, port, país/región/ISP, vpn_username/password, remaining_updates,
+`raw` jsonb con la entrada completa, + name/assigned_user_id/expires_at nuestros). RLS: dueño y admin;
+en slots también el asignado (el Sidebar lo usa). La app escribe con service role.
+
+**La API, reverse-engineered del dashboard de StarVPN ("API Information"):**
+- Un solo endpoint `POST https://api.starhome.io/v1/` con envelope fijo
+  `{device_type:"web", device_id:"starvpn-dashboard", app_version:"1.0.0", email, auth_token, custom:1, command}`.
+- **El token es de la cuenta, no del slot** — el dashboard arma el MISMO comando para los slots 1, 2 y 3.
+  Lo único por slot es el puerto del proxy: `51312 + N` (visto en 1–3, asumido para el resto:
+  `STARHOME_PROXY_PORT_BASE`).
+- `refresh_data` ("Get Current IP Configuration") devuelve TODA la cuenta: `package`, `status`,
+  `next_due_date`, `total_slots`, `ip_types[]` (por slot: `port`, `ip_type`, `country`, `region`, `isp`,
+  `vpnusername`, `vpnpassword`, `wg_private_key`, `wg_ipv4/6`, `awg_ipv4/6`) y
+  `remaining_ip_updates[]` (`limits: {"Static Residential": 20, "Static Datacenter": 500}` = rotaciones
+  que quedan). **No trae la IP pública actual del slot.**
+- Token inválido → HTTP 200 con `{"result":"error","message":"Authorization failed"}`; el cliente
+  mira `result`, no el status.
+- El proxy SOCKS5 no responde desde una IP no autorizada (timeout con y sin user/pass): parece lista
+  blanca de IPs, así que el panel no puede mostrar la IP viva ni testear el slot.
+
+**Archivos:** `src/lib/starhome.ts` (cliente + `fetchAccountData` + `storeAccountData`/`syncAccount`),
+`/api/starhome` (GET todo-en-uno: cuentas+slots que manejo, `mySlots`, `users` candidatos; POST
+`addAccount` (valida contra StarHome antes de guardar) / `deleteAccount` / `sync` / `assignSlot` /
+`unassignSlot` / `setSlotExpiry` / `renameSlot` / `rotateIp`), `src/app/starhome/page.tsx`,
+link "StarHome" en `Sidebar.tsx`, entity types `starhome_account`/`starhome_slot` en el logger.
+
+**Gotchas:**
+- El upsert de slots solo lleva columnas del proveedor → los sync nunca pisan asignación ni timer.
+- El timer es **lazy**: cada GET primero desasigna los vencidos (no hay cron). Al vencer solo se quita
+  la asignación; en StarHome no cambia nada.
+- El GET re-sincroniza cuentas con `last_synced_at` > 15 min (una llamada a StarHome por cuenta).
+- El Sidebar consulta `starhome_slots` por su cuenta (RLS) para mostrar el link a usuarios asignados;
+  sin la migración el count es null y el link no aparece. Admin/semi-admin siempre lo ven.
+- Semi-admins solo asignan a `profiles.created_by_user_id = yo`; admin a cualquiera.
+
+**Pendiente:**
+- **Rotar IP no está cableado**: falta capturar el comando que genera el dashboard para "Update IP Now"
+  (`ROTATE_COMMAND` / `ROTATE_SLOT_FIELD` en `starhome.ts`). Hoy el botón devuelve 502 con
+  "IP rotation isn't wired to StarHome yet".
+- Cómo autentica el proxy (¿lista blanca en el dashboard? ¿`vpnusername`/`vpnpassword`?). Sin eso el
+  usuario asignado tiene host:puerto y login pero puede no poder conectar.
+- StarVPN entrega `wg_private_key` + `wg_ipv4` por slot: se podría ofrecer config WireGuard del slot,
+  pero falta el endpoint/public key del server de cada región (no viene en `refresh_data`).
+
 ### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
 
 **Migraciones (correr las dos):** `scripts/migration-v30-manual-customers.sql` y
@@ -83,7 +137,7 @@ El diálogo del calendario (Edit Timer) tiene 4 modos: **+ Add** (extend), **−
 date** (mode `set` + `expiresAt` calculado en el cliente) y **From now** (lo de antes); con timer
 corriendo abre en Add para que 1d/1w/1mo nunca reseteen el conteo. Preview de la fecha resultante.
 
-**Vincular cliente manual con Telegram por link (v32).** `scripts/migration-v32-customer-link-tokens.sql`
+**Vincular cliente manual con Telegram por link (v33).** `scripts/migration-v33-customer-link-tokens.sql`
 (tabla `tg_customer_link_tokens`, un uso, 7 días). `src/lib/customer-link.ts`: `issueCustomerLinkToken`,
 `consumeCustomerLinkToken` (claim atómico) y `linkTelegramToCustomer` — si ese Telegram ya tenía
 cuenta en la tienda, **fusiona**: mueve `tg_customer_peers` y `tg_payments` a la cuenta existente,

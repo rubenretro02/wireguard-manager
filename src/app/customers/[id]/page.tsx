@@ -14,10 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  ArrowLeft, Copy, Download, Link2, Loader2, Pencil, Power, PowerOff, QrCode, RefreshCw,
+  ArrowLeft, Copy, Download, Loader2, Pencil, Power, PowerOff, QrCode, RefreshCw,
   ScrollText, Send, Server, Timer, Trash2, Unlink, UserRound, Wifi, WifiOff,
 } from "lucide-react";
 import type { Profile } from "@/lib/types";
@@ -59,8 +58,6 @@ interface CustomerPeer {
   routers?: { name: string } | null;
 }
 
-interface RouterOption { id: string; name: string; host: string }
-interface ServerPeer { name?: string; "public-key"?: string; "allowed-address"?: string; interface?: string; comment?: string; disabled?: boolean }
 
 function displayName(c: Customer): string {
   if (c.username) return `@${c.username}`;
@@ -143,17 +140,6 @@ export default function CustomerDetailPage() {
   };
   const [qr, setQr] = useState<string | null>(null);
 
-  // Assign existing peer
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [routers, setRouters] = useState<RouterOption[]>([]);
-  const [assignRouter, setAssignRouter] = useState("");
-  const [serverPeers, setServerPeers] = useState<ServerPeer[]>([]);
-  const [loadingServerPeers, setLoadingServerPeers] = useState(false);
-  const [assignedKeys, setAssignedKeys] = useState<Set<string>>(new Set());
-  const [assignKey, setAssignKey] = useState("");
-  const [assignDays, setAssignDays] = useState("");
-  const [assignSearch, setAssignSearch] = useState("");
-  const [assigning, setAssigning] = useState(false);
 
   const tgAdmin = useCallback(async (action: string, data: Record<string, unknown> = {}) => {
     const res = await fetch("/api/tg-admin", {
@@ -329,75 +315,6 @@ export default function CustomerDetailPage() {
     URL.revokeObjectURL(url);
   };
 
-  /* ---------- assign existing peer ---------- */
-  const openAssign = async () => {
-    setAssignOpen(true);
-    setAssignRouter("");
-    setServerPeers([]);
-    setAssignKey("");
-    setAssignDays("");
-    setAssignSearch("");
-    try {
-      const [r, all] = await Promise.all([tgAdmin("listRouters"), tgAdmin("listCustomerPeers")]);
-      setRouters(r.routers || []);
-      setAssignedKeys(new Set((all.peers || []).map((p: CustomerPeer) => p.peer_public_key)));
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
-    }
-  };
-
-  const loadServerPeers = async (routerId: string) => {
-    setAssignRouter(routerId);
-    setAssignKey("");
-    setLoadingServerPeers(true);
-    try {
-      const res = await fetch("/api/wireguard", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "getPeers", routerId }),
-      });
-      const json = await res.json();
-      setServerPeers(Array.isArray(json.peers) ? json.peers : []);
-    } catch {
-      toast.error("Could not read the server");
-    } finally {
-      setLoadingServerPeers(false);
-    }
-  };
-
-  const availableServerPeers = useMemo(() => {
-    const q = assignSearch.trim().toLowerCase();
-    return serverPeers
-      .filter((p) => p["public-key"] && !assignedKeys.has(p["public-key"]))
-      .filter((p) => !q || (p.name || "").toLowerCase().includes(q) || (p["allowed-address"] || "").includes(q) || (p.comment || "").includes(q));
-  }, [serverPeers, assignedKeys, assignSearch]);
-
-  const submitAssign = async () => {
-    const peer = serverPeers.find((p) => p["public-key"] === assignKey);
-    if (!peer || !assignRouter) return;
-    setAssigning(true);
-    try {
-      await tgAdmin("assignPeerToCustomer", {
-        customerId,
-        routerId: assignRouter,
-        publicKey: peer["public-key"],
-        name: peer.name,
-        allowedAddress: peer["allowed-address"]?.split(",")[0],
-        wgInterface: peer.interface,
-        comment: peer.comment,
-        days: assignDays === "" ? null : Number(assignDays),
-        notify: Boolean(customer?.telegram_id),
-      });
-      toast.success("Peer assigned");
-      setAssignOpen(false);
-      await load();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
-    } finally {
-      setAssigning(false);
-    }
-  };
-
   const handleLogout = async () => {
     await supabase.auth.signOut();
     router.push("/login");
@@ -440,10 +357,6 @@ export default function CustomerDetailPage() {
             Link Telegram
           </Button>
         )}
-        <Button onClick={openAssign} className="gap-2">
-          <Link2 className="w-4 h-4" />
-          Assign existing peer
-        </Button>
       </PageHeader>
 
       <PageContent>
@@ -564,7 +477,7 @@ export default function CustomerDetailPage() {
                 <TableRow className="border-border">
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-12">
                     {peers.length === 0
-                      ? "No peers yet — use \"Assign existing peer\" or pick this customer when creating one in the Dashboard."
+                      ? "No peers yet — assign them from the Dashboard (select peers → Assign to customer) or pick this customer when creating one."
                       : "No peers match this filter."}
                   </TableCell>
                 </TableRow>
@@ -805,65 +718,6 @@ export default function CustomerDetailPage() {
         subtitle={logPeer ? `${logPeer.routers?.name || ""} · ${logPeer.allowed_address}` : null}
       />
 
-      {/* Assign existing peer */}
-      <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
-        <DialogContent className="bg-card border-border max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Link2 className="w-5 h-5 text-primary" />Assign existing peer</DialogTitle>
-            <DialogDescription>Pick a server, then one of its peers that has no customer yet.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label>Server</Label>
-              <Select value={assignRouter} onValueChange={loadServerPeers}>
-                <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="Select a server" /></SelectTrigger>
-                <SelectContent>
-                  {routers.map((r) => <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            {assignRouter && (
-              <div className="space-y-2">
-                <Label>Peer</Label>
-                <Input placeholder="Filter by name, address or IP…" value={assignSearch} onChange={(e) => setAssignSearch(e.target.value)} className="bg-secondary" />
-                <div className="max-h-56 overflow-y-auto rounded-lg border border-border divide-y divide-border">
-                  {loadingServerPeers ? (
-                    <div className="p-4 text-center text-muted-foreground text-sm"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Reading the server…</div>
-                  ) : availableServerPeers.length === 0 ? (
-                    <div className="p-4 text-center text-muted-foreground text-sm">No unassigned peers here.</div>
-                  ) : (
-                    availableServerPeers.map((p) => (
-                      <button
-                        key={p["public-key"]}
-                        type="button"
-                        onClick={() => setAssignKey(p["public-key"] || "")}
-                        className={`w-full text-left px-3 py-2 text-sm hover:bg-secondary/60 ${assignKey === p["public-key"] ? "bg-primary/10" : ""}`}
-                      >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium truncate">{p.name || "(unnamed)"}</span>
-                          <span className="font-mono text-xs text-muted-foreground">{p["allowed-address"]}</span>
-                        </div>
-                        <div className="text-xs text-muted-foreground font-mono">{p.comment} {p.disabled ? "· disabled" : ""}</div>
-                      </button>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label>Days of access (optional)</Label>
-              <Input type="number" min={1} placeholder="Keep the current timer" value={assignDays} onChange={(e) => setAssignDays(e.target.value)} className="bg-secondary" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignOpen(false)}>Cancel</Button>
-            <Button onClick={submitAssign} disabled={!assignKey || assigning} className="gap-2">
-              {assigning ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link2 className="w-4 h-4" />}
-              Assign
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </DashboardLayout>
   );
 }
