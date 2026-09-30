@@ -73,11 +73,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     supabase: caller.admin,
     userId: caller.userId,
     routerId: found.router.id,
-    action: "update",
+    action: mode === "extend" && duration ? "renew" : "update",
     entityType: "peer",
     entityId: found.peer.id,
     entityName: found.peer.name,
-    details: { expiresAt, mode, source: "api" },
+    peerPublicKey: found.peer.publicKey,
+    details: { expiresAt, mode, source: "api", ...(expiresAt === null ? { timer_removed: true } : {}) },
   });
 
   return NextResponse.json({ peer: found.peer.id, expiresAt });

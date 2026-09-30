@@ -34,6 +34,12 @@ interface LogActivityParams {
   entityName?: string | null;
   details?: Record<string, unknown>;
   ipAddress?: string | null;
+  /**
+   * v31: the peer this event belongs to. entity_id is inconsistent across
+   * platforms (linux_peers id, MikroTik .id, key prefix…), so the per-peer log
+   * indexes by public key instead. Falls back to details.publicKey.
+   */
+  peerPublicKey?: string | null;
 }
 
 export async function logActivity({
@@ -46,11 +52,15 @@ export async function logActivity({
   entityName,
   details,
   ipAddress,
+  peerPublicKey,
 }: LogActivityParams): Promise<void> {
   try {
     console.log("[Activity Logger] Logging activity:", { action, entityType, entityName, userId, routerId });
 
-    const { data, error } = await supabase.from("activity_logs").insert({
+    const keyFromDetails = details?.publicKey ?? details?.peerPublicKey ?? details?.["public-key"];
+    const peerKey = peerPublicKey || (typeof keyFromDetails === "string" ? keyFromDetails : null);
+
+    const row: Record<string, unknown> = {
       user_id: userId,
       router_id: routerId || null,
       action,
@@ -59,7 +69,17 @@ export async function logActivity({
       entity_name: entityName || null,
       details: details || {},
       ip_address: ipAddress || null,
-    }).select();
+      peer_public_key: entityType === "peer" ? peerKey : null,
+    };
+
+    let { data, error } = await supabase.from("activity_logs").insert(row).select();
+
+    // Until migration v31 runs the column doesn't exist — never let that kill
+    // the whole log (that exact silent failure already happened once, see v25).
+    if (error && /peer_public_key/.test(error.message)) {
+      delete row.peer_public_key;
+      ({ data, error } = await supabase.from("activity_logs").insert(row).select());
+    }
 
     if (error) {
       console.error("[Activity Logger] Supabase error:", error);

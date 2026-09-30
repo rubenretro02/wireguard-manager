@@ -151,7 +151,7 @@ export function isMikroTikDisabled(value: unknown): boolean {
 }
 
 /** "1m30s" / "55s" / "2h3m" de MikroTik → segundos. */
-function parseMikroTikDuration(value?: string): number | null {
+export function parseMikroTikDuration(value?: string): number | null {
   if (!value) return null;
   const matches = value.match(/(\d+)([wdhms])/g);
   if (!matches) return null;

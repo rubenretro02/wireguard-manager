@@ -189,16 +189,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: message }, { status: 500 });
     }
 
-    await logActivity({
-      supabase,
-      userId: user.id,
-      routerId,
-      action: "update",
-      entityType: "peer",
-      entityId: publicKeys.length === 1 ? publicKeys[0] : null,
-      entityName: data?.peerName || null,
-      details: { timer_mode: mode, peers: publicKeys.length, expires_at: results[publicKeys[0]] },
-    });
+    // One row per peer so each peer's own log shows its renewals (bulk included).
+    // Action "renew" when time was added, "update" when the timer was set/cleared.
+    for (const publicKey of publicKeys) {
+      await logActivity({
+        supabase,
+        userId: user.id,
+        routerId,
+        action: mode === "extend" ? "renew" : "update",
+        entityType: "peer",
+        entityId: publicKey,
+        entityName: publicKeys.length === 1 ? data?.peerName || null : null,
+        peerPublicKey: publicKey,
+        details: {
+          timer_mode: mode,
+          expires_at: results[publicKey],
+          ...(publicKeys.length > 1 ? { bulk: publicKeys.length } : {}),
+          ...(results[publicKey] === null ? { timer_removed: true } : {}),
+        },
+      });
+    }
 
     return NextResponse.json({ success: true, expiry: results });
   }
@@ -553,6 +563,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: storedPeer?.id || keyPair.publicKey.substring(0, 8),
               entityName: name,
+              peerPublicKey: keyPair.publicKey,
               details: { allowedAddress, publicIp: publicIp.public_ip, interface: effectiveInterface }
             });
 
@@ -641,6 +652,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: publicKey.substring(0, 8),
               entityName: data.name || null,
+              peerPublicKey: publicKey,
               details: {}
             });
 
@@ -658,6 +670,7 @@ export async function POST(request: Request) {
           console.log("[WireGuard API] Disabling Linux peer:", data.id);
           try {
             const publicKey = data["public-key"] || data.publicKey;
+            let loggedKey: string | null = publicKey || null;
 
             if (!publicKey) {
               // Try to get public key from database using ID
@@ -670,6 +683,7 @@ export async function POST(request: Request) {
               if (!storedPeer) {
                 return NextResponse.json({ error: "Peer not found in database" }, { status: 404 });
               }
+              loggedKey = storedPeer.public_key;
 
               // Remove from WireGuard
               await linuxClient.removePeer(storedPeer.public_key);
@@ -700,6 +714,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: data.id || publicKey?.substring(0, 8),
               entityName: data.name || null,
+              peerPublicKey: loggedKey,
               details: { auto: Boolean(data.autoExpiry), reason: data.autoExpiry ? "timer expired" : "manual" }
             });
 
@@ -763,6 +778,7 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: storedPeer.id,
               entityName: storedPeer.name || null,
+              peerPublicKey: storedPeer.public_key,
               details: { auto: Boolean(data.autoEnable), reason: data.autoEnable ? "scheduled enable" : "manual" }
             });
 
@@ -899,7 +915,9 @@ export async function POST(request: Request) {
               entityType: "peer",
               entityId: peerId,
               entityName: newName || storedPeer.name || null,
-              details: { updatedFields: Object.keys(updates), keyChanged, interfaceChanged, addressChanged, oldInterface, newInterface }
+              // After a key rotation the peer lives under the new key
+              peerPublicKey: effectivePubKey,
+              details: { updatedFields: Object.keys(updates), keyChanged, interfaceChanged, addressChanged, oldInterface, newInterface, ...(keyChanged ? { oldKey: oldPubKey } : {}) }
             });
 
             console.log(`[WireGuard API] [Linux] Peer ${peerId} updated (key=${keyChanged}, iface=${oldInterface}→${newInterface}, addr=${addressChanged})`);
@@ -1433,6 +1451,7 @@ export async function POST(request: Request) {
             entityType: "peer",
             entityId: peer[".id"],
             entityName: name,
+            peerPublicKey: peer["public-key"] || null,
             details: { allowedAddress, publicIp: publicIp.public_ip, interface: wgInterface }
           });
 
@@ -1950,7 +1969,8 @@ export async function POST(request: Request) {
             entityType: "peer",
             entityId: data.id,
             entityName: data.name || null,
-            details: { updatedFields: Object.keys(updateData), keyChanged: !!data["public-key"] }
+            peerPublicKey: data["public-key"] || data.publicKey || null,
+            details: { updatedFields: Object.keys(updateData), keyChanged: !!data["public-key"], ...(oldPublicKey ? { oldKey: oldPublicKey } : {}) }
           });
 
           console.log("[WireGuard API] Peer updated with keys successfully");
@@ -1974,6 +1994,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: data.id,
           entityName: data.name || null,
+          peerPublicKey: data.publicKey || data["public-key"] || null,
           details: {}
         });
         console.log("[WireGuard API] Activity logged for delete");
@@ -1992,6 +2013,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: data.id,
           entityName: data.name || null,
+          peerPublicKey: data.publicKey || data["public-key"] || null,
           details: { auto: Boolean(data.autoEnable), reason: data.autoEnable ? "scheduled enable" : "manual" }
         });
         console.log("[WireGuard API] Activity logged for enable");
@@ -2010,6 +2032,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: data.id,
           entityName: data.name || null,
+          peerPublicKey: data.publicKey || data["public-key"] || null,
           details: { auto: Boolean(data.autoExpiry), reason: data.autoExpiry ? "timer expired" : "manual" }
         });
         console.log("[WireGuard API] Activity logged for disable");

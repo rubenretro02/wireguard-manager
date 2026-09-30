@@ -208,6 +208,7 @@ export async function createPeer(
       entityType: "peer",
       entityId: stored?.id || keyPair.publicKey.slice(0, 8),
       entityName: input.name,
+      peerPublicKey: keyPair.publicKey,
       details: { allowedAddress, publicIp: publicIp.public_ip, interface: iface, source: "api" },
     });
 
@@ -281,6 +282,7 @@ export async function createPeer(
     entityType: "peer",
     entityId: created[".id"],
     entityName: input.name,
+    peerPublicKey: keyPair.publicKey,
     details: { allowedAddress, publicIp: publicIp.public_ip, interface: iface, source: "api" },
   });
 

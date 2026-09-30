@@ -41,6 +41,45 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
+
+**Migraciones (correr las dos):** `scripts/migration-v30-manual-customers.sql` y
+`scripts/migration-v31-peer-log.sql`.
+
+**Customers (v30) — un solo tipo de cliente.** El problema: clientes con peers en varios servers
+y, al suspender uno, había que pedirle el peer para saber en qué server estaba. En vez de una
+tabla nueva, `tg_customers.telegram_id` pasa a nullable + `source ('telegram'|'manual')`, `email`,
+`phone`, `notes`, `created_by_user_id`. Un cliente manual hereda TODO lo de Telegram (asignar,
+renovar, expiry, endpoint white-label). Si después se une al bot se le vincula el `telegram_id`.
+- `tg-admin`: `getCustomer`, `createCustomer`, `updateCustomer`, `deleteCustomer` (solo sin peers);
+  `listCustomerPeers` acepta `customerId`. Toda notificación por Telegram queda gateada por
+  `customer.telegram_id` (tg-admin, cryptomus webhook, cron ya lo hacía).
+- `/customers` (lista, filtro TG/manual, crear) y `/customers/[id]` (todos sus peers de todos los
+  servers con estado vivo, extender/fijar fecha, config+QR, enable/disable, quitar del cliente,
+  asignar peer existente eligiendo server → peer). Sidebar "Customers" (admin).
+- Dashboard: Create Peer tiene selector de customer (asigna al crear) y el bulk "Assign to TG
+  customer" pasa a "Assign to customer" (lista ambos).
+
+**Historial por peer (v31).** `activity_logs.peer_public_key` (indexado): `logActivity` lo toma
+de `peerPublicKey` o de `details.publicKey`; con `entity_id` no alcanzaba (id de linux_peers, .id
+de MikroTik, prefijo…). Si la columna no existe todavía el insert reintenta sin ella — nunca
+puede volver a matar todo el logging (v25). Los ~25 puntos que registran peers pasan la llave;
+`setPeerExpiry` ahora registra una fila por peer (bulk incluido) con action `renew` cuando suma
+tiempo. Se agregó registro donde no había: compra/renovación por Cryptomus, plan gratis y
+`rotateKeys` de la Mini App.
+- **Conexión/desconexión**: WireGuard no emite eventos. `/api/cron/peer-presence` (Bearer
+  CRON_SECRET, correr cada 1–2 min desde cron-job.org) lee los handshakes de todos los servers y
+  abre/cierra `peer_sessions` (sesión abierta = online ahora; se cierra en handshake+180s). Un
+  server caído se saltea sin cerrar nada. La resolución es el intervalo del cron.
+- `/api/peer-log?publicKey=&range=` mezcla `activity_logs` + `peer_sessions` en una línea de
+  tiempo (online·from IP / offline / created / renewed / expired / suspended / keys…, con quién)
+  y resume "N sessions · Xh". `src/components/PeerLogDialog.tsx` (Today/Week/Month/All/Custom),
+  botón de historial en cada fila del dashboard y de la página del cliente.
+
+**Extender activos.** El diálogo Renew (`extend`, suma sobre la fecha vigente) solo aparecía en
+expirados; el del calendario reemplaza la fecha desde ahora. Ahora los activos con timer tienen
+"Add time" (mismo diálogo, sin el `enablePeer` innecesario). Columna **Created** en la tabla.
+
 ### 2026-08-25 — API pública v1 con API keys por usuario (v28/v29)
 
 **Qué es:** cada admin o semi-admin emite sus propias keys en `/profile` y maneja su cuenta desde

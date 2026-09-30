@@ -286,12 +286,13 @@ export async function POST(request: Request) {
           supabase: authClient,
           userId: user.id,
           routerId: peer.router_id,
-          action: "update",
+          action: isSet ? "update" : "renew",
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
+          peerPublicKey: peer.peer_public_key,
           details: isSet
-            ? { timer_mode: "set", expires_at: renewed.expires_at, was: peer.expires_at }
+            ? { timer_mode: "set", expires_at: renewed.expires_at, was: peer.expires_at, ...(renewed.expires_at ? {} : { timer_removed: true }) }
             : { timer_mode: "extend", telegram_extend_days: days, expires_at: renewed.expires_at },
         });
 
@@ -342,6 +343,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
+          peerPublicKey: peer.peer_public_key,
           details: { source: "telegram_admin", allowed_address: peer.allowed_address, expires_at: peer.expires_at },
         });
         return NextResponse.json({ success: true });
@@ -375,6 +377,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
+          peerPublicKey: peer.peer_public_key,
           details: { source: "telegram_admin", allowed_address: peer.allowed_address, expires_at: peer.expires_at },
         });
         return NextResponse.json({ success: true });
@@ -574,6 +577,7 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
+          peerPublicKey: peer.peer_public_key,
           details: { telegram_customer_peer: true },
         });
         return NextResponse.json({ success: true });
@@ -659,7 +663,8 @@ export async function POST(request: Request) {
           entityType: "peer",
           entityId: peer.id,
           entityName: peer.peer_name,
-          details: { telegram_unassigned: true },
+          peerPublicKey: peer.peer_public_key,
+          details: { unassigned_from_customer: peer.customer_id },
         });
         return NextResponse.json({ success: true });
       }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { isFailedStatus, isPaidStatus, verifyWebhookSign } from "@/lib/cryptomus";
 import { sendTelegramMessage } from "@/lib/telegram";
+import { logActivity } from "@/lib/activity-logger";
 import {
   getServiceClient,
   provisionPeerForCustomer,
@@ -108,6 +109,12 @@ export async function POST(request: Request) {
         durationDays,
       });
 
+      await logActivity({
+        supabase, userId: null, routerId: (peer as TgCustomerPeer).router_id, action: "renew", entityType: "peer",
+        entityId: (peer as TgCustomerPeer).id, entityName: renewed.peer_name, peerPublicKey: renewed.peer_public_key,
+        details: { source: "cryptomus payment", days: durationDays, amount_usd: payment.amount_usd, expires_at: renewed.expires_at, customer_id: payment.customer_id },
+      });
+
       if (customer && (customer as TgCustomer).telegram_id) {
         await sendTelegramMessage(
           (customer as TgCustomer).telegram_id as number,
@@ -129,6 +136,12 @@ export async function POST(request: Request) {
       });
 
       await supabase.from("tg_payments").update({ customer_peer_id: peer.id }).eq("id", payment.id);
+
+      await logActivity({
+        supabase, userId: null, routerId: peer.router_id, action: "create", entityType: "peer",
+        entityId: peer.id, entityName: peer.peer_name, peerPublicKey: peer.peer_public_key,
+        details: { source: "cryptomus payment", plan: (plan as TgPlan).name, amount_usd: payment.amount_usd, customer_id: payment.customer_id, allowedAddress: peer.allowed_address, publicIp: peer.public_ip },
+      });
 
       // Purchases only happen inside the Mini App, so a Telegram id is always
       // there — the guard just keeps the manual-customer type honest.

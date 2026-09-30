@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
+import { PeerLogDialog } from "@/components/PeerLogDialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft, Copy, Download, Link2, Loader2, Pencil, Power, PowerOff, QrCode, RefreshCw,
-  Send, Server, Timer, Trash2, Unlink, UserRound, Wifi, WifiOff,
+  ScrollText, Send, Server, Timer, Trash2, Unlink, UserRound, Wifi, WifiOff,
 } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
@@ -121,6 +122,8 @@ export default function CustomerDetailPage() {
 
   // Config / QR
   const [configPeer, setConfigPeer] = useState<CustomerPeer | null>(null);
+  // History
+  const [logPeer, setLogPeer] = useState<CustomerPeer | null>(null);
   const [qr, setQr] = useState<string | null>(null);
 
   // Assign existing peer
@@ -533,6 +536,9 @@ export default function CustomerDetailPage() {
                           <Button variant="ghost" size="icon" title="Add time / set expiry" onClick={() => openExtend(p)} className="text-emerald-400">
                             <Timer className="w-4 h-4" />
                           </Button>
+                          <Button variant="ghost" size="icon" title="History" onClick={() => setLogPeer(p)}>
+                            <ScrollText className="w-4 h-4" />
+                          </Button>
                           <Button variant="ghost" size="icon" title="Config & QR" onClick={() => openConfig(p)}>
                             <QrCode className="w-4 h-4" />
                           </Button>
@@ -668,6 +674,14 @@ export default function CustomerDetailPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      <PeerLogDialog
+        open={!!logPeer}
+        onOpenChange={(o) => !o && setLogPeer(null)}
+        publicKey={logPeer?.peer_public_key || null}
+        peerName={logPeer?.peer_name}
+        subtitle={logPeer ? `${logPeer.routers?.name || ""} · ${logPeer.allowed_address}` : null}
+      />
 
       {/* Assign existing peer */}
       <Dialog open={assignOpen} onOpenChange={setAssignOpen}>

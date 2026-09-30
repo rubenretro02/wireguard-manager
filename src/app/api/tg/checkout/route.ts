@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { authenticateTgRequest } from "@/lib/tg-auth";
 import { createInvoice, isCryptomusConfigured } from "@/lib/cryptomus";
+import { logActivity } from "@/lib/activity-logger";
 import {
   getServiceClient,
   provisionPeerForCustomer,
@@ -78,9 +79,19 @@ export async function POST(request: Request) {
   if (price <= 0) {
     try {
       if (peer) {
-        await renewCustomerPeer({ supabase, peer, durationDays });
+        const renewed = await renewCustomerPeer({ supabase, peer, durationDays });
+        await logActivity({
+          supabase, userId: null, routerId: peer.router_id, action: "renew", entityType: "peer",
+          entityId: peer.id, entityName: peer.peer_name, peerPublicKey: peer.peer_public_key,
+          details: { source: "telegram store (free)", days: durationDays, expires_at: renewed.expires_at, customer_id: customer.id },
+        });
       } else if (plan) {
-        await provisionPeerForCustomer({ supabase, customer, plan });
+        const { peer: created } = await provisionPeerForCustomer({ supabase, customer, plan });
+        await logActivity({
+          supabase, userId: null, routerId: plan.router_id, action: "create", entityType: "peer",
+          entityId: created.id, entityName: created.peer_name, peerPublicKey: created.peer_public_key,
+          details: { source: "telegram store (free)", plan: plan.name, customer_id: customer.id, allowedAddress: created.allowed_address, publicIp: created.public_ip },
+        });
       }
       return NextResponse.json({ free: true, fulfilled: true });
     } catch (err) {

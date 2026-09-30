@@ -127,6 +127,7 @@ export async function GET(request: Request) {
         entityType: "peer",
         entityId: meta.peer_public_key,
         entityName: meta.peer_name,
+        peerPublicKey: meta.peer_public_key,
         details: { auto: true, reason: "timer expired", source: "cron enforce-peer-expiry" },
       });
     } catch (err) {
@@ -177,6 +178,7 @@ export async function GET(request: Request) {
         entityType: "peer",
         entityId: meta.peer_public_key,
         entityName: meta.peer_name,
+        peerPublicKey: meta.peer_public_key,
         details: { auto: true, reason: "scheduled enable", source: "cron enforce-peer-expiry" },
       });
     } catch (err) {
@@ -210,6 +212,7 @@ export async function GET(request: Request) {
         entityType: "peer",
         entityId: peer.peer_public_key,
         entityName: peer.peer_name,
+        peerPublicKey: peer.peer_public_key,
         details: { auto: true, reason: "revived: still valid in store", source: "cron enforce-peer-expiry", expires_at: peer.expires_at },
       });
     } catch (err) {

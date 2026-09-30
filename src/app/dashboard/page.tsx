@@ -16,6 +16,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { toast } from "sonner";
 import { DashboardLayout, PageHeader, PageContent } from "@/components/DashboardLayout";
+import { PeerLogDialog } from "@/components/PeerLogDialog";
 import { StatCard } from "@/components/StatCard";
 import {
   Users,
@@ -32,6 +33,7 @@ import {
   Pencil,
   ArrowUpDown,
   Eye,
+  ScrollText,
   Check,
   X,
   ArrowUp,
@@ -258,6 +260,8 @@ export default function DashboardPage() {
   const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; username: string | null; first_name: string | null; customer_type?: string; source?: string }[]>([]);
   // Customer picked in Create Peer (v30) — the peer is assigned to them on creation
   const [createCustomerId, setCreateCustomerId] = useState("");
+  // Per-peer history dialog (v31)
+  const [logPeer, setLogPeer] = useState<PeerWithMetadata | null>(null);
 
   const loadCustomers = useCallback(async () => {
     try {
@@ -2641,6 +2645,14 @@ PersistentKeepalive = 25`;
                               >
                                 <Eye className="w-4 h-4" />
                               </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setLogPeer(peer)}
+                                title="History"
+                              >
+                                <ScrollText className="w-4 h-4" />
+                              </Button>
                               {/* Renew (expired) / Extend (active with a timer): both ADD time */}
                               {canAutoExpire && ((expired && isDisabled) || (!expired && meta?.auto_disable_enabled && meta?.expires_at)) && (
                                 <Button
@@ -3622,6 +3634,15 @@ PersistentKeepalive = 25"
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Per-peer history */}
+      <PeerLogDialog
+        open={!!logPeer}
+        onOpenChange={(o) => !o && setLogPeer(null)}
+        publicKey={logPeer?.["public-key"] || null}
+        peerName={logPeer?.name}
+        subtitle={logPeer ? `${logPeer["allowed-address"] || ""} · ${logPeer.comment || ""}` : null}
+      />
 
       {/* Bulk assign to Telegram customer */}
       <Dialog open={bulkAssignOpen} onOpenChange={setBulkAssignOpen}>

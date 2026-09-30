@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { authenticateTgRequest } from "@/lib/tg-auth";
+import { logActivity } from "@/lib/activity-logger";
 import {
   buildClientConfig,
   getLivePeerStatus,
@@ -124,6 +125,11 @@ export async function POST(request: Request) {
     case "rotateKeys": {
       try {
         const updated = await rotateCustomerPeerKeys(supabase, peer as TgCustomerPeer);
+        await logActivity({
+          supabase, userId: null, routerId: updated.router_id, action: "update", entityType: "peer",
+          entityId: updated.id, entityName: updated.peer_name, peerPublicKey: updated.peer_public_key,
+          details: { source: "telegram mini app", keyChanged: true, oldKey: (peer as TgCustomerPeer).peer_public_key, customer_id: updated.customer_id },
+        });
         return NextResponse.json({ peer: serializePeer(updated) });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Unknown error";

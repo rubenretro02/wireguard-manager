@@ -50,6 +50,7 @@ export async function GET(request: Request) {
         entityType: "peer",
         entityId: peer.peer_public_key,
         entityName: peer.peer_name,
+        peerPublicKey: peer.peer_public_key,
         details: { auto: true, reason: "store subscription expired", source: "cron expire-customer-peers", expires_at: peer.expires_at },
       });
       if (peer.tg_customers?.telegram_id) {
