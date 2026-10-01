@@ -2708,16 +2708,46 @@ PersistentKeepalive = 25`;
                               </Button>
                             </>
                           ) : isStarhomeRouter ? (
-                            // StarVPN slot: timers and assignment live in SOCKS5, and the WG
-                            // config can't be built until the server endpoint is known.
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => setLogPeer(peer)}
-                              title="History"
-                            >
-                              <ScrollText className="w-4 h-4" />
-                            </Button>
+                            // StarVPN slot: timers and assignment live in SOCKS5. The WG config
+                            // (wg.starzone.io) is offered once the server public key is known.
+                            <>
+                              {interfaces[0]?.["public-key"] && (
+                                <>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => downloadConfig(peer)}
+                                    title="Download config"
+                                  >
+                                    <Download className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openQr(peer)}
+                                    title="Show QR code"
+                                  >
+                                    <QrCode className="w-4 h-4" />
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => openPeerManagement(peer, "view")}
+                                    title="View config"
+                                  >
+                                    <Eye className="w-4 h-4" />
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => setLogPeer(peer)}
+                                title="History"
+                              >
+                                <ScrollText className="w-4 h-4" />
+                              </Button>
+                            </>
                           ) : (
                             <>
                               <Button

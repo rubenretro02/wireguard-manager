@@ -8,7 +8,7 @@ import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
-import { starhomePeersForRouter } from "@/lib/starhome";
+import { starhomePeersForRouter, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -85,9 +85,18 @@ export async function POST(request: Request) {
     const adminClient = getAdminClient();
     if (!adminClient) return NextResponse.json({ error: "Service role key not configured" }, { status: 500 });
     if (action === "getInterfaces") {
-      // Sin public key ni puerto: el endpoint WG de StarVPN todavía no se conoce
+      // Un solo ingress WireGuard para todos los slots (wg.starzone.io:1276). La
+      // public key del server es una constante en lib/starhome; mientras sea null
+      // el dashboard esconde descargar/QR/ver config.
       return NextResponse.json({
-        interfaces: [{ ".id": "*1", name: "starvpn", "public-key": null, "listen-port": null, disabled: false, running: true }],
+        interfaces: [{
+          ".id": "*1",
+          name: "starvpn",
+          "public-key": STARHOME_WG_SERVER_PUBLIC_KEY,
+          "listen-port": STARHOME_WG_PORT,
+          disabled: false,
+          running: true,
+        }],
       });
     }
     if (action === "getPeers") {

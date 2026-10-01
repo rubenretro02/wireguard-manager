@@ -116,13 +116,17 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - **Rotar IP no está cableado**: falta capturar el comando que genera el dashboard para "Update IP Now"
   (`ROTATE_COMMAND` / `ROTATE_SLOT_FIELD` en `starhome.ts`). Hoy el botón devuelve 502 con
   "IP rotation isn't wired to StarHome yet".
-- Cómo autentica el proxy (¿lista blanca en el dashboard? ¿`vpnusername`/`vpnpassword`?). Sin eso el
-  usuario asignado tiene host:puerto y login pero puede no poder conectar.
-- **Config WireGuard de los slots**: StarVPN entrega `wg_private_key` + `wg_ipv4` por slot, pero
-  falta el `Endpoint` y la `PublicKey` del server de cada región (no vienen en `refresh_data`). Por
-  eso en el Dashboard la fila StarVPN no tiene descargar/QR/ver config. Cuando se consiga un `.conf`
-  del dashboard de StarVPN, `getInterfaces` de la rama starhome debe devolver public key + puerto y
-  `slotAsPeer` el `endpoint_host` de la región.
+- **El proxy SOCKS5 autentica por IP autorizada** (FAQ de StarVPN: hasta 5 IPs, 10 con ≥10 slots;
+  user:pass solo en planes Enterprise). `vpnusername`/`vpnpassword` son del VPN, no del proxy. Así
+  que repartir slots como proxies a sub-usuarios con IPs distintas no escala: la vía es WireGuard.
+- **Config WireGuard de los slots**: endpoint único `wg.starzone.io:1276` (guía OpenWRT de StarVPN),
+  AllowedIPs `0.0.0.0/0`, keepalive 25, sin PSK; PrivateKey/Address salen de `refresh_data`. Falta
+  SOLO la `PublicKey` del server: `STARHOME_WG_SERVER_PUBLIC_KEY` en `starhome.ts` (null). Se saca de
+  cualquier config descargado en el member area ("Wireguard Config"). Con la constante llena, el
+  Dashboard muestra descargar/QR/ver config en los slots (gateado por `interfaces[0]["public-key"]`).
+- El client area de StarVPN (`starvpn.com/dashboard`, WHMCS) está detrás del managed challenge de
+  Cloudflare: ni curl ni Playwright (headed, perfil persistente, flags anti-automation) pasan de
+  forma confiable. Lo que haga falta del dashboard lo tiene que sacar una persona.
 
 ### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
 

@@ -30,6 +30,18 @@ export const STARHOME_PROXY_HOST = "proxy.starzone.io";
 /** Slot N is proxy.starzone.io:(BASE + N). Seen on slots 1–3; assumed for the rest. */
 export const STARHOME_PROXY_PORT_BASE = 51312;
 
+/**
+ * WireGuard: every slot connects to the same ingress (StarVPN's OpenWRT guide:
+ * Endpoint wg.starzone.io:1276, AllowedIPs 0.0.0.0/0, keepalive 25, no PSK). The
+ * slot's own PrivateKey/Address come from refresh_data (wg_private_key, wg_ipv4).
+ * TODO: the server PublicKey only appears in a config downloaded from the StarVPN
+ * member area ("Wireguard Config"); until it is filled in, the dashboard hides
+ * download/QR/view config on StarVPN slots.
+ */
+export const STARHOME_WG_ENDPOINT = "wg.starzone.io";
+export const STARHOME_WG_PORT = 1276;
+export const STARHOME_WG_SERVER_PUBLIC_KEY: string | null = null;
+
 // ---------------------------------------------------------------------------
 // Provider API
 // ---------------------------------------------------------------------------
@@ -319,7 +331,7 @@ export function slotAsPeer(slot: StarhomeSlotRow, account: StarhomeAccountRow, e
     created_by_email: emails.get(who) || null,
     created_by_user_id: who,
     created_at: slot.assigned_at || account.created_at,
-    endpoint_host: null,
+    endpoint_host: STARHOME_WG_ENDPOINT,
     expires_at: slot.expires_at,
   };
 }
