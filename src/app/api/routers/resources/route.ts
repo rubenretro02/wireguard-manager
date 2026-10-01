@@ -46,6 +46,25 @@ export async function POST(request: Request) {
 
   const connectionType: ConnectionType = router.connection_type || "api";
 
+  // StarVPN accounts have no device to query; report them as reachable so the
+  // admin list doesn't paint them as down.
+  if (connectionType === "starhome") {
+    return NextResponse.json({
+      success: true,
+      resources: {
+        cpuLoad: 0,
+        freeMemory: 0,
+        totalMemory: 0,
+        uptime: "-",
+        version: "-",
+        boardName: "StarVPN",
+        architecture: "cloud",
+        cpuCount: "N/A",
+        cpuFrequency: "N/A",
+      },
+    });
+  }
+
   // Handle Linux SSH servers
   if (connectionType === "linux-ssh") {
     console.log(`[Router Resources] Connecting to Linux server ${router.host}:${router.ssh_port || 22}`);

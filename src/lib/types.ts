@@ -1,6 +1,7 @@
 export type UserRole = "admin" | "user";
 
-export type ConnectionType = "rest" | "rest-8443" | "api" | "api-ssl" | "linux-ssh";
+// "starhome" = StarVPN account (v32): no device behind it, slots come from the provider API
+export type ConnectionType = "rest" | "rest-8443" | "api" | "api-ssl" | "linux-ssh" | "starhome";
 
 export type AuthMethod = "password" | "key" | "both";
 
@@ -155,4 +156,6 @@ export interface WireGuardPeer {
   created_at?: string | null;
   // White-label endpoint (v26): <router slug>.<creator's domain>, null = use the public IP
   endpoint_host?: string | null;
+  // v32: StarVPN slots carry their own timer (starhome_slots.expires_at) instead of peer_metadata
+  expires_at?: string | null;
 }

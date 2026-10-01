@@ -96,7 +96,7 @@ export async function GET(request: Request) {
 
   for (const meta of toDisable) {
     const router = routerById.get(String(meta.router_id));
-    if (!router) continue;
+    if (!router || router.connection_type === "starhome") continue;
     try {
       if (router.connection_type === "linux-ssh") {
         const iface = meta.peer_interface || router.wg_interface;
@@ -140,7 +140,7 @@ export async function GET(request: Request) {
 
   for (const meta of scheduledMeta || []) {
     const router = routerById.get(String(meta.router_id));
-    if (!router) continue;
+    if (!router || router.connection_type === "starhome") continue;
     try {
       if (router.connection_type === "linux-ssh") {
         const iface = meta.peer_interface || router.wg_interface;

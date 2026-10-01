@@ -80,6 +80,8 @@ export async function GET(request: Request) {
   const { data: routers } = await supabase.from("routers").select("*");
 
   for (const router of (routers || []) as Router[]) {
+    // StarVPN accounts have no WireGuard server we can read handshakes from
+    if (router.connection_type === "starhome") continue;
     try {
       // Every interface this router owns (router-per-interface workflow + per-IP overrides)
       const interfaces = new Set<string>([router.wg_interface || "wg0"]);

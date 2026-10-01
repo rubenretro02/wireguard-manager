@@ -57,7 +57,10 @@ export async function POST(request: Request) {
   // Several router rows can point at the same host (one config per interface):
   // read each physical host only once.
   const byHost = new Map<string, Router>();
-  for (const r of (routers || []) as Router[]) if (!byHost.has(r.host)) byHost.set(r.host, r);
+  for (const r of (routers || []) as Router[]) {
+    if (r.connection_type === "starhome") continue; // no interface of ours behind it
+    if (!byHost.has(r.host)) byHost.set(r.host, r);
+  }
 
   const results: Array<{ host: string; name: string; ok: boolean; interfaces?: number; error?: string }> = [];
   let saved = 0;

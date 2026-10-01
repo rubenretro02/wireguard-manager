@@ -21,7 +21,9 @@ export type EntityType =
   | "nat_rule"
   | "session"
   | "socks5"
-  | "api_key";
+  | "api_key"
+  | "starhome_account"
+  | "starhome_slot";
 
 interface LogActivityParams {
   supabase: SupabaseClient;
@@ -121,6 +123,8 @@ export function formatLogMessage(
     session: "session",
     socks5: "SOCKS5 proxy",
     api_key: "API key",
+    starhome_account: "StarHome account",
+    starhome_slot: "StarHome slot",
   };
 
   const verb = actionVerbs[action] || action;

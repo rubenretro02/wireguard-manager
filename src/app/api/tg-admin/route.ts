@@ -627,6 +627,7 @@ export async function POST(request: Request) {
         const { data: routers, error } = await supabase
           .from("routers")
           .select("id, name, host, connection_type, wg_interface")
+          .neq("connection_type", "starhome") // the store can't provision on StarVPN
           .order("name");
         if (error) throw new Error(error.message);
         return NextResponse.json({ routers });

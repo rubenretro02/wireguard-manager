@@ -20,6 +20,7 @@ export async function GET(request: Request) {
 
   const { data: router } = await caller.admin.from("routers").select("*").eq("id", serverId).single();
   if (!router) return apiError("Server not found", 404);
+  if (router.connection_type === "starhome") return apiError("StarVPN servers aren't available through the API yet", 400);
 
   const scope = await buildPeerScope(caller.admin, caller, serverId);
   const peers = await listPeers(caller.admin, router as Router, scope);
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
 
   const { data: router } = await caller.admin.from("routers").select("*").eq("id", serverId).single();
   if (!router) return apiError("Server not found", 404);
+  if (router.connection_type === "starhome") return apiError("StarVPN servers aren't available through the API yet", 400);
 
   const result = await createPeer(caller.admin, router as Router, {
     name: String(name).slice(0, 80),

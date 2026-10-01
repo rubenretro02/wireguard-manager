@@ -8,6 +8,7 @@ import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
+import { starhomePeersForRouter } from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -74,6 +75,27 @@ export async function POST(request: Request) {
 
   const connectionType: ConnectionType = router.connection_type || "api";
   const isLinux = connectionType === "linux-ssh";
+
+  // =====================================================
+  // STARVPN (v32) — la cuenta es el "server", los slots son peers de solo lectura
+  // =====================================================
+  // No hay nada a lo que conectarse: la lista sale de starhome_slots (ya
+  // scopeada por dueño/asignado) y cualquier mutación de peers no aplica.
+  if (connectionType === "starhome") {
+    const adminClient = getAdminClient();
+    if (!adminClient) return NextResponse.json({ error: "Service role key not configured" }, { status: 500 });
+    if (action === "getInterfaces") {
+      // Sin public key ni puerto: el endpoint WG de StarVPN todavía no se conoce
+      return NextResponse.json({
+        interfaces: [{ ".id": "*1", name: "starvpn", "public-key": null, "listen-port": null, disabled: false, running: true }],
+      });
+    }
+    if (action === "getPeers") {
+      const peers = await starhomePeersForRouter(adminClient, routerId, { userId: user.id, isAdmin });
+      return NextResponse.json({ peers, stale: false, fetchedAt: Date.now(), source: "db" });
+    }
+    return NextResponse.json({ error: "Not available for StarVPN servers" }, { status: 400 });
+  }
 
   // =====================================================
   // GUARD DEL AUTO-DISABLE (independiente de la plataforma)

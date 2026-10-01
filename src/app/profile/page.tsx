@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe, KeyRound } from "lucide-react";
+import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe, KeyRound, Home } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
 interface DomainRecord {
@@ -37,6 +37,19 @@ interface DomainsPayload {
   endpointDomain: string | null;
   brandName: string | null;
   records: DomainRecord[];
+}
+
+interface StarhomeAccount {
+  id: string;
+  router_id: string;
+  label: string;
+  email: string;
+  package: string | null;
+  status: string | null;
+  next_due_date: string | null;
+  total_slots: number | null;
+  last_synced_at: string | null;
+  last_sync_error: string | null;
 }
 
 export default function ProfilePage() {
@@ -66,6 +79,78 @@ export default function ProfilePage() {
   const [newKeyName, setNewKeyName] = useState("");
   const [newKey, setNewKey] = useState<string | null>(null);
   const [creatingKey, setCreatingKey] = useState(false);
+
+  // StarHome (StarVPN) accounts — each one becomes a server in the selectors
+  const [starhomeEnabled, setStarhomeEnabled] = useState(false);
+  const [starhomeAccounts, setStarhomeAccounts] = useState<StarhomeAccount[]>([]);
+  const [newStarhome, setNewStarhome] = useState({ label: "", email: "", authToken: "" });
+  const [addingStarhome, setAddingStarhome] = useState(false);
+  const [syncingStarhomeId, setSyncingStarhomeId] = useState<string | null>(null);
+
+  const loadStarhome = useCallback(async () => {
+    try {
+      const res = await fetch("/api/starhome");
+      if (!res.ok) return;
+      const data = await res.json();
+      setStarhomeAccounts(data.accounts || []);
+      setStarhomeEnabled(Boolean(data.canManage));
+    } catch {
+      // optional section
+    }
+  }, []);
+
+  const starhomePost = async (payload: Record<string, unknown>) => {
+    const res = await fetch("/api/starhome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(json.error || "Request failed");
+    return json;
+  };
+
+  const addStarhome = async () => {
+    if (!newStarhome.email.trim() || !newStarhome.authToken.trim()) {
+      toast.error("Email and auth token are required");
+      return;
+    }
+    setAddingStarhome(true);
+    try {
+      const json = await starhomePost({ action: "addAccount", ...newStarhome });
+      toast.success(`Connected — ${json.slots} slots. The server is now in Dashboard and SOCKS5.`);
+      setNewStarhome({ label: "", email: "", authToken: "" });
+      await loadStarhome();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setAddingStarhome(false);
+    }
+  };
+
+  const syncStarhome = async (accountId: string) => {
+    setSyncingStarhomeId(accountId);
+    try {
+      const json = await starhomePost({ action: "sync", accountId });
+      toast.success(`Synced ${json.slots} slots`);
+      await loadStarhome();
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSyncingStarhomeId(null);
+    }
+  };
+
+  const removeStarhome = async (account: StarhomeAccount) => {
+    if (!confirm(`Remove "${account.label}"? The server disappears from Dashboard and SOCKS5. Nothing changes at StarHome.`)) return;
+    try {
+      await starhomePost({ action: "deleteAccount", accountId: account.id });
+      toast.success("Account removed");
+      await loadStarhome();
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
 
   const loadApiKeys = useCallback(async () => {
     try {
@@ -218,10 +303,11 @@ export default function ProfilePage() {
   useEffect(() => {
     loadProfile();
     loadApiKeys();
+    loadStarhome();
     // Check the records right away so the status survives a page reload
     loadDomains().then((records) => { if (records?.length) checkDns(records); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadProfile, loadDomains, loadApiKeys]);
+  }, [loadProfile, loadDomains, loadApiKeys, loadStarhome]);
 
   const handleConnect = async () => {
     setGenerating(true);
@@ -518,6 +604,95 @@ export default function ProfilePage() {
                     <ExternalLink className="w-3.5 h-3.5" />
                     API documentation
                   </a>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* StarHome (StarVPN) accounts */}
+            {starhomeEnabled && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-lg bg-primary/10 flex items-center justify-center">
+                      <Home className="w-4 h-4 text-primary" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-lg">StarHome accounts</CardTitle>
+                      <CardDescription>
+                        Connect a StarVPN account and it becomes a server: its slots show up as peers
+                        in the Dashboard and as proxies in SOCKS5.
+                      </CardDescription>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {starhomeAccounts.length > 0 && (
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      {starhomeAccounts.map((a) => (
+                        <div
+                          key={a.id}
+                          className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-medium truncate">{a.label}</div>
+                            <div className="text-muted-foreground truncate">
+                              {a.email} · {a.package || "—"} · {a.total_slots ?? "?"} slots
+                              {a.next_due_date && ` · renews ${a.next_due_date}`}
+                            </div>
+                            {a.last_sync_error && <div className="text-red-400">Sync failed: {a.last_sync_error}</div>}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={a.status?.toLowerCase() === "active" ? "default" : "destructive"}>
+                              {a.status || "unknown"}
+                            </Badge>
+                            <span className="text-muted-foreground hidden sm:inline">
+                              {a.last_synced_at ? `synced ${new Date(a.last_synced_at).toLocaleString()}` : "never synced"}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7"
+                              title="Sync from StarHome"
+                              onClick={() => syncStarhome(a.id)}
+                              disabled={syncingStarhomeId === a.id}
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${syncingStarhomeId === a.id ? "animate-spin" : ""}`} />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-7 text-red-400" onClick={() => removeStarhome(a)}>
+                              Remove
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="grid gap-2 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                    <Input
+                      placeholder="Server name (e.g. StarVPN)"
+                      value={newStarhome.label}
+                      onChange={(e) => setNewStarhome({ ...newStarhome, label: e.target.value })}
+                    />
+                    <Input
+                      type="email"
+                      placeholder="StarHome email"
+                      value={newStarhome.email}
+                      onChange={(e) => setNewStarhome({ ...newStarhome, email: e.target.value })}
+                    />
+                    <Input
+                      type="password"
+                      placeholder="Auth token"
+                      value={newStarhome.authToken}
+                      onChange={(e) => setNewStarhome({ ...newStarhome, authToken: e.target.value })}
+                    />
+                    <Button onClick={addStarhome} disabled={addingStarhome} className="gap-2 shrink-0">
+                      {addingStarhome ? <Loader2 className="w-4 h-4 animate-spin" /> : <Home className="w-4 h-4" />}
+                      Connect
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    StarVPN dashboard → API Information → Create Auth Token. One token covers every slot of the account.
+                  </p>
                 </CardContent>
               </Card>
             )}

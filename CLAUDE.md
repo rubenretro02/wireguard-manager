@@ -43,17 +43,21 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ### 2026-09-30 — Cuentas StarHome (StarVPN) con slots residenciales (v32)
 
-**Qué es:** un admin o semi-admin (`can_create_users`) pega el email + auth token de su cuenta
-StarHome en `/starhome` y sus slots (70 en el caso de homevpn) aparecen como proxies SOCKS5
-(`proxy.starzone.io:puerto`) con país/región/ISP y login. Desde ahí rota la IP, asigna slots a los
-usuarios que creó y les pone timer. Página propia (no va en Dashboard ni en SOCKS5: un slot no es
-un peer WG ni un proxy nuestro). El usuario asignado ve sus slots en "My slots" de la misma página.
+**Qué es:** un admin o semi-admin (`can_create_users`) conecta su cuenta de StarVPN desde
+`/profile` ("StarHome accounts": email + auth token) y la cuenta pasa a ser **un server más**: una
+fila en `routers` con `connection_type = "starhome"` (host `proxy.starzone.io`, username = email,
+password = token) que sale en todos los selectores. Sus slots (70 en el caso de homevpn) se ven
+como **peers de solo lectura en el Dashboard** y como **proxies en /socks5**
+(`proxy.starzone.io:puerto`, login `vpnusername:vpnpassword`), donde el dueño asigna slots a los
+usuarios que creó, les pone timer y pide "Update IP". El usuario asignado ve el server y solo sus
+slots en las dos páginas.
 
-**Migración SQL:** `scripts/migration-v32-starhome.sql` — `starhome_accounts` (owner, email,
-auth_token en claro como `routers.password`, package/status/next_due_date/total_slots, last_synced)
-y `starhome_slots` (slot_number, port, país/región/ISP, vpn_username/password, remaining_updates,
-`raw` jsonb con la entrada completa, + name/assigned_user_id/expires_at nuestros). RLS: dueño y admin;
-en slots también el asignado (el Sidebar lo usa). La app escribe con service role.
+**Migración SQL:** `scripts/migration-v32-starhome.sql` — `starhome_accounts` (`router_id` UNIQUE →
+`routers` ON DELETE CASCADE, owner, email, auth_token en claro como `routers.password`,
+package/status/next_due_date/total_slots, last_synced) y `starhome_slots` (slot_number, port,
+país/región/ISP, vpn_username/password, remaining_updates, `raw` jsonb con la entrada completa,
++ name/assigned_user_id/expires_at nuestros). RLS: dueño y admin; en slots también el asignado. La
+app escribe con service role. **Borrar el router borra todo en cascada** (cuenta, slots y accesos).
 
 **La API, reverse-engineered del dashboard de StarVPN ("API Information"):**
 - Un solo endpoint `POST https://api.starhome.io/v1/` con envelope fijo
@@ -71,20 +75,42 @@ en slots también el asignado (el Sidebar lo usa). La app escribe con service ro
 - El proxy SOCKS5 no responde desde una IP no autorizada (timeout con y sin user/pass): parece lista
   blanca de IPs, así que el panel no puede mostrar la IP viva ni testear el slot.
 
-**Archivos:** `src/lib/starhome.ts` (cliente + `fetchAccountData` + `storeAccountData`/`syncAccount`),
-`/api/starhome` (GET todo-en-uno: cuentas+slots que manejo, `mySlots`, `users` candidatos; POST
-`addAccount` (valida contra StarHome antes de guardar) / `deleteAccount` / `sync` / `assignSlot` /
-`unassignSlot` / `setSlotExpiry` / `renameSlot` / `rotateIp`), `src/app/starhome/page.tsx`,
-link "StarHome" en `Sidebar.tsx`, entity types `starhome_account`/`starhome_slot` en el logger.
+**Arquitectura:**
+- `src/lib/starhome.ts`: cliente de la API (`fetchAccountData`, `rotateSlotIp`), sync a la DB
+  (`storeAccountData`/`syncAccount`), el scoping (`visibleSlots`: dueño/admin todo, otros solo lo
+  asignado), los mapeos `slotAsPeer` (Dashboard: `".id": "*sh:<slotId>"`, public key derivada de la
+  `wg_private_key` del slot, `comment` = "US-fl6 · comcast", `expires_at` en el propio peer) y
+  `slotAsProxy` (/socks5: `public_ip` = host del proxy, `port` real, `created_by` = dueño,
+  `assigned_to`/`assigned_email`), y el **control de acceso**: `grantServerAccess` inserta en
+  `user_routers` + `user_socks5_server_access` (dueño al conectar, sub-usuario al asignar) y
+  `revokeServerAccessIfUnused` los saca cuando no le queda ningún slot.
+- `/api/starhome`: GET (cuentas que manejo, re-sincronizadas si `last_synced_at` > 15 min, +
+  `users` a los que puedo asignar); POST `addAccount` (valida contra StarHome, crea el router, la
+  cuenta, los slots y el acceso del dueño) / `deleteAccount` (borra el router) / `sync` /
+  `assignSlot` / `unassignSlot` / `rotateIp`.
+- `/api/wireguard`: rama `connectionType === "starhome"` antes de todo lo demás — solo `getInterfaces`
+  (una interface `starvpn` sin public key ni puerto) y `getPeers` (desde `starhome_slots`); cualquier
+  otra acción → 400. `/api/socks5`: GET devuelve los slots como proxies; POST `starhomeAction`
+  (`getStatus` siempre running, `getActiveConnections` vacío, `testProxy` explica que no se puede,
+  `updateExpiration` escribe `starhome_slots.expires_at`; el resto 400).
+- Dashboard: `isStarhomeRouter` salta los filtros client-side de metadata/IP (el server ya scopeó),
+  `isPeerExpired`/`getTimeRemaining`/stats leen `peer.expires_at` como fallback, sin "Add Peer" y la
+  fila solo tiene History. /socks5: `isStarhome` oculta la tarjeta 3proxy y "Create Proxy", el
+  auto-disable no corre, Host:Port usa `proxy.port` (antes `:1080` fijo en 7 lugares), y la fila
+  tiene timer / assign (diálogo con `users` de `/api/starhome`) / unassign / Update IP.
+- Saltean routers `starhome`: cron `peer-presence`, cron `enforce-peer-expiry`, sync de
+  `/api/interfaces`, `tg-admin listRouters`, `/api/v1/peers` (400). `/api/routers/resources` responde
+  un "Connected" sintético para que Admin → Routers no lo pinte caído.
 
 **Gotchas:**
 - El upsert de slots solo lleva columnas del proveedor → los sync nunca pisan asignación ni timer.
-- El timer es **lazy**: cada GET primero desasigna los vencidos (no hay cron). Al vencer solo se quita
-  la asignación; en StarHome no cambia nada.
-- El GET re-sincroniza cuentas con `last_synced_at` > 15 min (una llamada a StarHome por cuenta).
-- El Sidebar consulta `starhome_slots` por su cuenta (RLS) para mostrar el link a usuarios asignados;
-  sin la migración el count es null y el link no aparece. Admin/semi-admin siempre lo ven.
+- El timer es **lazy**: cada lectura (`visibleSlots`) primero desasigna los vencidos y les quita el
+  acceso al server (no hay cron). En StarHome no cambia nada.
+- Los peers StarVPN NO tienen `peer_metadata`: el timer vive solo en `starhome_slots.expires_at`.
+  No agregar acciones de timer del Dashboard a estos peers (volverían los dos relojes de v24).
 - Semi-admins solo asignan a `profiles.created_by_user_id = yo`; admin a cualquiera.
+- En Admin → Routers el server StarVPN se puede editar como si fuera MikroTik; no tiene sentido pero
+  no rompe nada (los campos SSH/API se ignoran).
 
 **Pendiente:**
 - **Rotar IP no está cableado**: falta capturar el comando que genera el dashboard para "Update IP Now"
@@ -92,8 +118,11 @@ link "StarHome" en `Sidebar.tsx`, entity types `starhome_account`/`starhome_slot
   "IP rotation isn't wired to StarHome yet".
 - Cómo autentica el proxy (¿lista blanca en el dashboard? ¿`vpnusername`/`vpnpassword`?). Sin eso el
   usuario asignado tiene host:puerto y login pero puede no poder conectar.
-- StarVPN entrega `wg_private_key` + `wg_ipv4` por slot: se podría ofrecer config WireGuard del slot,
-  pero falta el endpoint/public key del server de cada región (no viene en `refresh_data`).
+- **Config WireGuard de los slots**: StarVPN entrega `wg_private_key` + `wg_ipv4` por slot, pero
+  falta el `Endpoint` y la `PublicKey` del server de cada región (no vienen en `refresh_data`). Por
+  eso en el Dashboard la fila StarVPN no tiene descargar/QR/ver config. Cuando se consiga un `.conf`
+  del dashboard de StarVPN, `getInterfaces` de la rama starhome debe devolver public key + puerto y
+  `slotAsPeer` el `endpoint_host` de la región.
 
 ### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
 
