@@ -118,7 +118,7 @@ export default function ProfilePage() {
     setAddingStarhome(true);
     try {
       const json = await starhomePost({ action: "addAccount", ...newStarhome });
-      toast.success(`Connected — ${json.slots} slots. The server is now in Dashboard and SOCKS5.`);
+      toast.success(`Connected — ${json.slots} slots. The server is now in the Dashboard.`);
       setNewStarhome({ label: "", email: "", authToken: "" });
       await loadStarhome();
     } catch (e) {
@@ -142,7 +142,7 @@ export default function ProfilePage() {
   };
 
   const removeStarhome = async (account: StarhomeAccount) => {
-    if (!confirm(`Remove "${account.label}"? The server disappears from Dashboard and SOCKS5. Nothing changes at StarHome.`)) return;
+    if (!confirm(`Remove "${account.label}"? The server disappears from the Dashboard. Nothing changes at StarHome.`)) return;
     try {
       await starhomePost({ action: "deleteAccount", accountId: account.id });
       toast.success("Account removed");
@@ -619,8 +619,8 @@ export default function ProfilePage() {
                     <div>
                       <CardTitle className="text-lg">StarHome accounts</CardTitle>
                       <CardDescription>
-                        Connect a StarVPN account and it becomes a server: its slots show up as peers
-                        in the Dashboard and as proxies in SOCKS5.
+                        Connect a StarVPN account and it becomes a server in the Dashboard: each slot
+                        is a WireGuard peer with its own config.
                       </CardDescription>
                     </div>
                   </div>

@@ -2708,8 +2708,8 @@ PersistentKeepalive = 25`;
                               </Button>
                             </>
                           ) : isStarhomeRouter ? (
-                            // StarVPN slot: timers and assignment live in SOCKS5. The WG config
-                            // (wg.starzone.io) is offered once the server public key is known.
+                            // StarVPN slot: read-only. The WG config (wg.starzone.io) is offered
+                            // once the server public key is known.
                             <>
                               {interfaces[0]?.["public-key"] && (
                                 <>

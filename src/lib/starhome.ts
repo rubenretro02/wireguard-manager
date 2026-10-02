@@ -8,9 +8,10 @@ import { logActivity } from "@/lib/activity-logger";
  * panel's own concepts.
  *
  * A StarVPN account is a row in `routers` with connection_type "starhome" (so it
- * shows up in every server selector) plus a `starhome_accounts` row with the
- * credentials and the account status. Each slot is a `starhome_slots` row and is
- * presented as a WireGuard peer in the Dashboard and as a SOCKS5 proxy in /socks5.
+ * shows up in the Dashboard's server selector) plus a `starhome_accounts` row
+ * with the credentials and the account status. Each slot is a `starhome_slots`
+ * row presented as a WireGuard peer in the Dashboard. (The SOCKS5 side was
+ * dropped on purpose: StarVPN proxies authenticate by allowed IP, 5–10 max.)
  *
  * API (reverse-engineered from the "API Information" page of the StarVPN
  * dashboard, 2026-09-30): every call is a POST to the same URL with the same
@@ -336,34 +337,6 @@ export function slotAsPeer(slot: StarhomeSlotRow, account: StarhomeAccountRow, e
   };
 }
 
-/** /socks5 view: a slot as a proxy row (same shape as socks5_proxies + assignment info). */
-export function slotAsProxy(slot: StarhomeSlotRow, account: StarhomeAccountRow, emails: Map<string, string>) {
-  return {
-    id: slot.id,
-    router_id: account.router_id,
-    username: slot.vpn_username || "",
-    password: slot.vpn_password || "",
-    public_ip: account.proxy_host,
-    port: slot.port,
-    enabled: true,
-    max_connections: 0,
-    name: slot.name || `Slot ${slot.slot_number} · ${slotLocation(slot)}`,
-    expires_at: slot.expires_at,
-    scheduled_enable: null,
-    created_by: account.owner_user_id,
-    created_at: account.created_at,
-    last_connected_at: null,
-    bytes_sent: 0,
-    bytes_received: 0,
-    // StarVPN-only fields the /socks5 page uses to adapt the row
-    starhome: true,
-    slot_number: slot.slot_number,
-    remaining_updates: slot.remaining_updates,
-    assigned_to: slot.assigned_user_id,
-    assigned_email: slot.assigned_user_id ? emails.get(slot.assigned_user_id) || null : null,
-  };
-}
-
 export async function starhomePeersForRouter(admin: SupabaseClient, routerId: string, viewer: Viewer): Promise<WireGuardPeer[]> {
   const account = await accountForRouter(admin, routerId);
   if (!account) return [];
@@ -371,26 +344,16 @@ export async function starhomePeersForRouter(admin: SupabaseClient, routerId: st
   return slots.map((s) => slotAsPeer(s, account, emails));
 }
 
-export async function starhomeProxiesForRouter(admin: SupabaseClient, routerId: string, viewer: Viewer) {
-  const account = await accountForRouter(admin, routerId);
-  if (!account) return [];
-  const { slots, emails } = await visibleSlots(admin, account, viewer);
-  return slots.map((s) => slotAsProxy(s, account, emails));
-}
-
 // ---------------------------------------------------------------------------
 // Server access bookkeeping
 // ---------------------------------------------------------------------------
 
 /**
- * The Dashboard lists a non-admin's servers from user_routers and /socks5 from
- * user_socks5_server_access, so the owner and every assignee need a row in both.
+ * The Dashboard lists a non-admin's servers from user_routers, so the owner and
+ * every assignee need a row there to see the StarVPN server at all.
  */
 export async function grantServerAccess(admin: SupabaseClient, routerId: string, userId: string): Promise<void> {
   await admin.from("user_routers").upsert({ user_id: userId, router_id: routerId }, { onConflict: "user_id,router_id", ignoreDuplicates: true });
-  await admin
-    .from("user_socks5_server_access")
-    .upsert({ user_id: userId, router_id: routerId }, { onConflict: "user_id,router_id", ignoreDuplicates: true });
 }
 
 /** Drops the access rows once a user has no slot left on the account (never for the owner). */
@@ -403,7 +366,6 @@ export async function revokeServerAccessIfUnused(admin: SupabaseClient, account:
     .eq("assigned_user_id", userId);
   if ((count || 0) > 0) return;
   await admin.from("user_routers").delete().eq("user_id", userId).eq("router_id", account.router_id);
-  await admin.from("user_socks5_server_access").delete().eq("user_id", userId).eq("router_id", account.router_id);
 }
 
 /** Unassigns every slot whose timer ran out. Nothing changes at StarHome. */

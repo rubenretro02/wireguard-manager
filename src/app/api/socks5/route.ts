@@ -1,8 +1,6 @@
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { Socks5ProxyClient } from "@/lib/socks5-proxy";
-import { accountForRouter, canManageAccount, starhomeProxiesForRouter } from "@/lib/starhome";
-import { logActivity } from "@/lib/activity-logger";
 
 // Type for SOCKS5 proxy from database
 interface Socks5ProxyDB {
@@ -114,14 +112,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Router not found" }, { status: 404 });
   }
 
-  // StarVPN (v32): the slots are the proxies. Owner/admin see all, others only their assigned ones.
-  if (router.connection_type === "starhome") {
-    const adminClient = createAdminClient();
-    if (!adminClient) return NextResponse.json({ error: "Service role not configured" }, { status: 500 });
-    const proxies = await starhomeProxiesForRouter(adminClient, routerId, { userId: user.id, isAdmin });
-    return NextResponse.json({ proxies });
-  }
-
   // Get SOCKS5 proxies from database
   // Admin sees all, semi-admin sees their own + their created users' proxies
   // Users with can_see_all_proxies see their group's proxies
@@ -209,72 +199,6 @@ export async function GET(request: Request) {
   return NextResponse.json({ proxies: proxies || [] });
 }
 
-/**
- * StarVPN (v32) actions. There is no 3proxy behind these routers: status is
- * always "running", connections/traffic are unknown, and the only thing the
- * page can change on a slot is its timer (assignment goes through /api/starhome).
- */
-async function starhomeAction(
-  action: string,
-  params: Record<string, unknown>,
-  ctx: { userId: string; isAdmin: boolean; routerId: string }
-): Promise<NextResponse> {
-  const adminClient = createAdminClient();
-  if (!adminClient) return NextResponse.json({ error: "Service role not configured" }, { status: 500 });
-  const account = await accountForRouter(adminClient, ctx.routerId);
-  if (!account) return NextResponse.json({ error: "StarVPN account not found" }, { status: 404 });
-
-  switch (action) {
-    case "getStatus":
-      return NextResponse.json({ status: { running: true, installed: true }, publicIps: [] });
-
-    case "getActiveConnections":
-      return NextResponse.json({ success: true, activeConnections: {}, traffic: {} });
-
-    case "testProxy":
-      return NextResponse.json({ success: false, error: "StarVPN proxies only answer from the IPs allowed in the StarVPN dashboard" });
-
-    case "updateExpiration": {
-      if (!canManageAccount(account, ctx)) {
-        return NextResponse.json({ error: "You can only manage your own proxies" }, { status: 403 });
-      }
-      const slotId = String(params.proxyId || "");
-      const { data: slot } = await adminClient
-        .from("starhome_slots")
-        .select("id, slot_number")
-        .eq("id", slotId)
-        .eq("account_id", account.id)
-        .maybeSingle();
-      if (!slot) return NextResponse.json({ error: "Proxy not found" }, { status: 404 });
-
-      const expiresAt = params.expiresAt ? new Date(String(params.expiresAt)) : null;
-      if (expiresAt && Number.isNaN(expiresAt.getTime())) {
-        return NextResponse.json({ error: "Invalid expiration" }, { status: 400 });
-      }
-      const { error } = await adminClient
-        .from("starhome_slots")
-        .update({ expires_at: expiresAt ? expiresAt.toISOString() : null })
-        .eq("id", slot.id);
-      if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-
-      await logActivity({
-        supabase: adminClient,
-        userId: ctx.userId,
-        routerId: ctx.routerId,
-        action: expiresAt ? "renew" : "update",
-        entityType: "starhome_slot",
-        entityId: slot.id,
-        entityName: `Slot #${slot.slot_number}`,
-        details: { expiresAt: expiresAt ? expiresAt.toISOString() : null },
-      });
-      return NextResponse.json({ success: true });
-    }
-
-    default:
-      return NextResponse.json({ error: "Not available for StarVPN servers" }, { status: 400 });
-  }
-}
-
 // POST - Create SOCKS5 proxy or perform actions
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -336,10 +260,6 @@ export async function POST(request: Request) {
 
   if (routerError || !router) {
     return NextResponse.json({ error: "Router not found" }, { status: 404 });
-  }
-
-  if (router.connection_type === "starhome") {
-    return starhomeAction(action, params, { userId: user.id, isAdmin, routerId });
   }
 
   // Create SOCKS5 client

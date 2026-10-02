@@ -12,6 +12,13 @@
 -- guarda en claro, igual que routers.password.
 -- ============================================================
 
+-- routers.connection_type tiene un CHECK (creado a mano en Supabase, no está en
+-- los scripts) que no admite 'starhome' → "violates check constraint
+-- routers_connection_type_check" al conectar. Se recrea con el valor nuevo.
+ALTER TABLE routers DROP CONSTRAINT IF EXISTS routers_connection_type_check;
+ALTER TABLE routers ADD CONSTRAINT routers_connection_type_check
+    CHECK (connection_type IN ('rest', 'rest-8443', 'api', 'api-ssl', 'linux-ssh', 'starhome'));
+
 CREATE TABLE IF NOT EXISTS starhome_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     router_id UUID NOT NULL UNIQUE REFERENCES routers(id) ON DELETE CASCADE,

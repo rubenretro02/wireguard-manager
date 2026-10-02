@@ -53,8 +53,6 @@ import {
   ExternalLink,
   TestTube,
   Signal,
-  UserPlus,
-  UserMinus,
 } from "lucide-react";
 import type { Profile, UserCapabilities, TimeUnit } from "@/lib/types";
 
@@ -113,7 +111,6 @@ interface Router {
   id: string;
   name: string;
   host: string;
-  connection_type?: string;
 }
 
 interface Socks5Proxy {
@@ -134,12 +131,6 @@ interface Socks5Proxy {
   bytes_received: number;
   last_connected_at: string | null;
   creator?: { email: string } | null;
-  // StarVPN slots (v32): the proxy is a slot of a connected StarHome account
-  starhome?: boolean;
-  slot_number?: number;
-  remaining_updates?: number | null;
-  assigned_to?: string | null;
-  assigned_email?: string | null;
 }
 
 interface Socks5Status {
@@ -260,9 +251,6 @@ export default function Socks5Page() {
   // Creator emails map
   const [creatorEmails, setCreatorEmails] = useState<Record<string, string>>({});
 
-  // StarVPN (v32): no 3proxy behind the server, the rows are the account's slots
-  const isStarhome = routers.find((r) => r.id === selectedRouterId)?.connection_type === "starhome";
-
   // Stats calculation
   const stats = useMemo(() => {
     const total = proxies.length;
@@ -284,9 +272,9 @@ export default function Socks5Page() {
   const filteredProxies = useMemo(() => {
     let filtered = proxies;
 
-    // Filter by ownership for non-admins (a StarVPN slot assigned to me counts as mine)
+    // Filter by ownership for non-admins
     if (!isAdmin && currentUser) {
-      filtered = filtered.filter(p => p.created_by === currentUser.id || p.assigned_to === currentUser.id);
+      filtered = filtered.filter(p => p.created_by === currentUser.id);
     }
 
     // Apply status filter
@@ -373,13 +361,13 @@ export default function Socks5Page() {
       if (userIsAdmin) {
         const { data: routersData } = await supabase
           .from("routers")
-          .select("id, name, host, connection_type")
+          .select("id, name, host")
           .order("name");
         loadedRouters = routersData || [];
       } else {
         const { data: accessData } = await supabase
           .from("user_socks5_server_access")
-          .select("router_id, routers(id, name, host, connection_type)")
+          .select("router_id, routers(id, name, host)")
           .eq("user_id", user.id);
 
         if (!accessData || accessData.length === 0) {
@@ -535,8 +523,6 @@ export default function Socks5Page() {
   // Auto-disable expired proxies
   const autoDisableExpiredProxies = useCallback(async () => {
     if (!selectedRouterId || proxies.length === 0) return;
-    // StarVPN slots can't be toggled; their timers are enforced by the API on read
-    if (isStarhome) return;
 
     const now = new Date();
     const proxiesToDisable: Socks5Proxy[] = [];
@@ -608,7 +594,7 @@ export default function Socks5Page() {
     if (hasChanges) {
       loadProxiesAndStatus();
     }
-  }, [selectedRouterId, proxies, loadProxiesAndStatus, isStarhome]);
+  }, [selectedRouterId, proxies, loadProxiesAndStatus]);
 
   // Run auto-disable check periodically
   useEffect(() => {
@@ -1073,14 +1059,14 @@ export default function Socks5Page() {
 
   // Copy proxy string - format: ip:port:username:password
   const copyProxyString = (proxy: Socks5Proxy) => {
-    const proxyString = `${proxy.public_ip}:${proxy.port}:${proxy.username}:${proxy.password}`;
+    const proxyString = `${proxy.public_ip}:1080:${proxy.username}:${proxy.password}`;
     navigator.clipboard.writeText(proxyString);
     toast.success("Proxy copied to clipboard");
   };
 
   // Get proxy string for display
   const getProxyString = (proxy: Socks5Proxy) => {
-    return `${proxy.public_ip}:${proxy.port}:${proxy.username}:${proxy.password}`;
+    return `${proxy.public_ip}:1080:${proxy.username}:${proxy.password}`;
   };
 
   // Generate random password
@@ -1107,76 +1093,6 @@ export default function Socks5Page() {
   // Helper functions
   const canManageProxy = (proxy: Socks5Proxy) => {
     return isAdmin || proxy.created_by === currentUser?.id;
-  };
-
-  // StarVPN slots (v32): assignment and IP rotation go through /api/starhome (the slot is the proxy)
-  const [assignSlotProxy, setAssignSlotProxy] = useState<Socks5Proxy | null>(null);
-  const [assignSlotUserId, setAssignSlotUserId] = useState("");
-  const [assignableUsers, setAssignableUsers] = useState<{ id: string; email: string }[]>([]);
-  const [assigningSlot, setAssigningSlot] = useState(false);
-  const [rotatingSlotId, setRotatingSlotId] = useState<string | null>(null);
-
-  const starhomePost = async (payload: Record<string, unknown>) => {
-    const res = await fetch("/api/starhome", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || "Request failed");
-    return json;
-  };
-
-  const openAssignSlot = async (proxy: Socks5Proxy) => {
-    setAssignSlotProxy(proxy);
-    setAssignSlotUserId("");
-    try {
-      const res = await fetch("/api/starhome");
-      const data = await res.json();
-      setAssignableUsers(data.users || []);
-    } catch {
-      setAssignableUsers([]);
-    }
-  };
-
-  const handleAssignSlot = async () => {
-    if (!assignSlotProxy || !assignSlotUserId) return;
-    setAssigningSlot(true);
-    try {
-      // Keeps whatever timer the slot already has
-      await starhomePost({ action: "assignSlot", slotId: assignSlotProxy.id, userId: assignSlotUserId, expiresAt: assignSlotProxy.expires_at });
-      toast.success("Slot assigned");
-      setAssignSlotProxy(null);
-      await loadProxiesAndStatus();
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setAssigningSlot(false);
-    }
-  };
-
-  const handleUnassignSlot = async (proxy: Socks5Proxy) => {
-    try {
-      await starhomePost({ action: "unassignSlot", slotId: proxy.id });
-      toast.success("Slot unassigned");
-      await loadProxiesAndStatus();
-    } catch (e) {
-      toast.error((e as Error).message);
-    }
-  };
-
-  const handleRotateSlot = async (proxy: Socks5Proxy) => {
-    if (!confirm(`Ask StarVPN for a new IP on ${proxy.name}?${proxy.remaining_updates != null ? ` ${proxy.remaining_updates} updates left.` : ""}`)) return;
-    setRotatingSlotId(proxy.id);
-    try {
-      await starhomePost({ action: "rotateIp", slotId: proxy.id });
-      toast.success("New IP requested");
-      await loadProxiesAndStatus();
-    } catch (e) {
-      toast.error((e as Error).message);
-    } finally {
-      setRotatingSlotId(null);
-    }
   };
 
   // Check if user can delete (requires can_delete capability)
@@ -1353,7 +1269,7 @@ export default function Socks5Page() {
           </div>
 
           {/* Admin Status Card */}
-          {isAdmin && selectedRouterId && !isStarhome && (
+          {isAdmin && selectedRouterId && (
             <Card className="mb-6">
               <CardHeader>
                 <CardTitle className="flex items-center justify-between">
@@ -1527,12 +1443,10 @@ export default function Socks5Page() {
                 >
                   <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
                 </Button>
-                {!isStarhome && (
-                  <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
-                    <Plus className="w-4 h-4" />
-                    Create Proxy
-                  </Button>
-                )}
+                <Button onClick={() => setShowCreateDialog(true)} className="gap-2">
+                  <Plus className="w-4 h-4" />
+                  Create Proxy
+                </Button>
               </div>
             </div>
 
@@ -1541,9 +1455,7 @@ export default function Socks5Page() {
               <div className="py-16 text-center text-muted-foreground">
                 {searchQuery || statusFilter !== "all"
                   ? "No proxies match your filters"
-                  : isStarhome
-                    ? "No slots synced yet — sync the account from your Profile."
-                    : "No proxies found. Create your first proxy above."}
+                  : "No proxies found. Create your first proxy above."}
               </div>
             ) : (
               <Table>
@@ -1595,11 +1507,6 @@ export default function Socks5Page() {
                         {/* Name Column — row is clickable to open proxy details/config (like peers) */}
                         <TableCell className="font-medium">
                           {proxy.name || "-"}
-                          {proxy.assigned_email && (
-                            <Badge variant="outline" className="ml-2 text-[10px] font-normal" title={proxy.assigned_email}>
-                              {proxy.assigned_email.split("@")[0]}
-                            </Badge>
-                          )}
                         </TableCell>
 
                         {/* Username Column */}
@@ -1651,7 +1558,7 @@ export default function Socks5Page() {
 
                         {/* Host:Port Column */}
                         <TableCell className="font-mono text-sm text-cyan-400">
-                          {proxy.public_ip}:{proxy.port}
+                          {proxy.public_ip}:1080
                         </TableCell>
 
                         {/* Traffic Column */}
@@ -1728,50 +1635,6 @@ export default function Socks5Page() {
                             >
                               <Copy className="w-4 h-4" />
                             </Button>
-                            {proxy.starhome ? (
-                              canManage && (
-                                <>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => openEditExpiration(proxy)}
-                                    title="Edit expiration"
-                                    className={proxy.expires_at ? "text-amber-400" : ""}
-                                  >
-                                    <CalendarClock className="w-4 h-4" />
-                                  </Button>
-                                  {proxy.assigned_to ? (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => handleUnassignSlot(proxy)}
-                                      title={`Unassign from ${proxy.assigned_email || "user"}`}
-                                    >
-                                      <UserMinus className="w-4 h-4" />
-                                    </Button>
-                                  ) : (
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => openAssignSlot(proxy)}
-                                      title="Assign to a user"
-                                    >
-                                      <UserPlus className="w-4 h-4" />
-                                    </Button>
-                                  )}
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => handleRotateSlot(proxy)}
-                                    disabled={rotatingSlotId === proxy.id || proxy.remaining_updates === 0}
-                                    title={`Update IP now${proxy.remaining_updates != null ? ` (${proxy.remaining_updates} left)` : ""}`}
-                                  >
-                                    <RotateCcw className={`w-4 h-4 ${rotatingSlotId === proxy.id ? "animate-spin" : ""}`} />
-                                  </Button>
-                                </>
-                              )
-                            ) : (
-                            <>
                             {/* Test connection */}
                             <Button
                               variant="ghost"
@@ -1846,8 +1709,6 @@ export default function Socks5Page() {
                                 )}
                               </>
                             )}
-                            </>
-                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -1859,39 +1720,6 @@ export default function Socks5Page() {
           </div>
         </div>
       </PageContent>
-
-      {/* Assign StarVPN slot */}
-      <Dialog open={!!assignSlotProxy} onOpenChange={(o) => !o && setAssignSlotProxy(null)}>
-        <DialogContent className="bg-card border-border">
-          <DialogHeader>
-            <DialogTitle>Assign {assignSlotProxy?.name}</DialogTitle>
-            <DialogDescription>
-              The user sees this proxy and its login in their SOCKS5 page. Set a timer with the calendar button.
-            </DialogDescription>
-          </DialogHeader>
-          {assignableUsers.length > 0 ? (
-            <Select value={assignSlotUserId} onValueChange={setAssignSlotUserId}>
-              <SelectTrigger className="bg-secondary border-border">
-                <SelectValue placeholder="Choose a user" />
-              </SelectTrigger>
-              <SelectContent>
-                {assignableUsers.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>{u.email}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : (
-            <p className="text-sm text-muted-foreground">You have no users yet — create them in My Users.</p>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAssignSlotProxy(null)}>Cancel</Button>
-            <Button onClick={handleAssignSlot} disabled={!assignSlotUserId || assigningSlot}>
-              {assigningSlot && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
-              Assign
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Create Proxy Dialog */}
       <Dialog open={showCreateDialog} onOpenChange={setShowCreateDialog}>
@@ -2120,7 +1948,7 @@ export default function Socks5Page() {
           <DialogHeader>
             <DialogTitle>Edit Proxy</DialogTitle>
             <DialogDescription>
-              Edit {editingProxy?.username} @ {editingProxy?.public_ip}:{editingProxy?.port}
+              Edit {editingProxy?.username} @ {editingProxy?.public_ip}:1080
             </DialogDescription>
           </DialogHeader>
 
@@ -2205,7 +2033,7 @@ export default function Socks5Page() {
               {/* Proxy Info */}
               <div className="p-4 bg-secondary rounded-lg space-y-2">
                 <p className="font-medium">{editingExpirationProxy.name || editingExpirationProxy.username}</p>
-                <p className="text-sm text-muted-foreground font-mono">{editingExpirationProxy.public_ip}:{editingExpirationProxy.port}</p>
+                <p className="text-sm text-muted-foreground font-mono">{editingExpirationProxy.public_ip}:1080</p>
                 <div className="flex items-center gap-2">
                   <Badge variant="outline" className={editingExpirationProxy.enabled ? "text-emerald-400" : "text-red-400"}>
                     {editingExpirationProxy.enabled ? "Enabled" : "Disabled"}
@@ -2375,7 +2203,7 @@ export default function Socks5Page() {
             <div className="space-y-4 py-4">
               <div className="p-4 bg-secondary rounded-lg space-y-2">
                 <p className="font-medium">{renewingProxy.name || renewingProxy.username}</p>
-                <p className="text-sm text-muted-foreground font-mono">{renewingProxy.public_ip}:{renewingProxy.port}</p>
+                <p className="text-sm text-muted-foreground font-mono">{renewingProxy.public_ip}:1080</p>
                 {renewingProxy.expires_at && (
                   <p className="text-sm text-red-400">
                     Expired: {formatDate(renewingProxy.expires_at)}
@@ -2589,8 +2417,8 @@ export default function Socks5Page() {
                   <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">Host:Port</Label>
                     <div className="flex items-center gap-1">
-                      <code className="text-sm font-mono text-cyan-400 truncate flex-1">{proxy.public_ip}:{proxy.port}</code>
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyToClipboard(`${proxy.public_ip}:${proxy.port}`, "Host:Port")}>
+                      <code className="text-sm font-mono text-cyan-400 truncate flex-1">{proxy.public_ip}:1080</code>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copyToClipboard(`${proxy.public_ip}:1080`, "Host:Port")}>
                         <Copy className="w-3 h-3" />
                       </Button>
                     </div>
