@@ -9,6 +9,7 @@ import {
   slugFromRouterName,
 } from "@/lib/endpoint-domain";
 import { ensurePanelDomain, removePanelDomain } from "@/lib/dokploy";
+import { STARHOME_WG_ENDPOINT } from "@/lib/starhome";
 
 // node:dns is not available on Edge
 export const runtime = "nodejs";
@@ -59,7 +60,7 @@ export async function GET() {
   // Only the servers this tenant actually has: never leak other tenants' hosts
   let routerQuery = ctx.admin
     .from("routers")
-    .select("id, name, host, endpoint_ip, endpoint_slug, endpoint_domain")
+    .select("id, name, host, endpoint_ip, endpoint_slug, endpoint_domain, connection_type")
     .order("name");
   if (!ctx.isAdmin) {
     const { data: access } = await ctx.admin
@@ -84,14 +85,23 @@ export async function GET() {
 
   // Router rows that share a host+slug (one config per interface) are the same
   // DNS record — list it once.
-  const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string }>();
-  for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_ip: string | null; endpoint_slug: string | null; endpoint_domain: string | null }>) {
+  const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string; recordType: "A" | "CNAME" }>();
+  for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_ip: string | null; endpoint_slug: string | null; endpoint_domain: string | null; connection_type: string | null }>) {
     const slug = r.endpoint_slug || slugFromRouterName(r.name);
     const host = buildEndpointHost(slug, endpointDomain || r.endpoint_domain);
     if (!host || byHost.has(host)) continue;
     // endpoint_ip !== host on servers behind a CHR/gateway, where `host` is the
-    // gateway (SSH arrives by port-forward) and WireGuard listens on the block's IPs
-    byHost.set(host, { routerId: r.id, routerName: r.name, slug, host, target: r.endpoint_ip || r.host });
+    // gateway (SSH arrives by port-forward) and WireGuard listens on the block's IPs.
+    // StarVPN (v32) has no IP of ours: the name is a CNAME to the provider's WG ingress.
+    const isStarhome = r.connection_type === "starhome";
+    byHost.set(host, {
+      routerId: r.id,
+      routerName: r.name,
+      slug,
+      host,
+      target: isStarhome ? STARHOME_WG_ENDPOINT : r.endpoint_ip || r.host,
+      recordType: isStarhome ? "CNAME" : "A",
+    });
   }
 
   return NextResponse.json({
@@ -104,8 +114,39 @@ export async function GET() {
 }
 
 /**
+ * A records of `host`. DNS-over-HTTPS first: the container's resolver caches
+ * negative answers, so a record created after the first check looks missing for
+ * minutes even though it already resolves everywhere else. DoH also works where
+ * outbound UDP/53 is blocked.
+ */
+async function resolveA(host: string): Promise<{ ips: string[]; notFound?: boolean }> {
+  try {
+    const res = await fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(host)}&type=A`, {
+      headers: { accept: "application/dns-json" },
+      signal: AbortSignal.timeout(6000),
+    });
+    if (res.ok) {
+      const json = (await res.json()) as { Status: number; Answer?: Array<{ type: number; data: string }> };
+      const ips = (json.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
+      if (ips.length > 0) return { ips };
+      if (json.Status === 3) return { ips: [], notFound: true };
+    }
+  } catch {
+    // fall through to the system resolver
+  }
+
+  try {
+    return { ips: await dns.resolve4(host) };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code || "";
+    return { ips: [], notFound: code === "ENOTFOUND" || code === "NODATA" };
+  }
+}
+
+/**
  * POST { panelDomain?, endpointDomain?, brandName? } — save the tenant's domains.
- * POST { action: "check", host } — resolve a hostname and report the IPs it answers.
+ * POST { action: "check", host, target? } — resolve a hostname and report the IPs it
+ * answers (plus the target's IPs when the target is a hostname, i.e. a CNAME record).
  */
 export async function POST(request: Request) {
   const { ctx, error } = await context();
@@ -116,32 +157,14 @@ export async function POST(request: Request) {
   if (body.action === "check") {
     const host = normalizeDomain(String(body.host || ""));
     if (!isValidDomain(host)) return NextResponse.json({ error: "Invalid hostname" }, { status: 400 });
-    // DNS-over-HTTPS first: the container's resolver caches negative answers, so
-    // a record created after the first check looks missing for minutes even
-    // though it already resolves everywhere else. DoH also works where outbound
-    // UDP/53 is blocked.
-    try {
-      const res = await fetch(`https://1.1.1.1/dns-query?name=${encodeURIComponent(host)}&type=A`, {
-        headers: { accept: "application/dns-json" },
-        signal: AbortSignal.timeout(6000),
-      });
-      if (res.ok) {
-        const json = (await res.json()) as { Status: number; Answer?: Array<{ type: number; data: string }> };
-        const ips = (json.Answer || []).filter((a) => a.type === 1).map((a) => a.data);
-        if (ips.length > 0) return NextResponse.json({ host, ips });
-        if (json.Status === 3) return NextResponse.json({ host, ips: [], notFound: true });
-      }
-    } catch {
-      // fall through to the system resolver
+    const result = await resolveA(host);
+    // CNAME targets (StarVPN): the record is right when the name answers with
+    // the same IPs the target currently has, so resolve the target too.
+    const target = normalizeDomain(String(body.target || ""));
+    if (target && !/^\d+\.\d+\.\d+\.\d+$/.test(target) && isValidDomain(target)) {
+      return NextResponse.json({ host, ...result, targetIps: (await resolveA(target)).ips });
     }
-
-    try {
-      const ips = await dns.resolve4(host);
-      return NextResponse.json({ host, ips });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException)?.code || "";
-      return NextResponse.json({ host, ips: [], notFound: code === "ENOTFOUND" || code === "NODATA" });
-    }
+    return NextResponse.json({ host, ...result });
   }
 
   if (!ctx.canConfigure) {

@@ -91,7 +91,16 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   `starhome_slots`); cualquier otra acción → 400.
 - Dashboard: `isStarhomeRouter` salta los filtros client-side de metadata/IP (el server ya scopeó),
   `isPeerExpired`/`getTimeRemaining`/stats leen `peer.expires_at` como fallback, sin "Add Peer" y la
-  fila solo tiene History + (con la public key del server) descargar/QR/ver config.
+  fila solo tiene History + (con la public key del server) descargar/QR/ver config. Connection y
+  Traffic muestran "—": StarVPN no expone handshakes ni bytes. La interface se llama `wg0`
+  (`STARHOME_WG_INTERFACE`), neutra a propósito: el tenant no quiere que sus usuarios vean "star".
+- **White-label:** `slotAsPeer` resuelve el `endpoint_host` con `buildEndpointResolver` como
+  cualquier peer → `<slug>.<dominio del tenant>`, fallback `wg.starzone.io`. Como no hay IP nuestra,
+  en Profile → "DNS records" el registro sale como **CNAME → wg.starzone.io** (`recordType`) y el
+  "Check DNS" compara contra las IPs del destino (`target` → `targetIps`). El slug sale del nombre
+  del server: el dueño lo renombra desde la tarjeta de Profile (click en el nombre →
+  `renameAccount` actualiza `routers.name` + `endpoint_slug` + `label`), p. ej. "Residential" →
+  `residential.vpn.homevpnnetworks.com`.
 - `assignSlot`/`unassignSlot`/`rotateIp` existen en `/api/starhome` pero hoy no tienen UI (estaban en
   /socks5, descartado). Si hacen falta, van al Dashboard sobre la fila StarVPN.
 - Saltean routers `starhome`: cron `peer-presence`, cron `enforce-peer-expiry`, sync de
@@ -126,6 +135,12 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - El client area de StarVPN (`starvpn.com/dashboard`, WHMCS) está detrás del managed challenge de
   Cloudflare: ni curl ni Playwright (headed, perfil persistente, flags anti-automation) pasan de
   forma confiable. Lo que haga falta del dashboard lo tiene que sacar una persona.
+- **Conexión/tráfico por slot:** no hay forma hoy. La función "Get Current VPN usage" del dashboard
+  podría servir, pero su `command` es desconocido: probados sin éxito (`Function not found`)
+  `vpn_usage`, `get_vpn_usage`, `usage`, `get_usage`, `current_usage`, `bandwidth`, `traffic`,
+  `data_usage`, `vpn_status`, `status` y variantes. Un comando inexistente devuelve
+  `{"result":"error","message":"Function not found"}`, así que probar nombres de lectura es inocuo;
+  NO adivinar los de escritura (Update IP consume rotaciones).
 
 ### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
 
@@ -654,6 +669,10 @@ Buy / Payments (agents solo ven los 3 primeros).
 
 ## Deploy
 
+- **Migraciones SQL:** desde 2026-10-02 las aplica Claude Code con la Management API de Supabase
+  (`POST https://api.supabase.com/v1/projects/kqghdmlfweqbkqwiwgct/database/query`, header
+  `Authorization: Bearer $SUPABASE_ACCESS_TOKEN`, body `{"query": "..."}`). El token está en
+  `.env.local` (gitignored) como `SUPABASE_ACCESS_TOKEN`. Tras DDL, `NOTIFY pgrst, 'reload schema'`.
 - **Vercel Hobby** no despliega commits de colaboradores externos. Si "Same" hace commits, abrir PR y mergear con la cuenta principal (ver `RESUME.md`).
 - Variables de entorno requeridas en Vercel: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`.
 - `runtime = "nodejs"` está forzado en `/api/wireguard/route.ts` y `/api/routers/resources/route.ts` porque `ssh2` necesita módulos nativos (no funciona en Edge).

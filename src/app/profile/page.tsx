@@ -20,6 +20,8 @@ interface DomainRecord {
   slug: string;
   host: string | null;
   target: string;
+  // "CNAME" for StarVPN servers (target is a hostname), "A" otherwise
+  recordType?: "A" | "CNAME";
 }
 
 interface ApiKeyRow {
@@ -71,7 +73,7 @@ export default function ProfilePage() {
   const [brandName, setBrandName] = useState("");
   const [savingDomains, setSavingDomains] = useState(false);
   const [checkingDns, setCheckingDns] = useState(false);
-  const [dnsResults, setDnsResults] = useState<Record<string, { ips: string[] }>>({});
+  const [dnsResults, setDnsResults] = useState<Record<string, { ips: string[]; targetIps?: string[] }>>({});
 
   // API keys
   const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([]);
@@ -138,6 +140,21 @@ export default function ProfilePage() {
       toast.error((e as Error).message);
     } finally {
       setSyncingStarhomeId(null);
+    }
+  };
+
+  const renameStarhome = async (account: StarhomeAccount) => {
+    const label = prompt(
+      'Server name. It is also the DNS label of its endpoint, e.g. "Residential" → residential.<your endpoint domain>',
+      account.label
+    );
+    if (label == null || !label.trim() || label.trim() === account.label) return;
+    try {
+      await starhomePost({ action: "renameAccount", accountId: account.id, label: label.trim() });
+      toast.success("Renamed");
+      await Promise.all([loadStarhome(), loadDomains()]);
+    } catch (e) {
+      toast.error((e as Error).message);
     }
   };
 
@@ -269,10 +286,14 @@ export default function ProfilePage() {
     const list = records || domains?.records || [];
     if (list.length === 0) return;
     setCheckingDns(true);
-    const results: Record<string, { ips: string[] }> = {};
+    const results: Record<string, { ips: string[]; targetIps?: string[] }> = {};
     await Promise.all(
       list.map(async (record) => {
-        if (record.host) results[record.host] = { ips: await resolveHost(record.host) };
+        if (!record.host) return;
+        const entry: { ips: string[]; targetIps?: string[] } = { ips: await resolveHost(record.host) };
+        // CNAME (StarVPN): the record is right when the name answers with the target's current IPs
+        if (record.recordType === "CNAME") entry.targetIps = await resolveHost(record.target);
+        results[record.host] = entry;
       })
     );
     setDnsResults(results);
@@ -472,7 +493,9 @@ export default function ProfilePage() {
                       <div className="rounded-lg border border-border overflow-hidden">
                         {domains.records.map((r) => {
                           const check = dnsResults[r.host!];
-                          const ok = check?.ips?.includes(r.target);
+                          const ok = r.recordType === "CNAME"
+                            ? Boolean(check?.targetIps?.length) && check!.ips.some((ip) => check!.targetIps!.includes(ip))
+                            : check?.ips?.includes(r.target);
                           return (
                             <div
                               key={r.routerId}
@@ -483,7 +506,7 @@ export default function ProfilePage() {
                                 <div className="text-muted-foreground">{r.routerName}</div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
-                                <Badge variant="outline" className="font-mono">A → {r.target}</Badge>
+                                <Badge variant="outline" className="font-mono">{r.recordType || "A"} → {r.target}</Badge>
                                 {check && (
                                   ok ? (
                                     <span className="text-green-500 flex items-center gap-1">
@@ -634,7 +657,14 @@ export default function ProfilePage() {
                           className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 text-xs"
                         >
                           <div className="min-w-0">
-                            <div className="font-medium truncate">{a.label}</div>
+                            <button
+                              type="button"
+                              className="font-medium truncate text-left hover:text-primary"
+                              title="Rename (the name is also the DNS label of its endpoint)"
+                              onClick={() => renameStarhome(a)}
+                            >
+                              {a.label}
+                            </button>
                             <div className="text-muted-foreground truncate">
                               {a.email} · {a.package || "—"} · {a.total_slots ?? "?"} slots
                               {a.next_due_date && ` · renews ${a.next_due_date}`}

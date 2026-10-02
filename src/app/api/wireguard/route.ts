@@ -8,7 +8,7 @@ import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
-import { starhomePeersForRouter, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
+import { starhomePeersForRouter, STARHOME_WG_INTERFACE, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -91,7 +91,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         interfaces: [{
           ".id": "*1",
-          name: "starvpn",
+          name: STARHOME_WG_INTERFACE,
           "public-key": STARHOME_WG_SERVER_PUBLIC_KEY,
           "listen-port": STARHOME_WG_PORT,
           disabled: false,

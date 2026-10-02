@@ -2527,7 +2527,9 @@ PersistentKeepalive = 25`;
 
                       {/* Connection Status Column */}
                       <TableCell>
-                        {isDisabled ? (
+                        {isStarhomeRouter ? (
+                          <span className="text-xs text-muted-foreground" title="Not reported by this server">—</span>
+                        ) : isDisabled ? (
                           <div className="flex items-center gap-2">
                             <WifiOff className="w-4 h-4 text-muted-foreground" />
                             <span className="text-xs text-muted-foreground">Disabled</span>
@@ -2601,6 +2603,9 @@ PersistentKeepalive = 25`;
 
                       {/* Traffic Column */}
                       <TableCell className="text-sm">
+                        {isStarhomeRouter ? (
+                          <span className="text-xs text-muted-foreground" title="Not reported by this server">—</span>
+                        ) : (
                         <div className="flex flex-col gap-0.5 whitespace-nowrap">
                           <div className="flex items-center gap-1">
                             <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />
@@ -2611,6 +2616,7 @@ PersistentKeepalive = 25`;
                             <span className="text-blue-400 text-xs">{formatBytes(peer.tx)}</span>
                           </div>
                         </div>
+                        )}
                       </TableCell>
 
                       {/* Created By Column */}

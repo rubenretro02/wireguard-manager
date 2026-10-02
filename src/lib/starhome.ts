@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { WireGuardPeer } from "@/lib/types";
 import { publicKeyFromPrivate } from "@/lib/wireguard-keys";
 import { logActivity } from "@/lib/activity-logger";
+import { buildEndpointResolver } from "@/lib/endpoint-domain";
 
 /**
  * StarHome (StarVPN) — provider API client + the mapping of its slots onto the
@@ -42,6 +43,12 @@ export const STARHOME_PROXY_PORT_BASE = 51312;
 export const STARHOME_WG_ENDPOINT = "wg.starzone.io";
 export const STARHOME_WG_PORT = 1276;
 export const STARHOME_WG_SERVER_PUBLIC_KEY: string | null = null;
+/**
+ * Interface name the Dashboard shows for these peers (generateConfig looks the
+ * server key up by it). Neutral on purpose: tenants don't want the provider
+ * visible to their users.
+ */
+export const STARHOME_WG_INTERFACE = "wg0";
 
 // ---------------------------------------------------------------------------
 // Provider API
@@ -315,15 +322,20 @@ export function slotLocation(slot: Pick<StarhomeSlotRow, "country" | "region" | 
   return [place, slot.isp].filter(Boolean).join(" · ");
 }
 
-/** Dashboard view: a slot as a read-only WireGuard peer. */
-export function slotAsPeer(slot: StarhomeSlotRow, account: StarhomeAccountRow, emails: Map<string, string>): WireGuardPeer {
+/** Dashboard view: a slot as a read-only WireGuard peer. `endpointHost` = the tenant's white-label name, if any. */
+export function slotAsPeer(
+  slot: StarhomeSlotRow,
+  account: StarhomeAccountRow,
+  emails: Map<string, string>,
+  endpointHost: string | null
+): WireGuardPeer {
   const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
   const wgIpv4 = typeof slot.raw?.wg_ipv4 === "string" ? (slot.raw.wg_ipv4 as string) : null;
   const who = slot.assigned_user_id || account.owner_user_id;
   return {
     ".id": `*sh:${slot.id}`,
     name: slot.name || `Slot ${slot.slot_number}`,
-    interface: "starvpn",
+    interface: STARHOME_WG_INTERFACE,
     "public-key": (privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${slot.id}`,
     "private-key": privateKey || undefined,
     "allowed-address": wgIpv4 ? `${wgIpv4}/32` : "",
@@ -332,7 +344,7 @@ export function slotAsPeer(slot: StarhomeSlotRow, account: StarhomeAccountRow, e
     created_by_email: emails.get(who) || null,
     created_by_user_id: who,
     created_at: slot.assigned_at || account.created_at,
-    endpoint_host: STARHOME_WG_ENDPOINT,
+    endpoint_host: endpointHost || STARHOME_WG_ENDPOINT,
     expires_at: slot.expires_at,
   };
 }
@@ -341,7 +353,17 @@ export async function starhomePeersForRouter(admin: SupabaseClient, routerId: st
   const account = await accountForRouter(admin, routerId);
   if (!account) return [];
   const { slots, emails } = await visibleSlots(admin, account, viewer);
-  return slots.map((s) => slotAsPeer(s, account, emails));
+
+  // White-label (v26): <slug>.<tenant domain>, which the tenant points at
+  // wg.starzone.io with a CNAME. No domain → the provider host itself.
+  const { data: router } = await admin
+    .from("routers")
+    .select("name, endpoint_slug, endpoint_domain")
+    .eq("id", routerId)
+    .maybeSingle();
+  const resolveEndpoint = await buildEndpointResolver(admin, router || {});
+
+  return slots.map((s) => slotAsPeer(s, account, emails, resolveEndpoint(s.assigned_user_id || account.owner_user_id)));
 }
 
 // ---------------------------------------------------------------------------
