@@ -99,7 +99,11 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   y tampoco está en la API). Al vencer, `expireSlotAssignments` quita la asignación pero deja la
   fecha para que se vea "Expired". Columnas: Connection y Traffic "—" (sin handshakes ni bytes),
   Public IP "-" (no la reporta), columna extra **Location** (`peer.location`, "US-nj · comcast",
-  buscable), Allowed Address en dos líneas (v4 y v6). La interface se llama `wg0`
+  buscable), Allowed Address en dos líneas (v4 y v6). Columna **Slot** (`peer.slot_number`, fijo,
+  del proveedor) antes de Name; "By Created" ordena por slot de menor a mayor (todos tienen la
+  misma fecha); el buscador acepta "42" o "slot 42". `name` arranca vacío: es la etiqueta interna
+  del tenant (cliente que tiene el slot). El `.conf` se baja como `<name>.conf` o `slot-N.conf`.
+  La interface se llama `wg0`
   (`STARHOME_WG_INTERFACE`), neutra a propósito: el tenant no quiere que sus usuarios vean "star".
 - **White-label:** `slotAsPeer` resuelve el `endpoint_host` con `buildEndpointResolver` como
   cualquier peer → `<slug>.<dominio del tenant>`, fallback `wg.starzone.io`. Como no hay IP nuestra,

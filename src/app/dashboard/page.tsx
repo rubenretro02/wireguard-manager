@@ -688,11 +688,13 @@ export default function DashboardPage() {
         const comment = String(peer.comment || "");
         const allowedAddress = String(peer["allowed-address"] || "");
         const location = String(peer.location || "");
+        const slot = peer.slot_number != null ? String(peer.slot_number) : "";
         return (
           name.toLowerCase().includes(query) ||
           comment.toLowerCase().includes(query) ||
           allowedAddress.toLowerCase().includes(query) ||
-          location.toLowerCase().includes(query)
+          location.toLowerCase().includes(query) ||
+          slot === query.replace(/^slot\s*/, "")
         );
       });
     }
@@ -705,6 +707,12 @@ export default function DashboardPage() {
 
       switch (sortBy) {
         case "created": {
+          // StarVPN slots all share one creation date: the natural order is the
+          // provider's slot number, lowest first by default
+          if (isStarhomeRouter) {
+            comparison = (a.slot_number ?? 0) - (b.slot_number ?? 0);
+            break;
+          }
           // Sort by created_at from metadata, falling back to the creation date the
           // API merges into the peer itself (newest first by default)
           const createdA = peerMetadata[a["public-key"]]?.created_at || a.created_at;
@@ -2226,7 +2234,7 @@ PersistentKeepalive = 25`;
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${peer.name || peer.comment || "wireguard"}.conf`;
+    link.download = `${peer.name || (peer.slot_number != null ? `slot-${peer.slot_number}` : peer.comment) || "wireguard"}.conf`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2477,6 +2485,7 @@ PersistentKeepalive = 25`;
                       aria-label="Select all"
                     />
                   </TableHead>
+                  {isStarhomeRouter && <TableHead className="text-muted-foreground">Slot</TableHead>}
                   <TableHead className="text-muted-foreground">Name</TableHead>
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
@@ -2534,6 +2543,13 @@ PersistentKeepalive = 25`;
                           aria-label={`Select ${peer.name || "peer"}`}
                         />
                       </TableCell>
+
+                      {/* Slot Column (StarVPN: the provider's fixed slot number) */}
+                      {isStarhomeRouter && (
+                        <TableCell className="font-mono text-sm whitespace-nowrap">
+                          {peer.slot_number ?? "-"}
+                        </TableCell>
+                      )}
 
                       {/* Name Column */}
                       <TableCell>

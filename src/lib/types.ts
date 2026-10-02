@@ -160,4 +160,6 @@ export interface WireGuardPeer {
   expires_at?: string | null;
   // v32: "US-nj · comcast" for StarVPN slots (their public IP isn't reported, so comment stays empty)
   location?: string | null;
+  // v32: the provider's slot number (fixed); `name` is the tenant's own label for the slot
+  slot_number?: number;
 }

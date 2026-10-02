@@ -341,7 +341,9 @@ export function slotAsPeer(
   const who = slot.assigned_user_id || account.owner_user_id;
   return {
     ".id": `*sh:${slot.id}`,
-    name: slot.name || `Slot ${slot.slot_number}`,
+    // The slot number is fixed and shown in its own column; name is the tenant's internal label
+    name: slot.name || "",
+    slot_number: slot.slot_number,
     interface: STARHOME_WG_INTERFACE,
     "public-key": (privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${slot.id}`,
     "private-key": privateKey || undefined,
