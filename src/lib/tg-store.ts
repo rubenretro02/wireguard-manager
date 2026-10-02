@@ -206,7 +206,7 @@ export async function resolveTgEndpointHost(
 ): Promise<string | null> {
   const { data: router } = await supabase
     .from("routers")
-    .select("name, endpoint_slug, endpoint_domain")
+    .select("id, name, endpoint_slug, endpoint_domain") // id: the tenant's own label (v34) is keyed by it
     .eq("id", routerId)
     .single();
   if (!router) return null;
