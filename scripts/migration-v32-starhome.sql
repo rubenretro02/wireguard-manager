@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS starhome_accounts (
     UNIQUE (owner_user_id, email)
 );
 
+-- Bases que corrieron la primera versión de este script (sin router_id): la
+-- columna se agrega aparte porque CREATE TABLE IF NOT EXISTS no la añade.
+ALTER TABLE starhome_accounts
+    ADD COLUMN IF NOT EXISTS router_id UUID UNIQUE REFERENCES routers(id) ON DELETE CASCADE;
+
 CREATE TABLE IF NOT EXISTS starhome_slots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     account_id UUID NOT NULL REFERENCES starhome_accounts(id) ON DELETE CASCADE,
@@ -91,3 +96,7 @@ BEGIN
       );
   END IF;
 END $$;
+
+-- PostgREST cachea el esquema: sin esto la API puede seguir diciendo
+-- "Could not find the 'router_id' column ... in the schema cache" un rato.
+NOTIFY pgrst, 'reload schema';
