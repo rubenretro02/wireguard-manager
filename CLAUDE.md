@@ -97,10 +97,12 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - **White-label:** `slotAsPeer` resuelve el `endpoint_host` con `buildEndpointResolver` como
   cualquier peer → `<slug>.<dominio del tenant>`, fallback `wg.starzone.io`. Como no hay IP nuestra,
   en Profile → "DNS records" el registro sale como **CNAME → wg.starzone.io** (`recordType`) y el
-  "Check DNS" compara contra las IPs del destino (`target` → `targetIps`). El slug sale del nombre
-  del server: el dueño lo renombra desde la tarjeta de Profile (click en el nombre →
-  `renameAccount` actualiza `routers.name` + `endpoint_slug` + `label`), p. ej. "Residential" →
-  `residential.vpn.homevpnnetworks.com`.
+  "Check DNS" compara contra las IPs del destino (`target` → `targetIps`). **El slug se edita inline
+  en esa lista** (lápiz → `POST /api/profile/domains {action:"setSlug", routerId, slug}` →
+  `routers.endpoint_slug`): el admin en cualquier server, un semi-admin solo en los que creó él
+  (`routers.created_by`, o sea sus cuentas StarVPN), porque el slug es por router y lo comparten
+  todos los tenants. Renombrar la cuenta (click en el nombre de la tarjeta) solo cambia
+  `routers.name` + `label`; mientras `endpoint_slug` sea null el slug se deriva del nombre.
 - `assignSlot`/`unassignSlot`/`rotateIp` existen en `/api/starhome` pero hoy no tienen UI (estaban en
   /socks5, descartado). Si hacen falta, van al Dashboard sobre la fila StarVPN.
 - Saltean routers `starhome`: cron `peer-presence`, cron `enforce-peer-expiry`, sync de

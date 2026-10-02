@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-logger";
-import { slugFromRouterName } from "@/lib/endpoint-domain";
 import {
   ACCOUNT_COLS,
   SLOT_COLS,
@@ -213,11 +212,8 @@ export async function POST(request: Request) {
         if ("error" in r) return r.error;
         const label = String(body.label || "").trim().slice(0, 80);
         if (!label) return NextResponse.json({ error: "Name is required" }, { status: 400 });
-        // The name doubles as the DNS label of the white-label endpoint (<slug>.<domain>)
-        await admin
-          .from("routers")
-          .update({ name: label, endpoint_slug: slugFromRouterName(label) })
-          .eq("id", r.account.router_id);
+        // The DNS label (endpoint_slug) is edited in Profile → DNS records, not here
+        await admin.from("routers").update({ name: label }).eq("id", r.account.router_id);
         await admin.from("starhome_accounts").update({ label }).eq("id", r.account.id);
         return NextResponse.json({ label });
       }

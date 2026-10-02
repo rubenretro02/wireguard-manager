@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe, KeyRound, Home } from "lucide-react";
+import { Send, Loader2, Copy, ExternalLink, Unlink, CheckCircle2, RefreshCw, Globe, KeyRound, Home, Pencil, Check, X } from "lucide-react";
 import type { Profile } from "@/lib/types";
 
 interface DomainRecord {
@@ -22,6 +22,8 @@ interface DomainRecord {
   target: string;
   // "CNAME" for StarVPN servers (target is a hostname), "A" otherwise
   recordType?: "A" | "CNAME";
+  // The slug can be renamed inline by admins, or by the owner of a connected StarVPN account
+  editable?: boolean;
 }
 
 interface ApiKeyRow {
@@ -74,6 +76,10 @@ export default function ProfilePage() {
   const [savingDomains, setSavingDomains] = useState(false);
   const [checkingDns, setCheckingDns] = useState(false);
   const [dnsResults, setDnsResults] = useState<Record<string, { ips: string[]; targetIps?: string[] }>>({});
+  // Inline edit of a record's DNS label (routers.endpoint_slug)
+  const [editingSlugFor, setEditingSlugFor] = useState<string | null>(null);
+  const [slugDraft, setSlugDraft] = useState("");
+  const [savingSlug, setSavingSlug] = useState(false);
 
   // API keys
   const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([]);
@@ -144,10 +150,7 @@ export default function ProfilePage() {
   };
 
   const renameStarhome = async (account: StarhomeAccount) => {
-    const label = prompt(
-      'Server name. It is also the DNS label of its endpoint, e.g. "Residential" → residential.<your endpoint domain>',
-      account.label
-    );
+    const label = prompt("Server name (the DNS label of its endpoint is edited under DNS records)", account.label);
     if (label == null || !label.trim() || label.trim() === account.label) return;
     try {
       await starhomePost({ action: "renameAccount", accountId: account.id, label: label.trim() });
@@ -279,6 +282,35 @@ export default function ProfilePage() {
       return json.ips || [];
     } catch {
       return [];
+    }
+  };
+
+  const saveSlug = async (record: DomainRecord) => {
+    const slug = slugDraft.trim().toLowerCase();
+    if (!slug || slug === record.slug) {
+      setEditingSlugFor(null);
+      return;
+    }
+    setSavingSlug(true);
+    try {
+      const res = await fetch("/api/profile/domains", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "setSlug", routerId: record.routerId, slug }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Couldn't save the name");
+        return;
+      }
+      toast.success("Endpoint name saved — create the new DNS record");
+      setEditingSlugFor(null);
+      const records = await loadDomains();
+      if (records?.length) checkDns(records);
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setSavingSlug(false);
     }
   };
 
@@ -502,7 +534,42 @@ export default function ProfilePage() {
                               className="flex items-center justify-between gap-3 px-3 py-2 border-b border-border last:border-0 text-xs"
                             >
                               <div className="min-w-0">
-                                <div className="font-mono truncate">{r.host}</div>
+                                {editingSlugFor === r.routerId ? (
+                                  <div className="flex items-center gap-1 font-mono">
+                                    <Input
+                                      value={slugDraft}
+                                      onChange={(e) => setSlugDraft(e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === "Enter") saveSlug(r);
+                                        if (e.key === "Escape") setEditingSlugFor(null);
+                                      }}
+                                      className="h-7 w-32 font-mono text-xs"
+                                      autoFocus
+                                    />
+                                    <span className="text-muted-foreground truncate">{r.host!.slice(r.slug.length)}</span>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 text-green-500" onClick={() => saveSlug(r)} disabled={savingSlug} title="Save">
+                                      {savingSlug ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                                    </Button>
+                                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setEditingSlugFor(null)} title="Cancel">
+                                      <X className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1 min-w-0">
+                                    <span className="font-mono truncate">{r.host}</span>
+                                    {r.editable && (
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6 shrink-0 text-muted-foreground"
+                                        title="Rename the DNS label"
+                                        onClick={() => { setSlugDraft(r.slug); setEditingSlugFor(r.routerId); }}
+                                      >
+                                        <Pencil className="w-3 h-3" />
+                                      </Button>
+                                    )}
+                                  </div>
+                                )}
                                 <div className="text-muted-foreground">{r.routerName}</div>
                               </div>
                               <div className="flex items-center gap-2 shrink-0">
@@ -660,7 +727,7 @@ export default function ProfilePage() {
                             <button
                               type="button"
                               className="font-medium truncate text-left hover:text-primary"
-                              title="Rename (the name is also the DNS label of its endpoint)"
+                              title="Rename"
                               onClick={() => renameStarhome(a)}
                             >
                               {a.label}
