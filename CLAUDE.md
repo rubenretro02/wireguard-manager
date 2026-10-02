@@ -129,11 +129,16 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - **El proxy SOCKS5 autentica por IP autorizada** (FAQ de StarVPN: hasta 5 IPs, 10 con ≥10 slots;
   user:pass solo en planes Enterprise). `vpnusername`/`vpnpassword` son del VPN, no del proxy. Así
   que repartir slots como proxies a sub-usuarios con IPs distintas no escala: la vía es WireGuard.
-- **Config WireGuard de los slots**: endpoint único `wg.starzone.io:1276` (guía OpenWRT de StarVPN),
-  AllowedIPs `0.0.0.0/0`, keepalive 25, sin PSK; PrivateKey/Address salen de `refresh_data`. Falta
-  SOLO la `PublicKey` del server: `STARHOME_WG_SERVER_PUBLIC_KEY` en `starhome.ts` (null). Se saca de
-  cualquier config descargado en el member area ("Wireguard Config"). Con la constante llena, el
-  Dashboard muestra descargar/QR/ver config en los slots (gateado por `interfaces[0]["public-key"]`).
+- **Config WireGuard de los slots — RESUELTO 2026-10-02.** El usuario descargó un "Wireguard Config"
+  del member area y la `PublicKey` del server es `NsyFeiW4z67A5FEEX/FnFM5dCwwp+WwfbHwD7Q/h2go=`
+  (misma para todos los slots; `STARHOME_WG_SERVER_PUBLIC_KEY`). El `.conf` que arma el Dashboard
+  para estos peers (`generateConfig`/`generateEditableConfig`, rama `isStarhomeRouter`) copia el de
+  StarVPN: `Address` v4 /32 + v6 /128 (van juntas en `allowed-address`), `DNS = 1.1.1.1,1.0.0.1`,
+  `MTU = 1384` (`STARHOME_WG_MTU`, viaja como `mtu` de la interface), `AllowedIPs = 0.0.0.0/0, ::/0`,
+  `Endpoint = <white-label o wg.starzone.io>:1276`, keepalive 25. **Si StarVPN rota la llave**: el
+  dueño la pega en Profile → tarjeta StarHome → botón de llave (`setWgServerKey` →
+  `starhome_accounts.wg_server_public_key`, que `getInterfaces` prefiere sobre la constante; vacío =
+  volver al default). Sin deploy.
 - El client area de StarVPN (`starvpn.com/dashboard`, WHMCS) está detrás del managed challenge de
   Cloudflare: ni curl ni Playwright (headed, perfil persistente, flags anti-automation) pasan de
   forma confiable. Lo que haga falta del dashboard lo tiene que sacar una persona.

@@ -34,14 +34,19 @@ CREATE TABLE IF NOT EXISTS starhome_accounts (
     total_slots INTEGER,
     last_synced_at TIMESTAMPTZ,
     last_sync_error TEXT,
+    -- PublicKey del server WireGuard de StarVPN si algún día rota (null = la
+    -- constante STARHOME_WG_SERVER_PUBLIC_KEY del código). Se edita en /profile.
+    wg_server_public_key TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (owner_user_id, email)
 );
 
--- Bases que corrieron la primera versión de este script (sin router_id): la
--- columna se agrega aparte porque CREATE TABLE IF NOT EXISTS no la añade.
+-- Bases que corrieron versiones anteriores de este script: las columnas se
+-- agregan aparte porque CREATE TABLE IF NOT EXISTS no las añade.
 ALTER TABLE starhome_accounts
     ADD COLUMN IF NOT EXISTS router_id UUID UNIQUE REFERENCES routers(id) ON DELETE CASCADE;
+ALTER TABLE starhome_accounts
+    ADD COLUMN IF NOT EXISTS wg_server_public_key TEXT;
 
 CREATE TABLE IF NOT EXISTS starhome_slots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

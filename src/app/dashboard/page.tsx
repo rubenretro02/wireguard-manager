@@ -1959,6 +1959,22 @@ export default function DashboardPage() {
     const listenPort = iface?.["listen-port"] || 51820;
     const address = peer["allowed-address"]?.split(",")[0]?.split("/")[0] || "10.10.x.x";
 
+    if (isStarhomeRouter) {
+      // Same template as generateConfig: the provider's own config shape
+      const addresses = (peer["allowed-address"] || "").split(",").map((a) => a.trim()).filter(Boolean);
+      return `[Interface]
+PrivateKey = ${privateKey}
+${addresses.map((a) => `Address = ${a}`).join("\n")}
+DNS = 1.1.1.1,1.0.0.1
+MTU = ${iface?.mtu || 1384}
+
+[Peer]
+PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = ${endpointHost}:${listenPort}
+PersistentKeepalive = 25`;
+    }
+
     return `[Interface]
 PrivateKey = ${privateKey}
 Address = ${address}/32
@@ -2163,6 +2179,22 @@ PersistentKeepalive = 25`;
         ? peer.comment
         : selectedRouter?.host || "server.example.com");
     const listenPort = iface?.["listen-port"] || 51820;
+
+    if (isStarhomeRouter) {
+      // Mirror the config the provider hands out: both addresses, its DNS, MTU, IPv6 routed too
+      const addresses = (peer["allowed-address"] || "").split(",").map((a) => a.trim()).filter(Boolean);
+      return `[Interface]
+PrivateKey = ${privateKey}
+${addresses.map((a) => `Address = ${a}`).join("\n")}
+DNS = 1.1.1.1,1.0.0.1
+MTU = ${iface?.mtu || 1384}
+
+[Peer]
+PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = ${endpointHost}:${listenPort}
+PersistentKeepalive = 25`;
+    }
 
     return `[Interface]
 PrivateKey = ${privateKey}

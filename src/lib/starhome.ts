@@ -33,16 +33,18 @@ export const STARHOME_PROXY_HOST = "proxy.starzone.io";
 export const STARHOME_PROXY_PORT_BASE = 51312;
 
 /**
- * WireGuard: every slot connects to the same ingress (StarVPN's OpenWRT guide:
- * Endpoint wg.starzone.io:1276, AllowedIPs 0.0.0.0/0, keepalive 25, no PSK). The
- * slot's own PrivateKey/Address come from refresh_data (wg_private_key, wg_ipv4).
- * TODO: the server PublicKey only appears in a config downloaded from the StarVPN
- * member area ("Wireguard Config"); until it is filled in, the dashboard hides
- * download/QR/view config on StarVPN slots.
+ * WireGuard: every slot connects to the same ingress. Taken from a config
+ * downloaded from the StarVPN member area (2026-10-02), identical for every slot
+ * except PrivateKey/Address:
+ *   [Interface] Address = <wg_ipv4>/32 + <wg_ipv6>/128, DNS = 1.1.1.1,1.0.0.1, MTU = 1384
+ *   [Peer] PublicKey = <below>, Endpoint = wg.starzone.io:1276, AllowedIPs = 0.0.0.0/0, ::/0,
+ *          PersistentKeepalive = 25, no preshared key
+ * The slot's own PrivateKey/Address come from refresh_data (wg_private_key, wg_ipv4/6).
  */
 export const STARHOME_WG_ENDPOINT = "wg.starzone.io";
 export const STARHOME_WG_PORT = 1276;
-export const STARHOME_WG_SERVER_PUBLIC_KEY: string | null = null;
+export const STARHOME_WG_SERVER_PUBLIC_KEY: string | null = "NsyFeiW4z67A5FEEX/FnFM5dCwwp+WwfbHwD7Q/h2go=";
+export const STARHOME_WG_MTU = 1384;
 /**
  * Interface name the Dashboard shows for these peers (generateConfig looks the
  * server key up by it). Neutral on purpose: tenants don't want the provider
@@ -201,6 +203,8 @@ export interface StarhomeAccountRow extends StarhomeCredentials {
   total_slots: number | null;
   last_synced_at: string | null;
   last_sync_error: string | null;
+  /** Override of STARHOME_WG_SERVER_PUBLIC_KEY, for the day the provider rotates its key. */
+  wg_server_public_key: string | null;
   created_at: string;
 }
 
@@ -224,7 +228,7 @@ export interface StarhomeSlotRow {
   last_rotated_at: string | null;
 }
 
-export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, created_at";
+export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, created_at";
 export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at";
 
 export interface Viewer {
@@ -331,6 +335,9 @@ export function slotAsPeer(
 ): WireGuardPeer {
   const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
   const wgIpv4 = typeof slot.raw?.wg_ipv4 === "string" ? (slot.raw.wg_ipv4 as string) : null;
+  const wgIpv6 = typeof slot.raw?.wg_ipv6 === "string" ? (slot.raw.wg_ipv6 as string) : null;
+  // Both addresses, as StarVPN's own config has them; the dashboard emits one Address line each
+  const addresses = [wgIpv4 ? `${wgIpv4}/32` : null, wgIpv6 ? `${wgIpv6}/128` : null].filter(Boolean).join(",");
   const who = slot.assigned_user_id || account.owner_user_id;
   return {
     ".id": `*sh:${slot.id}`,
@@ -338,7 +345,7 @@ export function slotAsPeer(
     interface: STARHOME_WG_INTERFACE,
     "public-key": (privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${slot.id}`,
     "private-key": privateKey || undefined,
-    "allowed-address": wgIpv4 ? `${wgIpv4}/32` : "",
+    "allowed-address": addresses,
     comment: slotLocation(slot),
     disabled: false,
     created_by_email: emails.get(who) || null,

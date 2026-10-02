@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logActivity } from "@/lib/activity-logger";
+import { isValidKey } from "@/lib/wireguard-keys";
 import {
   ACCOUNT_COLS,
   SLOT_COLS,
@@ -216,6 +217,18 @@ export async function POST(request: Request) {
         await admin.from("routers").update({ name: label }).eq("id", r.account.router_id);
         await admin.from("starhome_accounts").update({ label }).eq("id", r.account.id);
         return NextResponse.json({ label });
+      }
+
+      case "setWgServerKey": {
+        const r = await loadOwnedAccount(ctx, body.accountId);
+        if ("error" in r) return r.error;
+        const key = String(body.publicKey || "").trim();
+        if (key && !isValidKey(key)) {
+          return NextResponse.json({ error: "That's not a WireGuard key (44 base64 characters)" }, { status: 400 });
+        }
+        // Empty = back to the built-in default
+        await admin.from("starhome_accounts").update({ wg_server_public_key: key || null }).eq("id", r.account.id);
+        return NextResponse.json({ publicKey: key || null });
       }
 
       case "deleteAccount": {

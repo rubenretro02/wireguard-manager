@@ -8,7 +8,7 @@ import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
-import { starhomePeersForRouter, STARHOME_WG_INTERFACE, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
+import { accountForRouter, starhomePeersForRouter, STARHOME_WG_INTERFACE, STARHOME_WG_MTU, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -86,14 +86,16 @@ export async function POST(request: Request) {
     if (!adminClient) return NextResponse.json({ error: "Service role key not configured" }, { status: 500 });
     if (action === "getInterfaces") {
       // Un solo ingress WireGuard para todos los slots (wg.starzone.io:1276). La
-      // public key del server es una constante en lib/starhome; mientras sea null
-      // el dashboard esconde descargar/QR/ver config.
+      // public key del server es la de la cuenta si el dueño la cargó (por si
+      // StarVPN la rota) y si no la constante de lib/starhome.
+      const account = await accountForRouter(adminClient, routerId);
       return NextResponse.json({
         interfaces: [{
           ".id": "*1",
           name: STARHOME_WG_INTERFACE,
-          "public-key": STARHOME_WG_SERVER_PUBLIC_KEY,
+          "public-key": account?.wg_server_public_key || STARHOME_WG_SERVER_PUBLIC_KEY,
           "listen-port": STARHOME_WG_PORT,
+          mtu: STARHOME_WG_MTU,
           disabled: false,
           running: true,
         }],

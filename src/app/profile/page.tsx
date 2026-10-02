@@ -54,6 +54,7 @@ interface StarhomeAccount {
   total_slots: number | null;
   last_synced_at: string | null;
   last_sync_error: string | null;
+  wg_server_public_key: string | null;
 }
 
 export default function ProfilePage() {
@@ -156,6 +157,21 @@ export default function ProfilePage() {
       await starhomePost({ action: "renameAccount", accountId: account.id, label: label.trim() });
       toast.success("Renamed");
       await Promise.all([loadStarhome(), loadDomains()]);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
+  const setStarhomeWgKey = async (account: StarhomeAccount) => {
+    const key = prompt(
+      "WireGuard server PublicKey of this provider — the [Peer] PublicKey in a config downloaded from its member area. Leave empty to use the built-in default.",
+      account.wg_server_public_key || ""
+    );
+    if (key == null) return;
+    try {
+      await starhomePost({ action: "setWgServerKey", accountId: account.id, publicKey: key.trim() });
+      toast.success(key.trim() ? "Server key saved — configs use it from now on" : "Back to the default server key");
+      await loadStarhome();
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -735,6 +751,7 @@ export default function ProfilePage() {
                             <div className="text-muted-foreground truncate">
                               {a.email} · {a.package || "—"} · {a.total_slots ?? "?"} slots
                               {a.next_due_date && ` · renews ${a.next_due_date}`}
+                              {a.wg_server_public_key && " · custom server key"}
                             </div>
                             {a.last_sync_error && <div className="text-red-400">Sync failed: {a.last_sync_error}</div>}
                           </div>
@@ -745,6 +762,15 @@ export default function ProfilePage() {
                             <span className="text-muted-foreground hidden sm:inline">
                               {a.last_synced_at ? `synced ${new Date(a.last_synced_at).toLocaleString()}` : "never synced"}
                             </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7"
+                              title="WireGuard server key (if the provider rotates it)"
+                              onClick={() => setStarhomeWgKey(a)}
+                            >
+                              <KeyRound className="w-3.5 h-3.5" />
+                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"
