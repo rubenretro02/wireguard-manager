@@ -158,4 +158,6 @@ export interface WireGuardPeer {
   endpoint_host?: string | null;
   // v32: StarVPN slots carry their own timer (starhome_slots.expires_at) instead of peer_metadata
   expires_at?: string | null;
+  // v32: "US-nj · comcast" for StarVPN slots (their public IP isn't reported, so comment stays empty)
+  location?: string | null;
 }

@@ -8,7 +8,16 @@ import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
-import { accountForRouter, starhomePeersForRouter, STARHOME_WG_INTERFACE, STARHOME_WG_MTU, STARHOME_WG_PORT, STARHOME_WG_SERVER_PUBLIC_KEY } from "@/lib/starhome";
+import {
+  accountForRouter,
+  canManageAccount,
+  starhomePeersForRouter,
+  starhomeSlotsByPublicKey,
+  STARHOME_WG_INTERFACE,
+  STARHOME_WG_MTU,
+  STARHOME_WG_PORT,
+  STARHOME_WG_SERVER_PUBLIC_KEY,
+} from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
 // (peer metadata visible to authorised viewers regardless of who created the peer).
@@ -105,6 +114,62 @@ export async function POST(request: Request) {
       const peers = await starhomePeersForRouter(adminClient, routerId, { userId: user.id, isAdmin });
       return NextResponse.json({ peers, stale: false, fetchedAt: Date.now(), source: "db" });
     }
+
+    // Name and timer live in starhome_slots; only the account owner (or an admin) writes them.
+    const account = await accountForRouter(adminClient, routerId);
+    if (!account) return NextResponse.json({ error: "StarVPN account not found" }, { status: 404 });
+    if (!canManageAccount(account, { userId: user.id, isAdmin })) {
+      return NextResponse.json({ error: "Only the account owner can change these peers" }, { status: 403 });
+    }
+
+    // Inline edit: only the name is ours (address and IP belong to the provider)
+    if (action === "updatePeer") {
+      const slotId = String(data?.id || "").replace(/^\*sh:/, "");
+      const name = String(data?.name ?? "").trim().slice(0, 60) || null;
+      const { error: dbError } = await adminClient
+        .from("starhome_slots")
+        .update({ name })
+        .eq("id", slotId)
+        .eq("account_id", account.id);
+      if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
+      return NextResponse.json({ success: true });
+    }
+
+    // Timer as a reminder: same payload as the regular setPeerExpiry, stored in
+    // starhome_slots.expires_at. Nothing can switch the slot off at StarHome.
+    if (action === "setPeerExpiry") {
+      const publicKeys: string[] = Array.isArray(data?.publicKeys)
+        ? data.publicKeys
+        : data?.publicKey ? [data.publicKey] : [];
+      if (!publicKeys.length) return NextResponse.json({ error: "Missing publicKeys" }, { status: 400 });
+      const mode: ExpiryMode = data?.mode === "extend" ? "extend" : "set";
+      const duration =
+        data?.value && data?.unit ? { value: Number(data.value), unit: data.unit as TimeUnit } : null;
+
+      const byKey = await starhomeSlotsByPublicKey(adminClient, account.id);
+      const results: Record<string, string | null> = {};
+      for (const publicKey of publicKeys) {
+        const slot = byKey.get(publicKey);
+        if (!slot) continue;
+        const expiresAt = resolveExpiry({ current: slot.expires_at, mode, expiresAt: data?.expiresAt, duration });
+        const { error: dbError } = await adminClient.from("starhome_slots").update({ expires_at: expiresAt }).eq("id", slot.id);
+        if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
+        results[publicKey] = expiresAt;
+        await logActivity({
+          supabase: adminClient,
+          userId: user.id,
+          routerId,
+          action: mode === "extend" ? "renew" : "update",
+          entityType: "starhome_slot",
+          entityId: slot.id,
+          entityName: slot.name || `Slot ${slot.slot_number}`,
+          peerPublicKey: publicKey,
+          details: { timer_mode: mode, expires_at: expiresAt, reminder_only: true },
+        });
+      }
+      return NextResponse.json({ success: true, expiry: results });
+    }
+
     return NextResponse.json({ error: "Not available for StarVPN servers" }, { status: 400 });
   }
 

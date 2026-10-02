@@ -687,10 +687,12 @@ export default function DashboardPage() {
         const name = String(peer.name || "");
         const comment = String(peer.comment || "");
         const allowedAddress = String(peer["allowed-address"] || "");
+        const location = String(peer.location || "");
         return (
           name.toLowerCase().includes(query) ||
           comment.toLowerCase().includes(query) ||
-          allowedAddress.toLowerCase().includes(query)
+          allowedAddress.toLowerCase().includes(query) ||
+          location.toLowerCase().includes(query)
         );
       });
     }
@@ -1718,14 +1720,16 @@ export default function DashboardPage() {
   // Open edit expiration dialog
   const openEditExpiration = (peer: PeerWithMetadata) => {
     const meta = peerMetadata[peer["public-key"]];
-    const hasActiveTimer = Boolean(meta?.auto_disable_enabled && meta?.expires_at && !isPeerExpired(peer));
+    // StarVPN slots keep their date on the peer itself (no peer_metadata row)
+    const currentExpiry = meta?.auto_disable_enabled ? meta.expires_at : peer.expires_at || null;
+    const hasActiveTimer = Boolean(currentExpiry && !isPeerExpired(peer));
     setEditingExpirationPeer(peer);
-    setEditExpEnabled(!!meta?.auto_disable_enabled);
+    setEditExpEnabled(Boolean(currentExpiry));
     setEditExpValue(meta?.expiration_value || 24);
     setEditExpUnit(meta?.expiration_unit || "hours");
     // A running timer defaults to "add" so the quick buttons never reset the countdown
     setEditExpMode(hasActiveTimer ? "add" : "fromNow");
-    setEditExpExactDate(meta?.expires_at ? toLocalDateTimeInput(meta.expires_at) : "");
+    setEditExpExactDate(currentExpiry ? toLocalDateTimeInput(currentExpiry) : "");
     setEditExpScheduledEnable(false);
     setEditExpEnableDate("");
     setEditExpirationOpen(true);
@@ -1734,7 +1738,7 @@ export default function DashboardPage() {
   /** What the timer will be after saving, for the summary and the request. */
   const previewExpiry = (): Date | null => {
     if (!editingExpirationPeer || !editExpEnabled) return null;
-    const current = peerMetadata[editingExpirationPeer["public-key"]]?.expires_at;
+    const current = peerMetadata[editingExpirationPeer["public-key"]]?.expires_at ?? editingExpirationPeer.expires_at;
     const currentMs = current ? new Date(current).getTime() : 0;
     const deltaMs = convertToMilliseconds(editExpValue, editExpUnit);
     switch (editExpMode) {
@@ -2483,6 +2487,7 @@ PersistentKeepalive = 25`;
                   <TableHead className="text-muted-foreground">Interface</TableHead>
                   <TableHead className="text-muted-foreground">Allowed Address</TableHead>
                   <TableHead className="text-muted-foreground">Public IP</TableHead>
+                  {isStarhomeRouter && <TableHead className="text-muted-foreground">Location</TableHead>}
                   <TableHead className="text-muted-foreground">Traffic</TableHead>
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
@@ -2598,7 +2603,14 @@ PersistentKeepalive = 25`;
 
                       {/* Allowed Address Column */}
                       <TableCell>
-                        {isEditing ? (
+                        {isStarhomeRouter ? (
+                          // Provider-assigned (v4 + v6), never edited here; one line each so both are readable
+                          <div className="font-mono text-xs text-cyan-400 flex flex-col whitespace-nowrap">
+                            {(peer["allowed-address"] || "-").split(",").map((a) => (
+                              <span key={a}>{a.trim()}</span>
+                            ))}
+                          </div>
+                        ) : isEditing ? (
                           <Input
                             value={editAllowedAddress}
                             onChange={(e) => setEditAllowedAddress(e.target.value)}
@@ -2619,7 +2631,7 @@ PersistentKeepalive = 25`;
 
                       {/* Public IP Column */}
                       <TableCell>
-                        {isEditing ? (
+                        {isEditing && !isStarhomeRouter ? (
                           <Input
                             value={editComment}
                             onChange={(e) => setEditComment(e.target.value)}
@@ -2632,6 +2644,13 @@ PersistentKeepalive = 25`;
                           </span>
                         )}
                       </TableCell>
+
+                      {/* Location Column (StarVPN slots only) */}
+                      {isStarhomeRouter && (
+                        <TableCell className="font-mono text-sm text-emerald-400 whitespace-nowrap">
+                          {peer.location || "-"}
+                        </TableCell>
+                      )}
 
                       {/* Traffic Column */}
                       <TableCell className="text-sm">
@@ -2746,9 +2765,17 @@ PersistentKeepalive = 25`;
                               </Button>
                             </>
                           ) : isStarhomeRouter ? (
-                            // StarVPN slot: read-only. The WG config (wg.starzone.io) is offered
-                            // once the server public key is known.
+                            // StarVPN slot: name + timer are ours (reminder only — the slot can't be
+                            // switched off at the provider); the WG config needs the server key.
                             <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => startEditing(peer)}
+                                title="Rename (internal name or the customer who has this slot)"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </Button>
                               {interfaces[0]?.["public-key"] && (
                                 <>
                                   <Button
@@ -2785,6 +2812,33 @@ PersistentKeepalive = 25`;
                               >
                                 <ScrollText className="w-4 h-4" />
                               </Button>
+                              {canAutoExpire && peer.expires_at && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => {
+                                    setRenewingPeer(peer);
+                                    setRenewValue(24);
+                                    setRenewUnit("hours");
+                                    setRenewDialogOpen(true);
+                                  }}
+                                  title={expired ? "Renew (reminder only — the slot stays on)" : "Add time"}
+                                  className={expired ? "text-amber-400 hover:text-amber-300" : "text-emerald-400 hover:text-emerald-300"}
+                                >
+                                  <RotateCcw className="w-4 h-4" />
+                                </Button>
+                              )}
+                              {canAutoExpire && (
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  onClick={() => openEditExpiration(peer)}
+                                  title="Expiration reminder (the slot can't be switched off at the provider)"
+                                  className={peer.expires_at ? "text-amber-400 hover:text-amber-300" : "text-muted-foreground hover:text-foreground"}
+                                >
+                                  <CalendarClock className="w-4 h-4" />
+                                </Button>
+                              )}
                             </>
                           ) : (
                             <>

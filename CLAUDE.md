@@ -90,9 +90,16 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   (una interface `starvpn` con `STARHOME_WG_SERVER_PUBLIC_KEY` + puerto 1276) y `getPeers` (desde
   `starhome_slots`); cualquier otra acción → 400.
 - Dashboard: `isStarhomeRouter` salta los filtros client-side de metadata/IP (el server ya scopeó),
-  `isPeerExpired`/`getTimeRemaining`/stats leen `peer.expires_at` como fallback, sin "Add Peer" y la
-  fila solo tiene History + (con la public key del server) descargar/QR/ver config. Connection y
-  Traffic muestran "—": StarVPN no expone handshakes ni bytes. La interface se llama `wg0`
+  `isPeerExpired`/`getTimeRemaining`/stats/diálogo de timer leen `peer.expires_at` como fallback,
+  sin "Add Peer". Fila: lápiz (solo el nombre → `updatePeer` escribe `starhome_slots.name`;
+  address e IP no se editan), descargar/QR/ver config, History, Renew/Add time y calendario
+  (`setPeerExpiry` interceptado en la rama starhome → `starhome_slots.expires_at` con el mismo
+  `resolveExpiry`). **El timer es solo recordatorio**: no hay enable/disable ni rotate key porque
+  StarVPN no lo expone (un slot está siempre encendido; solo regenerar su llave cortaría el acceso
+  y tampoco está en la API). Al vencer, `expireSlotAssignments` quita la asignación pero deja la
+  fecha para que se vea "Expired". Columnas: Connection y Traffic "—" (sin handshakes ni bytes),
+  Public IP "-" (no la reporta), columna extra **Location** (`peer.location`, "US-nj · comcast",
+  buscable), Allowed Address en dos líneas (v4 y v6). La interface se llama `wg0`
   (`STARHOME_WG_INTERFACE`), neutra a propósito: el tenant no quiere que sus usuarios vean "star".
 - **White-label:** `slotAsPeer` resuelve el `endpoint_host` con `buildEndpointResolver` como
   cualquier peer → `<slug>.<dominio del tenant>`, fallback `wg.starzone.io`. Como no hay IP nuestra,

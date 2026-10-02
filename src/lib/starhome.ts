@@ -346,7 +346,9 @@ export function slotAsPeer(
     "public-key": (privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${slot.id}`,
     "private-key": privateKey || undefined,
     "allowed-address": addresses,
-    comment: slotLocation(slot),
+    // comment is the public IP column; StarVPN doesn't report the slot's IP
+    comment: "",
+    location: slotLocation(slot),
     disabled: false,
     created_by_email: emails.get(who) || null,
     created_by_user_id: who,
@@ -354,6 +356,17 @@ export function slotAsPeer(
     endpoint_host: endpointHost || STARHOME_WG_ENDPOINT,
     expires_at: slot.expires_at,
   };
+}
+
+/** Slots of an account keyed by the public key the Dashboard shows for them (derived from wg_private_key). */
+export async function starhomeSlotsByPublicKey(admin: SupabaseClient, accountId: string): Promise<Map<string, StarhomeSlotRow>> {
+  const { data } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", accountId);
+  const byKey = new Map<string, StarhomeSlotRow>();
+  for (const s of (data || []) as StarhomeSlotRow[]) {
+    const privateKey = typeof s.raw?.wg_private_key === "string" ? (s.raw.wg_private_key as string) : null;
+    byKey.set((privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${s.id}`, s);
+  }
+  return byKey;
 }
 
 export async function starhomePeersForRouter(admin: SupabaseClient, routerId: string, viewer: Viewer): Promise<WireGuardPeer[]> {
@@ -397,7 +410,11 @@ export async function revokeServerAccessIfUnused(admin: SupabaseClient, account:
   await admin.from("user_routers").delete().eq("user_id", userId).eq("router_id", account.router_id);
 }
 
-/** Unassigns every slot whose timer ran out. Nothing changes at StarHome. */
+/**
+ * Unassigns every slot whose timer ran out. The date itself stays so the
+ * Dashboard shows "Expired" until someone renews it: the slot can't be switched
+ * off at StarHome, so the timer is a reminder, not an enforcement.
+ */
 export async function expireSlotAssignments(admin: SupabaseClient): Promise<void> {
   const { data: expired } = await admin
     .from("starhome_slots")
@@ -408,7 +425,7 @@ export async function expireSlotAssignments(admin: SupabaseClient): Promise<void
 
   await admin
     .from("starhome_slots")
-    .update({ assigned_user_id: null, assigned_at: null, expires_at: null })
+    .update({ assigned_user_id: null, assigned_at: null })
     .in("id", expired.map((s: { id: string }) => s.id));
 
   const accounts = new Map<string, StarhomeAccountRow>();
