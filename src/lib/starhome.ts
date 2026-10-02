@@ -365,7 +365,7 @@ export async function starhomePeersForRouter(admin: SupabaseClient, routerId: st
   // wg.starzone.io with a CNAME. No domain → the provider host itself.
   const { data: router } = await admin
     .from("routers")
-    .select("name, endpoint_slug, endpoint_domain")
+    .select("id, name, endpoint_slug, endpoint_domain")
     .eq("id", routerId)
     .maybeSingle();
   const resolveEndpoint = await buildEndpointResolver(admin, router || {});

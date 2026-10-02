@@ -98,11 +98,17 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   cualquier peer → `<slug>.<dominio del tenant>`, fallback `wg.starzone.io`. Como no hay IP nuestra,
   en Profile → "DNS records" el registro sale como **CNAME → wg.starzone.io** (`recordType`) y el
   "Check DNS" compara contra las IPs del destino (`target` → `targetIps`). **El slug se edita inline
-  en esa lista** (lápiz → `POST /api/profile/domains {action:"setSlug", routerId, slug}` →
-  `routers.endpoint_slug`): el admin en cualquier server, un semi-admin solo en los que creó él
-  (`routers.created_by`, o sea sus cuentas StarVPN), porque el slug es por router y lo comparten
-  todos los tenants. Renombrar la cuenta (click en el nombre de la tarjeta) solo cambia
-  `routers.name` + `label`; mientras `endpoint_slug` sea null el slug se deriva del nombre.
+  en esa lista, en todos los servers** (lápiz → `POST /api/profile/domains {action:"setSlug",
+  routerId, slug}`). **v34 (`scripts/migration-v34-tenant-endpoint-slugs.sql`): el slug es por
+  tenant**, `profiles.endpoint_slugs` = `{ "<router_id>": "miami" }`; `slugForTenant()` en
+  `endpoint-domain.ts` lo prefiere sobre `routers.endpoint_slug` (default global, Admin → editar
+  router) y sobre el derivado del nombre. Así homevpn renombra "mia" sin tocar
+  `mia.vpn.blackgoatt.com` del admin. El resolver usa el override del mismo perfil cuyo dominio
+  aplica. Renombrar la cuenta StarVPN (click en el nombre de la tarjeta) solo cambia
+  `routers.name` + `label`.
+- `wg.starzone.io` es a su vez un CNAME a `wg.dnsflex.com` con 16 IPs (66.206.6.x) en rotación,
+  TTL 300: nunca crear un registro A con "la IP"; el CNAME del tenant las sigue solo. En Cloudflare
+  tiene que ir "DNS only" (nube gris): WireGuard es UDP.
 - `assignSlot`/`unassignSlot`/`rotateIp` existen en `/api/starhome` pero hoy no tienen UI (estaban en
   /socks5, descartado). Si hacen falta, van al Dashboard sobre la fila StarVPN.
 - Saltean routers `starhome`: cron `peer-presence`, cron `enforce-peer-expiry`, sync de

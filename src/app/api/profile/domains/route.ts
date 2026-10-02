@@ -6,7 +6,7 @@ import {
   invalidateEndpointDomainCache,
   isValidDomain,
   normalizeDomain,
-  slugFromRouterName,
+  slugForTenant,
 } from "@/lib/endpoint-domain";
 import { ensurePanelDomain, removePanelDomain } from "@/lib/dokploy";
 import { STARHOME_WG_ENDPOINT } from "@/lib/starhome";
@@ -53,7 +53,7 @@ export async function GET() {
 
   const { data: profile } = await ctx.admin
     .from("profiles")
-    .select("panel_domain, endpoint_domain, brand_name")
+    .select("panel_domain, endpoint_domain, brand_name, endpoint_slugs")
     .eq("id", ctx.userId)
     .single();
 
@@ -87,7 +87,8 @@ export async function GET() {
   // DNS record — list it once.
   const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string; recordType: "A" | "CNAME"; editable: boolean }>();
   for (const r of (routers || []) as Array<{ id: string; name: string; host: string; endpoint_ip: string | null; endpoint_slug: string | null; endpoint_domain: string | null; connection_type: string | null; created_by: string | null }>) {
-    const slug = r.endpoint_slug || slugFromRouterName(r.name);
+    // v34: the tenant's own label for this server, falling back to the router's slug
+    const slug = slugForTenant(r, profile);
     const host = buildEndpointHost(slug, endpointDomain || r.endpoint_domain);
     if (!host || byHost.has(host)) continue;
     // endpoint_ip !== host on servers behind a CHR/gateway, where `host` is the
@@ -101,7 +102,8 @@ export async function GET() {
       host,
       target: isStarhome ? STARHOME_WG_ENDPOINT : r.endpoint_ip || r.host,
       recordType: isStarhome ? "CNAME" : "A",
-      editable: canEditSlug(ctx, r),
+      // The label is the tenant's own (v34), so anyone who configures domains can rename it
+      editable: ctx.canConfigure,
     });
   }
 
@@ -112,15 +114,6 @@ export async function GET() {
     brandName: profile?.brand_name || null,
     records: Array.from(byHost.values()),
   });
-}
-
-/**
- * The slug is per router and every tenant's hostname is built from it, so only
- * admins change it on shared servers. A server the user created themselves (a
- * connected StarVPN account) is theirs to name.
- */
-function canEditSlug(ctx: Ctx, router: { created_by: string | null }): boolean {
-  return ctx.isAdmin || router.created_by === ctx.userId;
 }
 
 /**
@@ -157,7 +150,7 @@ async function resolveA(host: string): Promise<{ ips: string[]; notFound?: boole
  * POST { panelDomain?, endpointDomain?, brandName? } — save the tenant's domains.
  * POST { action: "check", host, target? } — resolve a hostname and report the IPs it
  * answers (plus the target's IPs when the target is a hostname, i.e. a CNAME record).
- * POST { action: "setSlug", routerId, slug } — rename a server's DNS label.
+ * POST { action: "setSlug", routerId, slug } — this tenant's DNS label for a server (v34).
  */
 export async function POST(request: Request) {
   const { ctx, error } = await context();
@@ -179,17 +172,30 @@ export async function POST(request: Request) {
   }
 
   if (body.action === "setSlug") {
+    if (!ctx.canConfigure) {
+      return NextResponse.json({ error: "You don't have permission to configure domains" }, { status: 403 });
+    }
     const routerId = String(body.routerId || "");
     const slug = String(body.slug || "").trim().toLowerCase();
     if (!/^[a-z0-9]([a-z0-9-]{0,22}[a-z0-9])?$/.test(slug)) {
       return NextResponse.json({ error: "Use 1–24 letters, digits or dashes (e.g. residential)" }, { status: 400 });
     }
-    const { data: router } = await ctx.admin.from("routers").select("id, created_by").eq("id", routerId).maybeSingle();
-    if (!router || !canEditSlug(ctx, router)) {
-      return NextResponse.json({ error: "You can't rename this server's endpoint" }, { status: 403 });
+    // Only servers this tenant can see (admin: all)
+    if (!ctx.isAdmin) {
+      const { data: access } = await ctx.admin
+        .from("user_routers")
+        .select("id")
+        .eq("user_id", ctx.userId)
+        .eq("router_id", routerId)
+        .maybeSingle();
+      if (!access) return NextResponse.json({ error: "Server not found" }, { status: 404 });
     }
-    const { error: dbError } = await ctx.admin.from("routers").update({ endpoint_slug: slug }).eq("id", routerId);
+    // Stored on the tenant's own profile: other tenants' hostnames are untouched
+    const { data: me } = await ctx.admin.from("profiles").select("endpoint_slugs").eq("id", ctx.userId).single();
+    const slugs = { ...((me?.endpoint_slugs as Record<string, string> | null) || {}), [routerId]: slug };
+    const { error: dbError } = await ctx.admin.from("profiles").update({ endpoint_slugs: slugs }).eq("id", ctx.userId);
     if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
+    invalidateEndpointDomainCache();
     return NextResponse.json({ success: true, slug });
   }
 

@@ -14,6 +14,8 @@ interface ProfileDomainRow {
   id: string;
   endpoint_domain: string | null;
   created_by_user_id: string | null;
+  // v34: this tenant's own DNS label per router ({ routerId: slug }); router slug is the default
+  endpoint_slugs: Record<string, string> | null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,33 +70,43 @@ export function invalidateEndpointDomainCache() {
 async function loadProfiles(admin: AnyClient): Promise<Map<string, ProfileDomainRow>> {
   if (profileCache && Date.now() - profileCache.at < PROFILE_CACHE_MS) return profileCache.rows;
 
-  const { data } = await admin.from("profiles").select("id, endpoint_domain, created_by_user_id");
+  const { data } = await admin.from("profiles").select("id, endpoint_domain, created_by_user_id, endpoint_slugs");
   const rows = new Map<string, ProfileDomainRow>();
   for (const row of (data || []) as ProfileDomainRow[]) rows.set(row.id, row);
   profileCache = { at: Date.now(), rows };
   return rows;
 }
 
+/** The tenant's own label for this router, else the router's slug, else one derived from its name. */
+export function slugForTenant(
+  router: { id?: string; endpoint_slug?: string | null; name?: string },
+  tenant?: { endpoint_slugs?: Record<string, string> | null } | null
+): string {
+  const own = router.id && tenant?.endpoint_slugs ? tenant.endpoint_slugs[router.id] : undefined;
+  return own || router.endpoint_slug || slugFromRouterName(router.name || "");
+}
+
 /**
  * Returns `(creatorUserId) => endpointHost | null` for one router. Loads the
- * tenant table once so a whole peer list costs a single query.
+ * tenant table once so a whole peer list costs a single query. The label comes
+ * from the same tenant whose domain is used (v34), so each tenant names its
+ * records independently.
  */
 export async function buildEndpointResolver(
   admin: AnyClient,
-  router: { endpoint_slug?: string | null; endpoint_domain?: string | null; name?: string }
+  router: { id?: string; endpoint_slug?: string | null; endpoint_domain?: string | null; name?: string }
 ): Promise<(creatorUserId?: string | null) => string | null> {
   const profiles = await loadProfiles(admin);
-  const slug = router.endpoint_slug || slugFromRouterName(router.name || "");
   const routerDefault = router.endpoint_domain || null;
 
   return (creatorUserId?: string | null) => {
     let current = creatorUserId ? profiles.get(creatorUserId) : undefined;
     const seen = new Set<string>();
     while (current && !seen.has(current.id)) {
-      if (current.endpoint_domain) return buildEndpointHost(slug, current.endpoint_domain);
+      if (current.endpoint_domain) return buildEndpointHost(slugForTenant(router, current), current.endpoint_domain);
       seen.add(current.id);
       current = current.created_by_user_id ? profiles.get(current.created_by_user_id) : undefined;
     }
-    return buildEndpointHost(slug, routerDefault);
+    return buildEndpointHost(slugForTenant(router), routerDefault);
   };
 }
