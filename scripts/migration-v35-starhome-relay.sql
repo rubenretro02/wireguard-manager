@@ -33,4 +33,10 @@ ALTER TABLE starhome_slots
 ALTER TABLE starhome_accounts
     ADD COLUMN IF NOT EXISTS exit_ips_checked_at TIMESTAMPTZ;
 
+-- Puerto UDP del slot en el relay. Aleatorio y único (20000–60000) en vez de
+-- 42000 + slot: el relay no puede atar el puerto a la llave (el handshake va
+-- cifrado), así que al menos que no sea adivinable. Se asigna al aplicar el relay.
+ALTER TABLE starhome_slots
+    ADD COLUMN IF NOT EXISTS relay_port INTEGER UNIQUE;
+
 NOTIFY pgrst, 'reload schema';

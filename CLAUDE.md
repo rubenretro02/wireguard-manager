@@ -103,7 +103,9 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - **Relay (v35, `scripts/migration-v35-starhome-relay.sql`) — así se hace enable/disable sin
   rotar llaves.** StarVPN no puede apagar un slot, así que el config del cliente apunta a UN SERVER
   NUESTRO (linux-ssh, `starhome_accounts.relay_router_id`, se elige en Profile → tarjeta StarHome →
-  select "Relay") en el puerto `42000 + slot` (`relayPortForSlot`), y ese server hace DNAT del UDP a
+  select "Relay") en **un puerto aleatorio y único por slot** (`starhome_slots.relay_port`,
+  20000–60000 salvo 51800–51900, asignado por `assignRelayPorts` la primera vez que se aplica el
+  relay; antes era `42000 + slot`), y ese server hace DNAT del UDP a
   `wg.starzone.io:1276` (`LinuxWireGuardClient.setUdpRelay/removeUdpRelay`: `-t nat PREROUTING`
   DNAT con comment `wgm-relay-<port>` + dos reglas FORWARD con `--ctorigdstport` para contar bytes
   por dirección + un MASQUERADE compartido `wgm-relay-nat`; todo persistido en
@@ -146,6 +148,16 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   con `confirm()` porque gasta uno de los 20 updates mensuales del slot.
 - Diálogo "View config" en slots StarVPN: sin botón Edit (ni New Keys ni Save): las llaves son del
   proveedor; la única rotación es cambiar el username del slot en StarVPN.
+- **Límite real del relay por puerto (2026-10-03, probado por homevpn):** el relay no puede atar el
+  puerto a la llave — la llave pública del cliente viaja CIFRADA en el handshake y abrirla requiere
+  la privada del server de StarVPN. Un cliente con la llave del slot 17 entró por el puerto del slot
+  56 (y podría ir directo a `wg.starzone.io:1276` si supiera que es StarVPN). Por eso los puertos
+  son aleatorios: es cerradura contra adivinar, no candado. El candado real sería el "relay
+  completo" (túnel por slot en Ohio con la llave del slot + llave NUESTRA por cliente sobre una
+  interface `wgsv`; disable = quitar el peer; mismo ping): el usuario lo descartó por ahora porque
+  obliga a repartir configs nuevos. `applyRelay` además borra en el relay las reglas `wgm-relay-*`
+  de puertos que ningún slot posee (limpió las 70 del esquema viejo), y `ensureRelayTargets`
+  re-aplica si falta alguna regla de un slot habilitado.
 - **Sync automático:** `starhomePeersForRouter` re-lee StarVPN como máximo cada 60 s por cuenta
   mientras alguien tiene el Dashboard abierto (`syncIfStale`, coalescido por cuenta), y "Force
   Refresh" lo fuerza. Motivo (reporte de homevpn 2026-10-03): cambiar la región del slot en StarVPN

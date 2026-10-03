@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { promises as dns } from "node:dns";
+import { randomInt } from "node:crypto";
 import type { AuthMethod, Router, WireGuardPeer } from "@/lib/types";
 import { publicKeyFromPrivate } from "@/lib/wireguard-keys";
 import { logActivity } from "@/lib/activity-logger";
@@ -57,12 +58,19 @@ export const STARHOME_WG_INTERFACE = "wg0";
 
 /**
  * Relay (v35): with a relay server set on the account, the client's Endpoint is
- * OUR server at (BASE + slot number) and that server DNATs the UDP to
+ * OUR server at the slot's own UDP port and that server DNATs the UDP to
  * wg.starzone.io:1276. That is what makes enable/disable possible without
  * touching the slot's keys: disable = drop the DNAT rule.
+ *
+ * The port can't bind the key (the handshake is opaque to a forwarder), so a
+ * client that knows another slot's port could use it. Ports are therefore
+ * random and unique (starhome_slots.relay_port) instead of 42000 + slot: a lock
+ * against guessing, not against someone who knows the provider's own ingress.
  */
-export const STARHOME_RELAY_PORT_BASE = 42000;
-export const relayPortForSlot = (slotNumber: number) => STARHOME_RELAY_PORT_BASE + slotNumber;
+const RELAY_PORT_MIN = 20000;
+const RELAY_PORT_MAX = 60000;
+/** Keep clear of the WireGuard listen ports our own servers use. */
+const relayPortReserved = (p: number) => p >= 51800 && p <= 51900;
 
 // ---------------------------------------------------------------------------
 // Provider API
@@ -323,10 +331,12 @@ export interface StarhomeSlotRow {
   /** Exit IP seen through the slot's proxy from the relay server (null = never probed). */
   public_ip: string | null;
   public_ip_checked_at: string | null;
+  /** Random UDP port of this slot on the relay (assigned the first time the relay is applied). */
+  relay_port: number | null;
 }
 
 export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, relay_router_id, relay_target_ip, exit_ips_checked_at, created_at";
-export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at, disabled, public_ip, public_ip_checked_at";
+export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at, disabled, public_ip, public_ip_checked_at, relay_port";
 
 export interface Viewer {
   userId: string;
@@ -476,7 +486,7 @@ export function slotAsPeer(
     slot_location: { country: slot.country, region: slot.region, isp: slot.isp },
     // Without a relay nothing can switch the slot off, so it is always "enabled"
     disabled: relay ? slot.disabled : false,
-    "endpoint-port": relay ? relayPortForSlot(slot.slot_number) : STARHOME_WG_PORT,
+    "endpoint-port": relay && slot.relay_port ? slot.relay_port : STARHOME_WG_PORT,
     ...(relay?.stats
       ? {
           rx: relay.stats.rx,
@@ -554,7 +564,14 @@ export async function starhomePeersForRouter(
   let relay: { host: string; stats: Map<number, RelayStats> } | null = null;
   const relayRouter = await relayRouterFor(admin, account);
   if (relayRouter) {
-    const ports = slots.map((s) => relayPortForSlot(s.slot_number));
+    // A slot without a port yet (new slot, relay just set) gets one — and its rule — now
+    if (slots.some((s) => !s.relay_port)) {
+      await applyRelay(admin, account).catch((e) => console.error("[starhome] relay apply:", (e as Error).message));
+      const { data: fresh } = await admin.from("starhome_slots").select("id, relay_port").in("id", slots.map((s) => s.id));
+      const byId = new Map(((fresh || []) as Array<{ id: string; relay_port: number | null }>).map((f) => [f.id, f.relay_port]));
+      for (const s of slots) s.relay_port = byId.get(s.id) ?? s.relay_port;
+    }
+    const ports = slots.map((s) => s.relay_port).filter((p): p is number => !!p);
     const read = await cachedRouterRead(`starhome-relay:${relayRouter.id}`, () =>
       relayClient(relayRouter).getUdpRelayStats(ports)
     ).catch(() => null);
@@ -578,7 +595,7 @@ export async function starhomePeersForRouter(
       account,
       emails,
       resolveEndpoint(s.assigned_user_id || account.owner_user_id),
-      relay ? { host: relay.host, stats: relay.stats.get(relayPortForSlot(s.slot_number)) } : null
+      relay ? { host: relay.host, stats: s.relay_port ? relay.stats.get(s.relay_port) : undefined } : null
     )
   );
 }
@@ -646,35 +663,72 @@ export async function applyRelay(admin: SupabaseClient, account: StarhomeAccount
     await admin.from("starhome_accounts").update({ relay_target_ip: target }).eq("id", account.id);
   }
 
-  const { data: slots } = await admin.from("starhome_slots").select("slot_number, disabled").eq("account_id", account.id);
+  const { data: rows } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", account.id);
+  const slots = (rows || []) as StarhomeSlotRow[];
+  await assignRelayPorts(admin, slots);
+
   const client = relayClient(router);
   // Only touch what differs: rewriting a rule resets its byte counters
   const existing = await client.listUdpRelays();
   let changed = 0;
-  for (const s of (slots || []) as Array<{ slot_number: number; disabled: boolean }>) {
-    const port = relayPortForSlot(s.slot_number);
-    const current = existing.get(port);
+  for (const s of slots) {
+    if (!s.relay_port) continue;
+    const current = existing.get(s.relay_port);
     if (s.disabled) {
       if (current === undefined) continue;
-      await client.removeUdpRelay(port, { persist: false });
+      await client.removeUdpRelay(s.relay_port, { persist: false });
     } else {
       if (current === target) continue;
-      await client.setUdpRelay(port, target, STARHOME_WG_PORT, { persist: false });
+      await client.setUdpRelay(s.relay_port, target, STARHOME_WG_PORT, { persist: false });
     }
     changed++;
   }
+  // Rules nobody on this relay owns any more (deleted slots, the old 42000 + slot scheme)
+  const owned = await relayPortsOnRouter(admin, router.id);
+  for (const port of existing.keys()) {
+    if (owned.has(port)) continue;
+    await client.removeUdpRelay(port, { persist: false });
+    changed++;
+  }
   if (changed > 0) await client.persistIptables();
-  return { target, slots: slots?.length || 0 };
+  return { target, slots: slots.length };
+}
+
+/** Hands a random, unused port to every slot that has none. Unique across all slots (DB constraint). */
+async function assignRelayPorts(admin: SupabaseClient, slots: StarhomeSlotRow[]): Promise<void> {
+  const missing = slots.filter((s) => !s.relay_port);
+  if (!missing.length) return;
+  const { data: taken } = await admin.from("starhome_slots").select("relay_port").not("relay_port", "is", null);
+  const used = new Set<number>(((taken || []) as Array<{ relay_port: number }>).map((t) => t.relay_port));
+  for (const s of missing) {
+    let port: number;
+    do {
+      port = randomInt(RELAY_PORT_MIN, RELAY_PORT_MAX + 1);
+    } while (used.has(port) || relayPortReserved(port));
+    used.add(port);
+    const { error } = await admin.from("starhome_slots").update({ relay_port: port }).eq("id", s.id).is("relay_port", null);
+    if (error) throw new Error(error.message);
+    s.relay_port = port;
+  }
+}
+
+/** Every relay port of every account that relays through this server. */
+async function relayPortsOnRouter(admin: SupabaseClient, routerId: string): Promise<Set<number>> {
+  const { data: accounts } = await admin.from("starhome_accounts").select("id").eq("relay_router_id", routerId);
+  const ids = ((accounts || []) as Array<{ id: string }>).map((a) => a.id);
+  if (!ids.length) return new Set();
+  const { data: slots } = await admin.from("starhome_slots").select("relay_port").in("account_id", ids).not("relay_port", "is", null);
+  return new Set(((slots || []) as Array<{ relay_port: number }>).map((s) => s.relay_port));
 }
 
 /** Removes every rule this account put on its relay server (relay switched off or moved). */
 export async function clearRelay(admin: SupabaseClient, account: StarhomeAccountRow): Promise<void> {
   const router = await relayRouterFor(admin, account);
   if (!router) return;
-  const { data: slots } = await admin.from("starhome_slots").select("slot_number").eq("account_id", account.id);
+  const { data: slots } = await admin.from("starhome_slots").select("relay_port").eq("account_id", account.id).not("relay_port", "is", null);
   const client = relayClient(router);
-  for (const s of (slots || []) as Array<{ slot_number: number }>) {
-    await client.removeUdpRelay(relayPortForSlot(s.slot_number), { persist: false });
+  for (const s of (slots || []) as Array<{ relay_port: number }>) {
+    await client.removeUdpRelay(s.relay_port, { persist: false });
   }
   await client.persistIptables();
 }
@@ -684,7 +738,8 @@ export async function setSlotRelayEnabled(admin: SupabaseClient, account: Starho
   const router = await relayRouterFor(admin, account);
   if (!router) throw new StarhomeError("Set a relay server for this account in Profile → StarHome accounts to switch slots on and off");
   const client = relayClient(router);
-  const port = relayPortForSlot(slot.slot_number);
+  if (!slot.relay_port) await assignRelayPorts(admin, [slot]);
+  const port = slot.relay_port as number;
   if (enabled) {
     const ips = await resolveIngressIps(router);
     const target = account.relay_target_ip && ips.includes(account.relay_target_ip) ? account.relay_target_ip : ips[0];
@@ -707,7 +762,17 @@ export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
       const router = await relayRouterFor(admin, account);
       if (!router) continue;
       const ips = await resolveIngressIps(router);
-      if (account.relay_target_ip && ips.includes(account.relay_target_ip)) continue;
+      const targetOk = Boolean(account.relay_target_ip && ips.includes(account.relay_target_ip));
+      // Also self-heal missing rules (a failed apply, a server rebuilt from an old rules.v4)
+      let rulesOk = targetOk;
+      if (targetOk) {
+        const { data: rows } = await admin.from("starhome_slots").select("relay_port, disabled").eq("account_id", account.id);
+        const existing = await relayClient(router).listUdpRelays();
+        rulesOk = ((rows || []) as Array<{ relay_port: number | null; disabled: boolean }>).every(
+          (s) => s.disabled || (s.relay_port != null && existing.get(s.relay_port) === account.relay_target_ip)
+        );
+      }
+      if (rulesOk) continue;
       await applyRelay(admin, account);
     } catch (e) {
       console.error(`[starhome] relay repair failed for ${account.label}:`, (e as Error).message);
@@ -870,9 +935,9 @@ export async function expireSlotAssignments(admin: SupabaseClient): Promise<void
 
     const changes: Record<string, unknown> = {};
     if (s.assigned_user_id) Object.assign(changes, { assigned_user_id: null, assigned_at: null });
-    if (account.relay_router_id && !s.disabled) {
+    if (account.relay_router_id && !s.disabled && s.relay_port) {
       try {
-        await relayClient((await relayRouterFor(admin, account))!).removeUdpRelay(relayPortForSlot(s.slot_number));
+        await relayClient((await relayRouterFor(admin, account))!).removeUdpRelay(s.relay_port);
         changes.disabled = true;
       } catch (e) {
         console.error(`[starhome] auto-disable of slot ${s.slot_number} failed:`, (e as Error).message);
