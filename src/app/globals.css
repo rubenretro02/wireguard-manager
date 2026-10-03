@@ -63,6 +63,32 @@
   }
 }
 
+/* Dashboard peers table: chunky, obvious horizontal scrollbars — the mirror above the table
+   (.peers-hscroll) and the table's own wrapper (.peers-table-host > div). Only -webkit
+   pseudo-elements on purpose: setting scrollbar-width/scrollbar-color makes Chrome ignore them. */
+.peers-hscroll::-webkit-scrollbar,
+.peers-table-host > div::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+.peers-hscroll::-webkit-scrollbar-track,
+.peers-table-host > div::-webkit-scrollbar-track {
+  background: hsl(var(--secondary));
+}
+
+.peers-hscroll::-webkit-scrollbar-thumb,
+.peers-table-host > div::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary) / 0.75);
+  border-radius: 7px;
+  border: 3px solid hsl(var(--secondary));
+}
+
+.peers-hscroll::-webkit-scrollbar-thumb:hover,
+.peers-table-host > div::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary));
+}
+
 @layer components {
   /* Gradient text */
   .gradient-text {

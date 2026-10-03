@@ -192,6 +192,13 @@ export default function DashboardPage() {
   const [staleSince, setStaleSince] = useState<number | null>(null);
   const [routerDown, setRouterDown] = useState(false);
 
+  // Peers table scrolling: a mirror of the horizontal scrollbar above the table, Shift+wheel
+  // for horizontal movement, and a viewport-bound height so the title, stats, toolbar and
+  // column headers stay put while the rows scroll.
+  const peersHostRef = useRef<HTMLDivElement>(null);
+  const peersTopBarRef = useRef<HTMLDivElement>(null);
+  const peersTopBarInnerRef = useRef<HTMLDivElement>(null);
+
   // StarVPN: "change location" dialog (country / region / ISP from the provider's catalogue)
   interface LocationOpt { id: number; key: string; name: string }
   const [locationPeer, setLocationPeer] = useState<PeerWithMetadata | null>(null);
@@ -1533,6 +1540,73 @@ export default function DashboardPage() {
     }
   };
 
+  const peersTableMounted = filteredPeers.length > 0;
+  useEffect(() => {
+    const host = peersHostRef.current;
+    const top = peersTopBarRef.current;
+    const inner = peersTopBarInnerRef.current;
+    // shadcn's <Table> wraps the <table> in its own overflow container: that is the scroller
+    const scroller = host?.firstElementChild as HTMLDivElement | null;
+    if (!host || !top || !inner || !scroller) return;
+
+    const syncWidth = () => {
+      inner.style.width = `${scroller.scrollWidth}px`;
+      top.style.display = scroller.scrollWidth > scroller.clientWidth + 1 ? "" : "none";
+    };
+    const fitHeight = () => {
+      if (window.innerWidth < 768) {
+        scroller.style.maxHeight = "";
+        return;
+      }
+      // Measured from the top of the document so a scrolled page doesn't feed back into the size
+      const absoluteTop = scroller.getBoundingClientRect().top + window.scrollY;
+      scroller.style.maxHeight = `${Math.max(320, window.innerHeight - absoluteTop - 48)}px`;
+    };
+    let syncing = false;
+    const fromTop = () => {
+      if (syncing) return;
+      syncing = true;
+      scroller.scrollLeft = top.scrollLeft;
+      syncing = false;
+    };
+    const fromTable = () => {
+      if (syncing) return;
+      syncing = true;
+      top.scrollLeft = scroller.scrollLeft;
+      syncing = false;
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (!e.shiftKey || e.deltaY === 0) return;
+      scroller.scrollLeft += e.deltaY;
+      e.preventDefault();
+    };
+
+    top.addEventListener("scroll", fromTop);
+    scroller.addEventListener("scroll", fromTable);
+    host.addEventListener("wheel", onWheel, { passive: false });
+    top.addEventListener("wheel", onWheel, { passive: false });
+    window.addEventListener("resize", fitHeight);
+    const ro = new ResizeObserver(() => {
+      syncWidth();
+      fitHeight();
+    });
+    ro.observe(scroller);
+    if (scroller.firstElementChild) ro.observe(scroller.firstElementChild);
+    // The bulk-actions bar above the table appears and disappears: re-measure with the card
+    if (host.parentElement) ro.observe(host.parentElement);
+    syncWidth();
+    fitHeight();
+
+    return () => {
+      top.removeEventListener("scroll", fromTop);
+      scroller.removeEventListener("scroll", fromTable);
+      host.removeEventListener("wheel", onWheel);
+      top.removeEventListener("wheel", onWheel);
+      window.removeEventListener("resize", fitHeight);
+      ro.disconnect();
+    };
+  }, [peersTableMounted]);
+
   // ===== StarVPN: change a slot's location =====
   const openChangeLocation = async (peer: PeerWithMetadata) => {
     setLocationPeer(peer);
@@ -2557,8 +2631,18 @@ PersistentKeepalive = 25`;
                 : "No peers found. Add your first peer above."}
             </div>
           ) : (
+            <>
+              {/* Mirror of the table's horizontal scrollbar, reachable without scrolling to the bottom */}
+              <div
+                ref={peersTopBarRef}
+                className="peers-hscroll overflow-x-auto overflow-y-hidden border-b border-border"
+                aria-hidden
+              >
+                <div ref={peersTopBarInnerRef} className="h-px" />
+              </div>
+              <div ref={peersHostRef} className="peers-table-host">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-20 bg-card shadow-[0_1px_0_0_hsl(var(--border))]">
                 <TableRow className="hover:bg-transparent border-border">
                   <TableHead className="w-10">
                     <Checkbox
@@ -3073,6 +3157,8 @@ PersistentKeepalive = 25`;
                 })}
               </TableBody>
             </Table>
+              </div>
+            </>
           )}
         </div>
       </PageContent>
