@@ -83,6 +83,27 @@ export async function GET() {
 
   const endpointDomain = profile?.endpoint_domain || null;
 
+  // StarVPN accounts with a relay (v35): the name points at OUR relay server, not the provider
+  const relayByRouter = new Map<string, string>();
+  {
+    const { data: accounts } = await ctx.admin
+      .from("starhome_accounts")
+      .select("router_id, relay_router_id")
+      .not("relay_router_id", "is", null);
+    const rows = (accounts || []) as Array<{ router_id: string; relay_router_id: string }>;
+    const relayIds = [...new Set(rows.map((a) => a.relay_router_id))];
+    if (relayIds.length) {
+      const { data: relays } = await ctx.admin.from("routers").select("id, host, endpoint_ip").in("id", relayIds);
+      const target = new Map<string, string>(
+        ((relays || []) as Array<{ id: string; host: string; endpoint_ip: string | null }>).map((r) => [r.id, r.endpoint_ip || r.host])
+      );
+      for (const a of rows) {
+        const t = target.get(a.relay_router_id);
+        if (t) relayByRouter.set(a.router_id, t);
+      }
+    }
+  }
+
   // Router rows that share a host+slug (one config per interface) are the same
   // DNS record — list it once.
   const byHost = new Map<string, { routerId: string; routerName: string; slug: string; host: string | null; target: string; recordType: "A" | "CNAME"; editable: boolean }>();
@@ -93,15 +114,17 @@ export async function GET() {
     if (!host || byHost.has(host)) continue;
     // endpoint_ip !== host on servers behind a CHR/gateway, where `host` is the
     // gateway (SSH arrives by port-forward) and WireGuard listens on the block's IPs.
-    // StarVPN (v32) has no IP of ours: the name is a CNAME to the provider's WG ingress.
+    // StarVPN (v32) has no IP of ours: the name is a CNAME to the provider's WG ingress —
+    // unless the account relays through one of our servers (v35), then it's that server's A.
     const isStarhome = r.connection_type === "starhome";
+    const relayTarget = isStarhome ? relayByRouter.get(r.id) : undefined;
     byHost.set(host, {
       routerId: r.id,
       routerName: r.name,
       slug,
       host,
-      target: isStarhome ? STARHOME_WG_ENDPOINT : r.endpoint_ip || r.host,
-      recordType: isStarhome ? "CNAME" : "A",
+      target: relayTarget || (isStarhome ? STARHOME_WG_ENDPOINT : r.endpoint_ip || r.host),
+      recordType: isStarhome && !relayTarget ? "CNAME" : "A",
       // The label is the tenant's own (v34), so anyone who configures domains can rename it
       editable: ctx.canConfigure,
     });

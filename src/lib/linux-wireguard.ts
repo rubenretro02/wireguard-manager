@@ -701,6 +701,95 @@ export class LinuxWireGuardClient {
     }
   }
 
+  // =====================================================
+  // UDP relay (v35): StarVPN slots are reached THROUGH this server so the panel
+  // can switch them off without touching their keys. One DNAT per slot port;
+  // the FORWARD rules carry the byte counters; conntrack tells who is online.
+  // =====================================================
+
+  /** Idempotent: <port> → target:targetPort. Replaces whatever the port pointed at before. */
+  async setUdpRelay(port: number, target: string, targetPort: number, opts?: { persist?: boolean }): Promise<void> {
+    const tag = `wgm-relay-${port}`;
+    await this.removeUdpRelay(port, { persist: false });
+    await this.executeCommand(
+      `iptables -t nat -I PREROUTING 1 -p udp --dport ${port} -m comment --comment ${tag} -j DNAT --to-destination ${target}:${targetPort}`
+    );
+    // Counters per direction: after DNAT the packets carry the provider's port, but the
+    // connection's ORIGINAL tuple still has the slot port.
+    await this.executeCommand(
+      `iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} --ctdir ORIGINAL -m comment --comment ${tag}-up -j ACCEPT`
+    );
+    await this.executeCommand(
+      `iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} --ctdir REPLY -m comment --comment ${tag}-down -j ACCEPT`
+    );
+    // Shared: the provider must see this server as the source
+    const masq = await this.executeCommand(`iptables -t nat -S POSTROUTING | grep "wgm-relay-nat" || true`);
+    if (!masq.includes(`-d ${target}/32`)) {
+      await this.executeCommand(
+        `iptables -t nat -A POSTROUTING -d ${target} -p udp --dport ${targetPort} -m comment --comment wgm-relay-nat -j MASQUERADE`
+      );
+    }
+    if (opts?.persist !== false) await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+  }
+
+  /** Drops the DNAT + counter rules of one slot port: the tunnel dies within the keepalive. */
+  async removeUdpRelay(port: number, opts?: { persist?: boolean }): Promise<void> {
+    const tag = `wgm-relay-${port}`;
+    for (const [table, chain] of [["nat", "PREROUTING"], ["filter", "FORWARD"]] as const) {
+      // -S prints rules in a form that can be deleted verbatim, whatever target they had
+      const listing = await this.executeCommand(
+        `iptables -t ${table} -S ${chain} | grep -E -- "--comment ${tag}(-up|-down)? " || true`
+      );
+      for (const line of listing.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("-A "))) {
+        await this.executeCommand(`iptables -t ${table} ${line.replace(/^-A /, "-D ")} || true`);
+      }
+    }
+    if (opts?.persist !== false) await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+  }
+
+  async persistIptables(): Promise<void> {
+    await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+  }
+
+  /**
+   * Bytes relayed per port (rx = what the client sent, tx = what it received) and
+   * when each port last saw a packet. UDP conntrack entries count down from 180 s
+   * (assured stream) after the last packet, so the remaining timeout gives the age.
+   */
+  async getUdpRelayStats(ports: number[]): Promise<Map<number, { rx: number; tx: number; lastSeen: number | null }>> {
+    const out = new Map<number, { rx: number; tx: number; lastSeen: number | null }>();
+    if (ports.length === 0) return out;
+
+    const counters = await this.executeCommand(`iptables -L FORWARD -v -n -x | grep "wgm-relay-" || true`);
+    for (const line of counters.split("\n")) {
+      const m = line.match(/^\s*\d+\s+(\d+)\s+ACCEPT.*\/\* wgm-relay-(\d+)-(up|down) \*\//);
+      if (!m) continue;
+      const port = Number(m[2]);
+      const entry = out.get(port) || { rx: 0, tx: 0, lastSeen: null };
+      if (m[3] === "up") entry.rx = Number(m[1]);
+      else entry.tx = Number(m[1]);
+      out.set(port, entry);
+    }
+
+    const tracked = await this.executeCommand(
+      `cat /proc/net/nf_conntrack 2>/dev/null | grep -E " dport=(${ports.join("|")}) " || true`
+    );
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const line of tracked.split("\n")) {
+      // ipv4 2 udp 17 <remaining> src=… dst=… sport=… dport=<slot port> … [ASSURED]
+      const m = line.match(/^ipv4\s+\d+\s+udp\s+\d+\s+(\d+)\s+src=\S+\s+dst=\S+\s+sport=\d+\s+dport=(\d+)\s/);
+      if (!m) continue;
+      const port = Number(m[2]);
+      if (!ports.includes(port)) continue;
+      const timeout = line.includes("[ASSURED]") ? 180 : 30;
+      const seen = nowSec - Math.max(0, timeout - Number(m[1]));
+      const entry = out.get(port) || { rx: 0, tx: 0, lastSeen: null };
+      if (!entry.lastSeen || seen > entry.lastSeen) entry.lastSeen = seen;
+      out.set(port, entry);
+    }
+    return out;
+  }
+
   /**
    * Add WireGuard IP address for a subnet gateway
    * Example: 10.10.200.1/24 on wg1

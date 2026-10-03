@@ -1483,9 +1483,10 @@ export default function DashboardPage() {
     if (disabled) {
       const meta = peerMetadata[peer["public-key"]];
       // auto_disable_enabled importa: con el timer apagado la fecha vieja es
-      // decorativa y no debe bloquear el enable.
-      if (meta?.expires_at && meta.auto_disable_enabled) {
-        const expiresAt = new Date(meta.expires_at);
+      // decorativa y no debe bloquear el enable. StarVPN slots keep the date on the peer.
+      const current = meta?.expires_at && meta.auto_disable_enabled ? meta.expires_at : peer.expires_at;
+      if (current) {
+        const expiresAt = new Date(current);
         const isExpired = expiresAt < new Date();
 
         if (isExpired) {
@@ -1983,7 +1984,7 @@ MTU = ${iface?.mtu || 1384}
 [Peer]
 PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = ${endpointHost}:${listenPort}
+Endpoint = ${endpointHost}:${peer["endpoint-port"] || listenPort}
 PersistentKeepalive = 25`;
     }
 
@@ -2193,7 +2194,8 @@ PersistentKeepalive = 25`;
     const listenPort = iface?.["listen-port"] || 51820;
 
     if (isStarhomeRouter) {
-      // Mirror the config the provider hands out: both addresses, its DNS, MTU, IPv6 routed too
+      // Mirror the config the provider hands out: both addresses, its DNS, MTU, IPv6 routed too.
+      // The port is per slot when the account relays through one of our servers.
       const addresses = (peer["allowed-address"] || "").split(",").map((a) => a.trim()).filter(Boolean);
       return `[Interface]
 PrivateKey = ${privateKey}
@@ -2204,7 +2206,7 @@ MTU = ${iface?.mtu || 1384}
 [Peer]
 PublicKey = ${iface?.["public-key"] || "[SERVER_PUBLIC_KEY]"}
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = ${endpointHost}:${listenPort}
+Endpoint = ${endpointHost}:${peer["endpoint-port"] || listenPort}
 PersistentKeepalive = 25`;
     }
 
@@ -2487,17 +2489,19 @@ PersistentKeepalive = 25`;
                   </TableHead>
                   {isStarhomeRouter && <TableHead className="text-muted-foreground">Slot</TableHead>}
                   <TableHead className="text-muted-foreground">Name</TableHead>
-                  <TableHead className="text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Signal className="w-3 h-3" />
-                      Connection
-                    </div>
-                  </TableHead>
+                  {!isStarhomeRouter && (
+                    <TableHead className="text-muted-foreground">
+                      <div className="flex items-center gap-1">
+                        <Signal className="w-3 h-3" />
+                        Connection
+                      </div>
+                    </TableHead>
+                  )}
                   <TableHead className="text-muted-foreground">Interface</TableHead>
                   <TableHead className="text-muted-foreground">Allowed Address</TableHead>
                   <TableHead className="text-muted-foreground">Public IP</TableHead>
                   {isStarhomeRouter && <TableHead className="text-muted-foreground">Location</TableHead>}
-                  <TableHead className="text-muted-foreground">Traffic</TableHead>
+                  {!isStarhomeRouter && <TableHead className="text-muted-foreground">Traffic</TableHead>}
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <User className="w-3 h-3" />
@@ -2578,11 +2582,10 @@ PersistentKeepalive = 25`;
                         )}
                       </TableCell>
 
-                      {/* Connection Status Column */}
+                      {/* Connection Status Column (StarVPN slots don't show it) */}
+                      {!isStarhomeRouter && (
                       <TableCell>
-                        {isStarhomeRouter ? (
-                          <span className="text-xs text-muted-foreground" title="Not reported by this server">—</span>
-                        ) : isDisabled ? (
+                        {isDisabled ? (
                           <div className="flex items-center gap-2">
                             <WifiOff className="w-4 h-4 text-muted-foreground" />
                             <span className="text-xs text-muted-foreground">Disabled</span>
@@ -2609,6 +2612,7 @@ PersistentKeepalive = 25`;
                           </div>
                         )}
                       </TableCell>
+                      )}
 
                       {/* Interface Column */}
                       <TableCell>
@@ -2668,11 +2672,9 @@ PersistentKeepalive = 25`;
                         </TableCell>
                       )}
 
-                      {/* Traffic Column */}
+                      {/* Traffic Column (StarVPN slots don't show it) */}
+                      {!isStarhomeRouter && (
                       <TableCell className="text-sm">
-                        {isStarhomeRouter ? (
-                          <span className="text-xs text-muted-foreground" title="Not reported by this server">—</span>
-                        ) : (
                         <div className="flex flex-col gap-0.5 whitespace-nowrap">
                           <div className="flex items-center gap-1">
                             <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />
@@ -2683,8 +2685,8 @@ PersistentKeepalive = 25`;
                             <span className="text-blue-400 text-xs">{formatBytes(peer.tx)}</span>
                           </div>
                         </div>
-                        )}
                       </TableCell>
+                      )}
 
                       {/* Created By Column */}
                       <TableCell className="text-sm">
@@ -2827,6 +2829,19 @@ PersistentKeepalive = 25`;
                                 title="History"
                               >
                                 <ScrollText className="w-4 h-4" />
+                              </Button>
+                              {/* On/off works through the account's relay server (keys untouched) */}
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleTogglePeer(peer[".id"], isDisabled)}
+                                title={isDisabled ? "Enable" : "Disable (needs a relay server — see Profile)"}
+                              >
+                                {isDisabled ? (
+                                  <Power className="w-4 h-4 text-emerald-400" />
+                                ) : (
+                                  <PowerOff className="w-4 h-4 text-amber-400" />
+                                )}
                               </Button>
                               {canAutoExpire && peer.expires_at && (
                                 <Button

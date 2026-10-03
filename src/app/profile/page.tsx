@@ -55,6 +55,7 @@ interface StarhomeAccount {
   last_synced_at: string | null;
   last_sync_error: string | null;
   wg_server_public_key: string | null;
+  relay_router_id: string | null;
 }
 
 export default function ProfilePage() {
@@ -95,6 +96,9 @@ export default function ProfilePage() {
   const [newStarhome, setNewStarhome] = useState({ label: "", email: "", authToken: "" });
   const [addingStarhome, setAddingStarhome] = useState(false);
   const [syncingStarhomeId, setSyncingStarhomeId] = useState<string | null>(null);
+  // Relay (v35): our Linux servers the account's slots can be routed through
+  const [starhomeRelayOptions, setStarhomeRelayOptions] = useState<{ id: string; name: string }[]>([]);
+  const [settingRelayId, setSettingRelayId] = useState<string | null>(null);
 
   const loadStarhome = useCallback(async () => {
     try {
@@ -102,6 +106,7 @@ export default function ProfilePage() {
       if (!res.ok) return;
       const data = await res.json();
       setStarhomeAccounts(data.accounts || []);
+      setStarhomeRelayOptions(data.relayOptions || []);
       setStarhomeEnabled(Boolean(data.canManage));
     } catch {
       // optional section
@@ -159,6 +164,23 @@ export default function ProfilePage() {
       await Promise.all([loadStarhome(), loadDomains()]);
     } catch (e) {
       toast.error((e as Error).message);
+    }
+  };
+
+  const setStarhomeRelay = async (account: StarhomeAccount, routerId: string | null) => {
+    setSettingRelayId(account.id);
+    try {
+      const json = await starhomePost({ action: "setRelay", accountId: account.id, routerId });
+      toast.success(
+        routerId
+          ? `Relay set — ${json.slots ?? "all"} slots now go through it. Update the DNS record below and hand out new configs.`
+          : "Relay removed — clients go straight to the provider again"
+      );
+      await Promise.all([loadStarhome(), loadDomains()]);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSettingRelayId(null);
     }
   };
 
@@ -756,6 +778,19 @@ export default function ProfilePage() {
                             {a.last_sync_error && <div className="text-red-400">Sync failed: {a.last_sync_error}</div>}
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
+                            <select
+                              className="h-7 rounded-md border border-border bg-secondary px-2 text-xs"
+                              value={a.relay_router_id || ""}
+                              onChange={(e) => setStarhomeRelay(a, e.target.value || null)}
+                              disabled={settingRelayId === a.id}
+                              title="Relay: clients connect through this server of yours, which lets you switch slots on and off and see their traffic"
+                            >
+                              <option value="">No relay (direct)</option>
+                              {starhomeRelayOptions.map((r) => (
+                                <option key={r.id} value={r.id}>Relay: {r.name}</option>
+                              ))}
+                            </select>
+                            {settingRelayId === a.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                             <Badge variant={a.status?.toLowerCase() === "active" ? "default" : "destructive"}>
                               {a.status || "unknown"}
                             </Badge>

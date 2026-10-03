@@ -7,7 +7,9 @@ import {
   SLOT_COLS,
   STARHOME_PROXY_HOST,
   StarhomeError,
+  applyRelay,
   canManageAccount,
+  clearRelay,
   fetchAccountData,
   grantServerAccess,
   revokeServerAccessIfUnused,
@@ -127,11 +129,24 @@ export async function GET() {
     users = (await uq).data || [];
   }
 
+  // Linux servers the caller can relay through (v35)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let relayOptions: any[] = [];
+  if (ctx.canManage) {
+    let rq = admin.from("routers").select("id, name").eq("connection_type", "linux-ssh").order("name");
+    if (!ctx.isAdmin) {
+      const { data: access } = await admin.from("user_routers").select("router_id").eq("user_id", ctx.userId);
+      rq = rq.in("id", (access || []).map((a: { router_id: string }) => a.router_id));
+    }
+    relayOptions = (await rq).data || [];
+  }
+
   return NextResponse.json({
     canManage: ctx.canManage,
     isAdmin: ctx.isAdmin,
     accounts: accounts.map(publicAccount),
     users,
+    relayOptions,
   });
 }
 
@@ -234,6 +249,8 @@ export async function POST(request: Request) {
       case "deleteAccount": {
         const r = await loadOwnedAccount(ctx, body.accountId);
         if ("error" in r) return r.error;
+        // Rules on the relay server don't cascade — best effort before the rows go
+        if (r.account.relay_router_id) await clearRelay(admin, r.account).catch(() => {});
         // Cascades to starhome_accounts → starhome_slots and to both access tables
         await admin.from("routers").delete().eq("id", r.account.router_id);
         await logActivity({
@@ -252,7 +269,53 @@ export async function POST(request: Request) {
         const r = await loadOwnedAccount(ctx, body.accountId);
         if ("error" in r) return r.error;
         const data = await syncAccount(admin, r.account);
+        // New slots need their relay rule; a moved ingress IP needs all of them rewritten
+        if (r.account.relay_router_id) await applyRelay(admin, r.account);
         return NextResponse.json({ synced: true, slots: data.slots.length });
+      }
+
+      case "setRelay": {
+        const r = await loadOwnedAccount(ctx, body.accountId);
+        if ("error" in r) return r.error;
+        const routerId = body.routerId ? String(body.routerId) : null;
+        if (routerId) {
+          const { data: router } = await admin.from("routers").select("id, connection_type").eq("id", routerId).maybeSingle();
+          if (!router || router.connection_type !== "linux-ssh") {
+            return NextResponse.json({ error: "The relay must be one of your Linux servers" }, { status: 400 });
+          }
+          if (!ctx.isAdmin) {
+            const { data: access } = await admin
+              .from("user_routers")
+              .select("id")
+              .eq("user_id", ctx.userId)
+              .eq("router_id", routerId)
+              .maybeSingle();
+            if (!access) return NextResponse.json({ error: "Server not found" }, { status: 404 });
+          }
+        }
+        if (routerId === r.account.relay_router_id) return NextResponse.json({ relayRouterId: routerId });
+
+        // Leaving a relay: take its rules down first so nothing dangles there
+        if (r.account.relay_router_id) await clearRelay(admin, r.account);
+        await admin
+          .from("starhome_accounts")
+          .update({ relay_router_id: routerId, relay_target_ip: null })
+          .eq("id", r.account.id);
+        let applied: { target: string; slots: number } | null = null;
+        if (routerId) {
+          applied = await applyRelay(admin, { ...r.account, relay_router_id: routerId, relay_target_ip: null });
+        }
+        await logActivity({
+          supabase: admin,
+          userId: ctx.userId,
+          routerId: r.account.router_id,
+          action: "update",
+          entityType: "starhome_account",
+          entityId: r.account.id,
+          entityName: r.account.label,
+          details: { relayRouterId: routerId, relayTarget: applied?.target || null },
+        });
+        return NextResponse.json({ relayRouterId: routerId, ...(applied || {}) });
       }
 
       case "assignSlot": {

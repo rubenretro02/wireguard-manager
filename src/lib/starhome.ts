@@ -1,8 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { WireGuardPeer } from "@/lib/types";
+import { promises as dns } from "node:dns";
+import type { AuthMethod, Router, WireGuardPeer } from "@/lib/types";
 import { publicKeyFromPrivate } from "@/lib/wireguard-keys";
 import { logActivity } from "@/lib/activity-logger";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
+import { LinuxWireGuardClient } from "@/lib/linux-wireguard";
+import { cachedRouterRead } from "@/lib/router-read-cache";
 
 /**
  * StarHome (StarVPN) — provider API client + the mapping of its slots onto the
@@ -51,6 +54,15 @@ export const STARHOME_WG_MTU = 1384;
  * visible to their users.
  */
 export const STARHOME_WG_INTERFACE = "wg0";
+
+/**
+ * Relay (v35): with a relay server set on the account, the client's Endpoint is
+ * OUR server at (BASE + slot number) and that server DNATs the UDP to
+ * wg.starzone.io:1276. That is what makes enable/disable possible without
+ * touching the slot's keys: disable = drop the DNAT rule.
+ */
+export const STARHOME_RELAY_PORT_BASE = 42000;
+export const relayPortForSlot = (slotNumber: number) => STARHOME_RELAY_PORT_BASE + slotNumber;
 
 // ---------------------------------------------------------------------------
 // Provider API
@@ -205,6 +217,10 @@ export interface StarhomeAccountRow extends StarhomeCredentials {
   last_sync_error: string | null;
   /** Override of STARHOME_WG_SERVER_PUBLIC_KEY, for the day the provider rotates its key. */
   wg_server_public_key: string | null;
+  /** v35: our linux-ssh server that relays the slots' WireGuard (null = clients go direct, no on/off). */
+  relay_router_id: string | null;
+  /** The wg.starzone.io address the DNAT rules currently point at. */
+  relay_target_ip: string | null;
   created_at: string;
 }
 
@@ -226,10 +242,12 @@ export interface StarhomeSlotRow {
   assigned_at: string | null;
   expires_at: string | null;
   last_rotated_at: string | null;
+  /** v35: relay switched off for this slot (only meaningful with a relay server). */
+  disabled: boolean;
 }
 
-export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, created_at";
-export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at";
+export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, relay_router_id, relay_target_ip, created_at";
+export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at, disabled";
 
 export interface Viewer {
   userId: string;
@@ -326,12 +344,23 @@ export function slotLocation(slot: Pick<StarhomeSlotRow, "country" | "region" | 
   return [place, slot.isp].filter(Boolean).join(" · ");
 }
 
-/** Dashboard view: a slot as a read-only WireGuard peer. `endpointHost` = the tenant's white-label name, if any. */
+export interface RelayStats {
+  rx: number;
+  tx: number;
+  lastSeen: number | null;
+}
+
+/**
+ * Dashboard view: a slot as a WireGuard peer. `endpointHost` = the tenant's
+ * white-label name, `relayHost` = the relay server when the account has one
+ * (then the port is the slot's relay port and the stats come from that server).
+ */
 export function slotAsPeer(
   slot: StarhomeSlotRow,
   account: StarhomeAccountRow,
   emails: Map<string, string>,
-  endpointHost: string | null
+  endpointHost: string | null,
+  relay?: { host: string; stats?: RelayStats } | null
 ): WireGuardPeer {
   const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
   const wgIpv4 = typeof slot.raw?.wg_ipv4 === "string" ? (slot.raw.wg_ipv4 as string) : null;
@@ -351,11 +380,20 @@ export function slotAsPeer(
     // comment is the public IP column; StarVPN doesn't report the slot's IP
     comment: "",
     location: slotLocation(slot),
-    disabled: false,
+    // Without a relay nothing can switch the slot off, so it is always "enabled"
+    disabled: relay ? slot.disabled : false,
+    "endpoint-port": relay ? relayPortForSlot(slot.slot_number) : STARHOME_WG_PORT,
+    ...(relay?.stats
+      ? {
+          rx: relay.stats.rx,
+          tx: relay.stats.tx,
+          "last-handshake": relay.stats.lastSeen ? String(relay.stats.lastSeen) : "0",
+        }
+      : {}),
     created_by_email: emails.get(who) || null,
     created_by_user_id: who,
     created_at: slot.assigned_at || account.created_at,
-    endpoint_host: endpointHost || STARHOME_WG_ENDPOINT,
+    endpoint_host: endpointHost || (relay ? relay.host : STARHOME_WG_ENDPOINT),
     expires_at: slot.expires_at,
   };
 }
@@ -371,9 +409,38 @@ export async function starhomeSlotsByPublicKey(admin: SupabaseClient, accountId:
   return byKey;
 }
 
-export async function starhomePeersForRouter(admin: SupabaseClient, routerId: string, viewer: Viewer): Promise<WireGuardPeer[]> {
+/**
+ * The Dashboard polls every ~3 s; the provider is re-read at most once a minute
+ * per account (or on Force Refresh). Changes made on StarVPN's site — a new
+ * region, or a username change that REGENERATES the slot's WireGuard key — show
+ * up within that minute instead of waiting for someone to open Profile.
+ */
+const PEERS_SYNC_TTL_MS = 60_000;
+const syncInFlight = new Map<string, Promise<void>>();
+
+async function syncIfStale(admin: SupabaseClient, account: StarhomeAccountRow, force: boolean): Promise<void> {
+  const age = account.last_synced_at ? Date.now() - new Date(account.last_synced_at).getTime() : Infinity;
+  if (!force && age < PEERS_SYNC_TTL_MS) return;
+  let p = syncInFlight.get(account.id);
+  if (!p) {
+    p = syncAccount(admin, account)
+      .then(() => undefined)
+      .catch((e) => console.error(`[starhome] sync of ${account.label} failed:`, (e as Error).message))
+      .finally(() => syncInFlight.delete(account.id));
+    syncInFlight.set(account.id, p);
+  }
+  await p;
+}
+
+export async function starhomePeersForRouter(
+  admin: SupabaseClient,
+  routerId: string,
+  viewer: Viewer,
+  opts?: { forceSync?: boolean }
+): Promise<WireGuardPeer[]> {
   const account = await accountForRouter(admin, routerId);
   if (!account) return [];
+  await syncIfStale(admin, account, Boolean(opts?.forceSync));
   const { slots, emails } = await visibleSlots(admin, account, viewer);
 
   // White-label (v26): <slug>.<tenant domain>, which the tenant points at
@@ -385,7 +452,129 @@ export async function starhomePeersForRouter(admin: SupabaseClient, routerId: st
     .maybeSingle();
   const resolveEndpoint = await buildEndpointResolver(admin, router || {});
 
-  return slots.map((s) => slotAsPeer(s, account, emails, resolveEndpoint(s.assigned_user_id || account.owner_user_id)));
+  // Relay: the peers point at our server and its counters/conntrack give traffic + presence
+  let relay: { host: string; stats: Map<number, RelayStats> } | null = null;
+  const relayRouter = await relayRouterFor(admin, account);
+  if (relayRouter) {
+    const ports = slots.map((s) => relayPortForSlot(s.slot_number));
+    const read = await cachedRouterRead(`starhome-relay:${relayRouter.id}`, () =>
+      relayClient(relayRouter).getUdpRelayStats(ports)
+    ).catch(() => null);
+    relay = { host: relayRouter.endpoint_ip || relayRouter.host, stats: read?.data || new Map() };
+  }
+
+  return slots.map((s) =>
+    slotAsPeer(
+      s,
+      account,
+      emails,
+      resolveEndpoint(s.assigned_user_id || account.owner_user_id),
+      relay ? { host: relay.host, stats: relay.stats.get(relayPortForSlot(s.slot_number)) } : null
+    )
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Relay server (v35)
+// ---------------------------------------------------------------------------
+
+export function relayClient(router: Router): LinuxWireGuardClient {
+  return new LinuxWireGuardClient({
+    host: router.host,
+    port: router.ssh_port || 22,
+    username: router.username,
+    password: router.password,
+    privateKey: router.ssh_key || undefined,
+    authMethod: (router.ssh_auth_method as AuthMethod) || "password",
+    wgInterface: router.wg_interface || "wg0",
+    outInterface: router.out_interface || "ens192",
+  });
+}
+
+export async function relayRouterFor(admin: SupabaseClient, account: StarhomeAccountRow): Promise<Router | null> {
+  if (!account.relay_router_id) return null;
+  const { data } = await admin.from("routers").select("*").eq("id", account.relay_router_id).maybeSingle();
+  return (data as Router | null) || null;
+}
+
+/** Current addresses of the provider's WireGuard ingress (a CNAME to a pool of ~16 IPs, TTL 300). */
+export async function resolveIngressIps(): Promise<string[]> {
+  const ips = await dns.resolve4(STARHOME_WG_ENDPOINT);
+  if (!ips.length) throw new StarhomeError(`${STARHOME_WG_ENDPOINT} did not resolve`);
+  return ips.sort();
+}
+
+/**
+ * (Re)writes the DNAT rules of every slot on the relay server: enabled slots get
+ * their rule, disabled ones get it removed. Also picks a fresh ingress IP when
+ * the stored one dropped out of DNS.
+ */
+export async function applyRelay(admin: SupabaseClient, account: StarhomeAccountRow): Promise<{ target: string; slots: number }> {
+  const router = await relayRouterFor(admin, account);
+  if (!router) throw new StarhomeError("This account has no relay server");
+
+  const ips = await resolveIngressIps();
+  const target = account.relay_target_ip && ips.includes(account.relay_target_ip) ? account.relay_target_ip : ips[0];
+  if (target !== account.relay_target_ip) {
+    await admin.from("starhome_accounts").update({ relay_target_ip: target }).eq("id", account.id);
+  }
+
+  const { data: slots } = await admin.from("starhome_slots").select("slot_number, disabled").eq("account_id", account.id);
+  const client = relayClient(router);
+  for (const s of (slots || []) as Array<{ slot_number: number; disabled: boolean }>) {
+    const port = relayPortForSlot(s.slot_number);
+    if (s.disabled) await client.removeUdpRelay(port, { persist: false });
+    else await client.setUdpRelay(port, target, STARHOME_WG_PORT, { persist: false });
+  }
+  await client.persistIptables();
+  return { target, slots: slots?.length || 0 };
+}
+
+/** Removes every rule this account put on its relay server (relay switched off or moved). */
+export async function clearRelay(admin: SupabaseClient, account: StarhomeAccountRow): Promise<void> {
+  const router = await relayRouterFor(admin, account);
+  if (!router) return;
+  const { data: slots } = await admin.from("starhome_slots").select("slot_number").eq("account_id", account.id);
+  const client = relayClient(router);
+  for (const s of (slots || []) as Array<{ slot_number: number }>) {
+    await client.removeUdpRelay(relayPortForSlot(s.slot_number), { persist: false });
+  }
+  await client.persistIptables();
+}
+
+/** Switches one slot's relay on or off and records it. Throws when the account has no relay. */
+export async function setSlotRelayEnabled(admin: SupabaseClient, account: StarhomeAccountRow, slot: StarhomeSlotRow, enabled: boolean): Promise<void> {
+  const router = await relayRouterFor(admin, account);
+  if (!router) throw new StarhomeError("Set a relay server for this account in Profile → StarHome accounts to switch slots on and off");
+  const client = relayClient(router);
+  const port = relayPortForSlot(slot.slot_number);
+  if (enabled) {
+    const ips = await resolveIngressIps();
+    const target = account.relay_target_ip && ips.includes(account.relay_target_ip) ? account.relay_target_ip : ips[0];
+    await client.setUdpRelay(port, target, STARHOME_WG_PORT);
+  } else {
+    await client.removeUdpRelay(port);
+  }
+  await admin.from("starhome_slots").update({ disabled: !enabled }).eq("id", slot.id);
+}
+
+/**
+ * Cron hook: when the ingress address an account relays to disappears from DNS,
+ * move its rules to one that is still announced. Cheap when nothing changed.
+ */
+export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
+  const { data: accounts } = await admin.from("starhome_accounts").select(ACCOUNT_COLS).not("relay_router_id", "is", null);
+  if (!accounts?.length) return;
+  const ips = await resolveIngressIps().catch(() => null);
+  if (!ips) return;
+  for (const account of accounts as StarhomeAccountRow[]) {
+    if (account.relay_target_ip && ips.includes(account.relay_target_ip)) continue;
+    try {
+      await applyRelay(admin, account);
+    } catch (e) {
+      console.error(`[starhome] relay repair failed for ${account.label}:`, (e as Error).message);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -413,33 +602,41 @@ export async function revokeServerAccessIfUnused(admin: SupabaseClient, account:
 }
 
 /**
- * Unassigns every slot whose timer ran out. The date itself stays so the
- * Dashboard shows "Expired" until someone renews it: the slot can't be switched
- * off at StarHome, so the timer is a reminder, not an enforcement.
+ * Expired slots: the assignment is dropped and, when the account relays through
+ * our server, the relay is switched off (that is the auto-disable). Without a
+ * relay the date just stays so the Dashboard shows "Expired" until renewed.
  */
 export async function expireSlotAssignments(admin: SupabaseClient): Promise<void> {
   const { data: expired } = await admin
     .from("starhome_slots")
-    .select("id, slot_number, account_id, assigned_user_id")
-    .not("assigned_user_id", "is", null)
-    .lt("expires_at", new Date().toISOString());
+    .select(SLOT_COLS)
+    .lt("expires_at", new Date().toISOString())
+    .or("assigned_user_id.not.is.null,disabled.eq.false");
   if (!expired?.length) return;
 
-  await admin
-    .from("starhome_slots")
-    .update({ assigned_user_id: null, assigned_at: null })
-    .in("id", expired.map((s: { id: string }) => s.id));
-
-  const accounts = new Map<string, StarhomeAccountRow>();
-  for (const s of expired) {
-    let account = accounts.get(s.account_id);
-    if (!account) {
+  const accounts = new Map<string, StarhomeAccountRow | null>();
+  for (const s of expired as StarhomeSlotRow[]) {
+    if (!accounts.has(s.account_id)) {
       const { data } = await admin.from("starhome_accounts").select(ACCOUNT_COLS).eq("id", s.account_id).maybeSingle();
-      if (!data) continue;
-      account = data as StarhomeAccountRow;
-      accounts.set(s.account_id, account);
+      accounts.set(s.account_id, (data as StarhomeAccountRow | null) || null);
     }
-    await revokeServerAccessIfUnused(admin, account, s.assigned_user_id);
+    const account = accounts.get(s.account_id);
+    if (!account) continue;
+
+    const changes: Record<string, unknown> = {};
+    if (s.assigned_user_id) Object.assign(changes, { assigned_user_id: null, assigned_at: null });
+    if (account.relay_router_id && !s.disabled) {
+      try {
+        await relayClient((await relayRouterFor(admin, account))!).removeUdpRelay(relayPortForSlot(s.slot_number));
+        changes.disabled = true;
+      } catch (e) {
+        console.error(`[starhome] auto-disable of slot ${s.slot_number} failed:`, (e as Error).message);
+      }
+    }
+    if (Object.keys(changes).length === 0) continue;
+
+    await admin.from("starhome_slots").update(changes).eq("id", s.id);
+    if (s.assigned_user_id) await revokeServerAccessIfUnused(admin, account, s.assigned_user_id);
     await logActivity({
       supabase: admin,
       userId: null,
@@ -447,8 +644,8 @@ export async function expireSlotAssignments(admin: SupabaseClient): Promise<void
       action: "disable",
       entityType: "starhome_slot",
       entityId: s.id,
-      entityName: `Slot #${s.slot_number}`,
-      details: { reason: "expired", unassignedUserId: s.assigned_user_id },
+      entityName: s.name || `Slot ${s.slot_number}`,
+      details: { reason: "expired", unassignedUserId: s.assigned_user_id, relayOff: changes.disabled === true },
     });
   }
 }

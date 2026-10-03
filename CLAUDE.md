@@ -89,17 +89,40 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - `/api/wireguard`: rama `connectionType === "starhome"` antes de todo lo demás — solo `getInterfaces`
   (una interface `starvpn` con `STARHOME_WG_SERVER_PUBLIC_KEY` + puerto 1276) y `getPeers` (desde
   `starhome_slots`); cualquier otra acción → 400.
+- **Relay (v35, `scripts/migration-v35-starhome-relay.sql`) — así se hace enable/disable sin
+  rotar llaves.** StarVPN no puede apagar un slot, así que el config del cliente apunta a UN SERVER
+  NUESTRO (linux-ssh, `starhome_accounts.relay_router_id`, se elige en Profile → tarjeta StarHome →
+  select "Relay") en el puerto `42000 + slot` (`relayPortForSlot`), y ese server hace DNAT del UDP a
+  `wg.starzone.io:1276` (`LinuxWireGuardClient.setUdpRelay/removeUdpRelay`: `-t nat PREROUTING`
+  DNAT con comment `wgm-relay-<port>` + dos reglas FORWARD con `--ctorigdstport` para contar bytes
+  por dirección + un MASQUERADE compartido `wgm-relay-nat`; todo persistido en
+  `/etc/iptables/rules.v4`). Disable = quitar la DNAT (el túnel muere en ~25 s), enable = ponerla;
+  el `.conf` del cliente no cambia. `starhome_slots.disabled` guarda el estado; sin relay el slot
+  siempre está "enabled" y el toggle devuelve 400 explicando. Al vencer el timer,
+  `expireSlotAssignments` apaga el relay (eso es el auto-disable) y marca `disabled`; Renew hace
+  `enablePeer` y lo vuelve a poner. `relay_target_ip` = la IP de `wg.starzone.io` usada; el cron
+  `peer-presence` (`ensureRelayTargets`) la re-resuelve cada corrida y si StarVPN la sacó del DNS
+  reescribe las reglas (`applyRelay`). `sync` también re-aplica (slots nuevos). Con relay, el
+  registro DNS del tenant pasa a **A → IP del relay** y `endpoint-port` del peer es el puerto del
+  slot. Tráfico y presencia (`getUdpRelayStats`: counters de FORWARD + `/proc/net/nf_conntrack`)
+  llegan en `rx/tx/last-handshake` y alimentan las tarjetas, aunque homevpn pidió que las columnas
+  Connection y Traffic no se muestren para estos slots. Costo: todo el tráfico de los slots pasa
+  por el relay (sube y baja), elegir un server con ancho de banda.
+- **Sync automático:** `starhomePeersForRouter` re-lee StarVPN como máximo cada 60 s por cuenta
+  mientras alguien tiene el Dashboard abierto (`syncIfStale`, coalescido por cuenta), y "Force
+  Refresh" lo fuerza. Motivo (reporte de homevpn 2026-10-03): cambiar la región del slot en StarVPN
+  no se veía, y **cambiar el username del slot en StarVPN regenera su llave WireGuard** (el `.conf`
+  viejo muere) y el panel seguía entregando la llave vieja. Es también la única "rotación de llave"
+  que existe: se hace en el dashboard de StarVPN y el panel la recoge en el siguiente sync.
 - Dashboard: `isStarhomeRouter` salta los filtros client-side de metadata/IP (el server ya scopeó),
   `isPeerExpired`/`getTimeRemaining`/stats/diálogo de timer leen `peer.expires_at` como fallback,
   sin "Add Peer". Fila: lápiz (solo el nombre → `updatePeer` escribe `starhome_slots.name`;
-  address e IP no se editan), descargar/QR/ver config, History, Renew/Add time y calendario
-  (`setPeerExpiry` interceptado en la rama starhome → `starhome_slots.expires_at` con el mismo
-  `resolveExpiry`). **El timer es solo recordatorio**: no hay enable/disable ni rotate key porque
-  StarVPN no lo expone (un slot está siempre encendido; solo regenerar su llave cortaría el acceso
-  y tampoco está en la API). Al vencer, `expireSlotAssignments` quita la asignación pero deja la
-  fecha para que se vea "Expired". Columnas: Connection y Traffic "—" (sin handshakes ni bytes),
-  Public IP "-" (no la reporta), columna extra **Location** (`peer.location`, "US-nj · comcast",
-  buscable), Allowed Address en dos líneas (v4 y v6). Columna **Slot** (`peer.slot_number`, fijo,
+  address e IP no se editan), descargar/QR/ver config, History, enable/disable (vía relay),
+  Renew/Add time y calendario (`setPeerExpiry` interceptado en la rama starhome →
+  `starhome_slots.expires_at` con el mismo `resolveExpiry`). Columnas: **Connection y Traffic no se
+  muestran** (pedido de homevpn), Public IP "-" (no la reporta), columna extra **Location**
+  (`peer.location`, "US-nj · comcast", buscable), Allowed Address en dos líneas (v4 y v6). Columna
+  **Slot** (`peer.slot_number`, fijo,
   del proveedor) antes de Name; "By Created" ordena por slot de menor a mayor (todos tienen la
   misma fecha); el buscador acepta "42" o "slot 42". `name` arranca vacío: es la etiqueta interna
   del tenant (cliente que tiene el slot). El `.conf` se baja como `<name>.conf` o `slot-N.conf`.
@@ -131,8 +154,10 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   no está en ningún script): la migración v32 lo recrea con `starhome`. Sin eso, Connect falla con
   "new row for relation routers violates check constraint".
 - El upsert de slots solo lleva columnas del proveedor → los sync nunca pisan asignación ni timer.
-- El timer es **lazy**: cada lectura (`visibleSlots`) primero desasigna los vencidos y les quita el
-  acceso al server (no hay cron). En StarHome no cambia nada.
+- El timer es **lazy**: cada lectura (`visibleSlots`) primero desasigna los vencidos, les quita el
+  acceso al server y, con relay, apaga su DNAT (no hay cron). En StarHome no cambia nada.
+- Las reglas del relay viven en el server (`/etc/iptables/rules.v4`): si se formatea, el restore
+  script no las recrea — cambiar el relay a otro server y volver, o "Sync" en Profile (`applyRelay`).
 - Los peers StarVPN NO tienen `peer_metadata`: el timer vive solo en `starhome_slots.expires_at`.
   No agregar acciones de timer del Dashboard a estos peers (volverían los dos relojes de v24).
 - Semi-admins solo asignan a `profiles.created_by_user_id = yo`; admin a cualquiera.

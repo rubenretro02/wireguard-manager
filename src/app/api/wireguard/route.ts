@@ -11,12 +11,15 @@ import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
 import {
   accountForRouter,
   canManageAccount,
+  setSlotRelayEnabled,
   starhomePeersForRouter,
   starhomeSlotsByPublicKey,
+  StarhomeError,
   STARHOME_WG_INTERFACE,
   STARHOME_WG_MTU,
   STARHOME_WG_PORT,
   STARHOME_WG_SERVER_PUBLIC_KEY,
+  type StarhomeSlotRow,
 } from "@/lib/starhome";
 
 // Lazy service-role client for reads that must bypass RLS
@@ -111,7 +114,7 @@ export async function POST(request: Request) {
       });
     }
     if (action === "getPeers") {
-      const peers = await starhomePeersForRouter(adminClient, routerId, { userId: user.id, isAdmin });
+      const peers = await starhomePeersForRouter(adminClient, routerId, { userId: user.id, isAdmin }, { forceSync: Boolean(forceRefresh) });
       return NextResponse.json({ peers, stale: false, fetchedAt: Date.now(), source: "db" });
     }
 
@@ -132,6 +135,40 @@ export async function POST(request: Request) {
         .eq("id", slotId)
         .eq("account_id", account.id);
       if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
+      return NextResponse.json({ success: true });
+    }
+
+    // On/off = add or drop the slot's DNAT on the relay server (v35). Keys untouched.
+    if (action === "enablePeer" || action === "disablePeer") {
+      const slotId = String(data?.id || "").replace(/^\*sh:/, "");
+      const { data: slot } = await adminClient
+        .from("starhome_slots")
+        .select("*")
+        .eq("id", slotId)
+        .eq("account_id", account.id)
+        .maybeSingle();
+      if (!slot) return NextResponse.json({ error: "Slot not found" }, { status: 404 });
+      const enable = action === "enablePeer";
+      if (enable && slot.expires_at && new Date(slot.expires_at) < new Date()) {
+        return NextResponse.json({ error: "This slot is expired — renew it instead" }, { status: 400 });
+      }
+      try {
+        await setSlotRelayEnabled(adminClient, account, slot as StarhomeSlotRow, enable);
+      } catch (e) {
+        const status = e instanceof StarhomeError ? 400 : 502;
+        return NextResponse.json({ error: (e as Error).message }, { status });
+      }
+      await logActivity({
+        supabase: adminClient,
+        userId: user.id,
+        routerId,
+        action: enable ? "enable" : "disable",
+        entityType: "starhome_slot",
+        entityId: slot.id,
+        entityName: slot.name || `Slot ${slot.slot_number}`,
+        peerPublicKey: data?.publicKey || null,
+        details: { relay: true },
+      });
       return NextResponse.json({ success: true });
     }
 
