@@ -565,26 +565,26 @@ export async function starhomePeersForRouter(
   let relay: { host: string; stats: Map<number, RelayStats> } | null = null;
   const relayRouter = await relayRouterFor(admin, account);
   if (relayRouter) {
-    // A slot without a port yet (new slot, relay just set) gets one — and its rule — now
+    // A slot without a port yet (new slot, relay just set) gets one now; the rules follow in the background
     if (slots.some((s) => !s.relay_port)) {
-      await applyRelay(admin, account).catch((e) => console.error("[starhome] relay apply:", (e as Error).message));
-      const { data: fresh } = await admin.from("starhome_slots").select("id, relay_port").in("id", slots.map((s) => s.id));
-      const byId = new Map(((fresh || []) as Array<{ id: string; relay_port: number | null }>).map((f) => [f.id, f.relay_port]));
-      for (const s of slots) s.relay_port = byId.get(s.id) ?? s.relay_port;
+      await assignRelayPorts(admin, slots).catch((e) => console.error("[starhome] port assignment:", (e as Error).message));
+      healRelaySoon(admin, account, relayRouter, true);
+    } else {
+      healRelaySoon(admin, account, relayRouter, Boolean(opts?.forceSync));
     }
     const ports = slots.map((s) => s.relay_port).filter((p): p is number => !!p);
     const read = await cachedRouterRead(`starhome-relay:${relayRouter.id}`, () =>
       relayClient(relayRouter).getUdpRelayStats(ports)
     ).catch(() => null);
     const stats = read?.data || new Map<number, RelayStats>();
-    // No conntrack listing on this server → "seen" = the moment the counters last grew
+    // No conntrack listing on this server → "seen" = the moment the CLIENT last sent something
+    // (rx only: the provider keeps sending keepalives to a client that already left)
     const nowSec = Math.floor(Date.now() / 1000);
     for (const [port, s] of stats) {
       const key = `${relayRouter.id}:${port}`;
-      const total = s.rx + s.tx;
       const prev = relayGrowth.get(key);
-      if (!prev) relayGrowth.set(key, { bytes: total, at: 0 });
-      else if (total > prev.bytes) relayGrowth.set(key, { bytes: total, at: nowSec });
+      if (!prev) relayGrowth.set(key, { bytes: s.rx, at: 0 });
+      else if (s.rx > prev.bytes) relayGrowth.set(key, { bytes: s.rx, at: nowSec });
       if (!s.lastSeen) s.lastSeen = relayGrowth.get(key)?.at || null;
     }
     relay = { host: relayRouter.endpoint_ip || relayRouter.host, stats };
@@ -669,30 +669,80 @@ export async function applyRelay(admin: SupabaseClient, account: StarhomeAccount
   await assignRelayPorts(admin, slots);
 
   const client = relayClient(router);
-  // Only touch what differs: rewriting a rule resets its byte counters
-  const existing = await client.listUdpRelays();
-  let changed = 0;
+  const commands = relayCommandsToConverge(slots, await client.listUdpRelays(), await relayPortsOnRouter(admin, router.id), target);
+  if (commands.length > 0) {
+    await client.runShellBatch(commands);
+    await client.persistIptables();
+  }
+  return { target, slots: slots.length };
+}
+
+/**
+ * The shell lines that take the relay from what is on the server to what the DB
+ * says: enabled slots relayed to `target` and unblocked, disabled ones removed
+ * and blocked, and ports nobody owns (deleted slots, the old 42000 + slot
+ * scheme) removed and blocked so their live flows die too. Only what differs is
+ * touched, because rewriting a rule resets its byte counters.
+ */
+function relayCommandsToConverge(
+  slots: StarhomeSlotRow[],
+  onServer: { relays: Map<number, string>; blocked: Set<number> },
+  owned: Set<number>,
+  target: string
+): string[] {
+  const commands: string[] = [];
   for (const s of slots) {
     if (!s.relay_port) continue;
-    const current = existing.get(s.relay_port);
+    const current = onServer.relays.get(s.relay_port);
+    const blocked = onServer.blocked.has(s.relay_port);
     if (s.disabled) {
-      if (current === undefined) continue;
-      await client.removeUdpRelay(s.relay_port, { persist: false });
+      if (current === undefined && blocked) continue;
+      commands.push(...LinuxWireGuardClient.udpRelayRemoveCommands(s.relay_port, current, STARHOME_WG_PORT, true));
     } else {
-      if (current === target) continue;
-      await client.setUdpRelay(s.relay_port, target, STARHOME_WG_PORT, { persist: false });
+      if (current === target && !blocked) continue;
+      commands.push(...LinuxWireGuardClient.udpRelayAddCommands(s.relay_port, target, STARHOME_WG_PORT, current));
     }
-    changed++;
   }
-  // Rules nobody on this relay owns any more (deleted slots, the old 42000 + slot scheme)
-  const owned = await relayPortsOnRouter(admin, router.id);
-  for (const port of existing.keys()) {
+  for (const [port, current] of onServer.relays) {
     if (owned.has(port)) continue;
-    await client.removeUdpRelay(port, { persist: false });
-    changed++;
+    commands.push(...LinuxWireGuardClient.udpRelayRemoveCommands(port, current, STARHOME_WG_PORT, true));
   }
-  if (changed > 0) await client.persistIptables();
-  return { target, slots: slots.length };
+  return commands;
+}
+
+/** True when the server already matches the DB (nothing for applyRelay to do). */
+export async function relayIsConverged(admin: SupabaseClient, account: StarhomeAccountRow, router: Router): Promise<boolean> {
+  if (!account.relay_target_ip) return false;
+  const { data: rows } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", account.id);
+  const slots = (rows || []) as StarhomeSlotRow[];
+  if (slots.some((s) => !s.relay_port)) return false;
+  const onServer = await relayClient(router).listUdpRelays();
+  return relayCommandsToConverge(slots, onServer, await relayPortsOnRouter(admin, router.id), account.relay_target_ip).length === 0;
+}
+
+/**
+ * Self-heal from the Dashboard poll: at most every 5 minutes per account, make
+ * sure the server matches the DB (a partial apply, a server restored from an old
+ * rules.v4, an ingress IP that left DNS). Runs in the background, one at a time.
+ */
+const relayHealAt = new Map<string, number>();
+const relayHealInFlight = new Set<string>();
+const RELAY_HEAL_TTL_MS = 5 * 60 * 1000;
+
+export function healRelaySoon(admin: SupabaseClient, account: StarhomeAccountRow, router: Router, force = false): void {
+  const last = relayHealAt.get(account.id) || 0;
+  if (!force && Date.now() - last < RELAY_HEAL_TTL_MS) return;
+  if (relayHealInFlight.has(account.id)) return;
+  relayHealInFlight.add(account.id);
+  relayHealAt.set(account.id, Date.now());
+  void (async () => {
+    const ips = await resolveIngressIps(router);
+    const targetOk = Boolean(account.relay_target_ip && ips.includes(account.relay_target_ip));
+    if (targetOk && (await relayIsConverged(admin, account, router))) return;
+    await applyRelay(admin, account);
+  })()
+    .catch((e) => console.error(`[starhome] relay heal of ${account.label}:`, (e as Error).message))
+    .finally(() => relayHealInFlight.delete(account.id));
 }
 
 /** Hands a random, unused port to every slot that has none. Unique across all slots (DB constraint). */
@@ -764,16 +814,7 @@ export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
       if (!router) continue;
       const ips = await resolveIngressIps(router);
       const targetOk = Boolean(account.relay_target_ip && ips.includes(account.relay_target_ip));
-      // Also self-heal missing rules (a failed apply, a server rebuilt from an old rules.v4)
-      let rulesOk = targetOk;
-      if (targetOk) {
-        const { data: rows } = await admin.from("starhome_slots").select("relay_port, disabled").eq("account_id", account.id);
-        const existing = await relayClient(router).listUdpRelays();
-        rulesOk = ((rows || []) as Array<{ relay_port: number | null; disabled: boolean }>).every(
-          (s) => s.disabled || (s.relay_port != null && existing.get(s.relay_port) === account.relay_target_ip)
-        );
-      }
-      if (rulesOk) continue;
+      if (targetOk && (await relayIsConverged(admin, account, router))) continue;
       await applyRelay(admin, account);
     } catch (e) {
       console.error(`[starhome] relay repair failed for ${account.label}:`, (e as Error).message);

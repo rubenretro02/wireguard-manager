@@ -713,15 +713,61 @@ export class LinuxWireGuardClient {
     return out.split(/\s+/).filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip));
   }
 
-  /** Current relays: slot port → target address of its DNAT rule. */
-  async listUdpRelays(): Promise<Map<number, string>> {
-    const out = new Map<number, string>();
+  /** Current relays: slot port → target address of its DNAT rule, plus the ports currently blocked. */
+  async listUdpRelays(): Promise<{ relays: Map<number, string>; blocked: Set<number> }> {
+    const relays = new Map<number, string>();
     const listing = await this.executeCommand(`iptables -t nat -S PREROUTING | grep "wgm-relay-" || true`);
     for (const line of listing.split("\n")) {
       const m = line.match(/--dport (\d+) .*--to-destination (\d{1,3}(?:\.\d{1,3}){3}):/);
-      if (m) out.set(Number(m[1]), m[2]);
+      if (m) relays.set(Number(m[1]), m[2]);
     }
-    return out;
+    const blocked = new Set<number>();
+    const blocks = await this.executeCommand(`iptables -S FORWARD | grep -- "-block " || true`);
+    for (const line of blocks.split("\n")) {
+      const m = line.match(/--ctorigdstport (\d+) /);
+      if (m) blocked.add(Number(m[1]));
+    }
+    return { relays, blocked };
+  }
+
+  /**
+   * Shell lines that put one relay port in place (same rules as setUdpRelay), for the
+   * batch path: every delete loops so duplicates can't survive, and a block is lifted.
+   */
+  static udpRelayAddCommands(port: number, target: string, targetPort: number, currentTarget?: string): string[] {
+    return [
+      ...LinuxWireGuardClient.udpRelayRemoveCommands(port, currentTarget, targetPort, false),
+      `iptables -t nat -I PREROUTING 1 -p udp --dport ${port} -m comment --comment wgm-relay-${port} -j DNAT --to-destination ${target}:${targetPort}`,
+      `iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} --ctdir ORIGINAL -m comment --comment wgm-relay-${port}-up -j ACCEPT`,
+      `iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} --ctdir REPLY -m comment --comment wgm-relay-${port}-down -j ACCEPT`,
+    ];
+  }
+
+  /** Shell lines that take one relay port down (same as removeUdpRelay); `block` leaves the DROP. */
+  static udpRelayRemoveCommands(port: number, currentTarget: string | undefined, targetPort: number, block: boolean): string[] {
+    const tag = `wgm-relay-${port}`;
+    const loop = (rule: string) => `while iptables ${rule} 2>/dev/null; do :; done`;
+    const cmds = [
+      loop(`-D FORWARD -p udp -m conntrack --ctorigdstport ${port} --ctdir ORIGINAL -m comment --comment ${tag}-up -j ACCEPT`),
+      loop(`-D FORWARD -p udp -m conntrack --ctorigdstport ${port} --ctdir REPLY -m comment --comment ${tag}-down -j ACCEPT`),
+      loop(`-D FORWARD -p udp -m conntrack --ctorigdstport ${port} -m comment --comment ${tag}-block -j DROP`),
+    ];
+    if (currentTarget) {
+      cmds.unshift(loop(`-t nat -D PREROUTING -p udp --dport ${port} -m comment --comment ${tag} -j DNAT --to-destination ${currentTarget}:${targetPort}`));
+    }
+    if (block) {
+      cmds.push(`iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} -m comment --comment ${tag}-block -j DROP`);
+      cmds.push(`conntrack -D -p udp --orig-port-dst ${port} >/dev/null 2>&1 || true`);
+    }
+    return cmds;
+  }
+
+  /** Runs many shell lines in a few SSH executions (70 slots × 6 rules would otherwise be ~700 round trips). */
+  async runShellBatch(commands: string[], chunkSize = 40): Promise<void> {
+    for (let i = 0; i < commands.length; i += chunkSize) {
+      const chunk = commands.slice(i, i + chunkSize).join("; ");
+      await this.executeCommand(`bash -c '${chunk}'`);
+    }
   }
 
   /** Idempotent: <port> → target:targetPort. Replaces whatever the port pointed at before. */

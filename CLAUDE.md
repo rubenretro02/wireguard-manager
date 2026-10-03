@@ -162,8 +162,16 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   completo" (túnel por slot en Ohio con la llave del slot + llave NUESTRA por cliente sobre una
   interface `wgsv`; disable = quitar el peer; mismo ping): el usuario lo descartó por ahora porque
   obliga a repartir configs nuevos. `applyRelay` además borra en el relay las reglas `wgm-relay-*`
-  de puertos que ningún slot posee (limpió las 70 del esquema viejo), y `ensureRelayTargets`
-  re-aplica si falta alguna regla de un slot habilitado.
+  de puertos que ningún slot posee (y los deja bloqueados para matar sus flujos vivos).
+  **Convergencia en lote:** `relayCommandsToConverge` calcula las líneas de shell que llevan al
+  server de lo que tiene a lo que dice la DB (solo lo que difiere) y `runShellBatch` las ejecuta de
+  a 40 por `bash -c` — la primera versión hacía ~700 ejecuciones SSH por aplicación y se cortó a
+  mitad dejando 59 reglas viejas vivas. **Auto-reparación desde el Dashboard:** `healRelaySoon`
+  (cada 5 min por cuenta, en background, con guard de concurrencia; forzado por Force Refresh y al
+  asignar puertos nuevos) comprueba `relayIsConverged` y aplica si hace falta; el cron hace lo
+  mismo. **Presencia por tráfico de SUBIDA** (`rx`, cliente → relay): StarVPN sigue mandando
+  keepalives al último endpoint de un cliente que ya se fue, así que contar bajada marcaba Online
+  a slots sin nadie.
 - **Sync automático:** `starhomePeersForRouter` re-lee StarVPN como máximo cada 60 s por cuenta
   mientras alguien tiene el Dashboard abierto (`syncIfStale`, coalescido por cuenta), y "Force
   Refresh" lo fuerza. Motivo (reporte de homevpn 2026-10-03): cambiar la región del slot en StarVPN
