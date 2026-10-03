@@ -66,7 +66,7 @@ export function StatCard({
   return (
     <div
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-border/50 bg-card p-6 transition-all duration-300",
+        "relative overflow-hidden rounded-xl border border-border/50 bg-card px-5 py-3 transition-all duration-300",
         onClick && "cursor-pointer hover:border-border hover:shadow-lg hover:shadow-black/5 hover:-translate-y-0.5",
         active && "border-primary/50 ring-2 ring-primary/20 shadow-lg shadow-primary/10",
         className
@@ -83,11 +83,11 @@ export function StatCard({
 
       {/* Content */}
       <div className="relative z-10">
-        <div className="flex items-start justify-between">
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-muted-foreground uppercase tracking-wider">{title}</p>
+        <div className="flex items-center justify-between gap-3">
+          <div className="space-y-0.5 min-w-0">
+            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</p>
             <div className="flex items-baseline gap-2">
-              <p className={cn("text-4xl font-bold tracking-tight", textColors[iconColor])}>{value}</p>
+              <p className={cn("text-2xl font-bold tracking-tight leading-tight", textColors[iconColor])}>{value}</p>
               {pulse && (
                 <span className="relative flex h-3 w-3">
                   <span className={cn(
@@ -102,7 +102,7 @@ export function StatCard({
               )}
             </div>
             {subtitle && (
-              <p className="text-sm text-muted-foreground">{subtitle}</p>
+              <p className="text-xs text-muted-foreground truncate">{subtitle}</p>
             )}
             {trend && (
               <div className={cn(
@@ -124,10 +124,10 @@ export function StatCard({
             )}
           </div>
           <div className={cn(
-            "w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-110",
+            "w-10 h-10 shrink-0 rounded-xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-110",
             iconColors[iconColor]
           )}>
-            <Icon className="w-7 h-7" />
+            <Icon className="w-5 h-5" />
           </div>
         </div>
       </div>
