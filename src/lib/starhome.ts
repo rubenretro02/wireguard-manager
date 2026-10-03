@@ -859,18 +859,20 @@ async function recordSlotExitIp(
 /**
  * After "Update IP" / a location change the provider takes a while to move the
  * slot, so one probe right away would store the OLD address. Probe this slot
- * alone a few times over the next two minutes (fire-and-forget; the panel runs
- * as a long-lived process, not a serverless function).
+ * alone every few seconds for the first minute, then more slowly up to three
+ * minutes, and stop as soon as an address different from the one before the
+ * change shows up (fire-and-forget; the panel is a long-lived process).
  */
 export function probeSlotSoon(
   admin: SupabaseClient,
   account: StarhomeAccountRow,
   slot: Pick<StarhomeSlotRow, "id" | "port" | "slot_number" | "name" | "public_ip" | "raw" | "country" | "region" | "isp">,
-  delaysMs: number[] = [3_000, 15_000, 45_000, 120_000]
+  delaysMs: number[] = [2_000, 2_000, 3_000, 3_000, 5_000, 5_000, 10_000, 15_000, 15_000, 30_000, 30_000, 60_000]
 ): void {
   void (async () => {
     const router = await relayRouterFor(admin, account);
     if (!router) return;
+    const before = slot.public_ip;
     let current = { ...slot };
     for (const delay of delaysMs) {
       await new Promise((r) => setTimeout(r, delay));
@@ -879,6 +881,7 @@ export function probeSlotSoon(
       if (!ip) continue;
       await recordSlotExitIp(admin, account, current, ip);
       current = { ...current, public_ip: ip };
+      if (ip !== before) return; // moved — that's what we were waiting for
     }
   })().catch((e) => console.error(`[starhome] slot probe failed:`, (e as Error).message));
 }
