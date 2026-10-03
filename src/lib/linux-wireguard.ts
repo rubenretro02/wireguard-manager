@@ -753,8 +753,11 @@ export class LinuxWireGuardClient {
 
   /**
    * Bytes relayed per port (rx = what the client sent, tx = what it received) and
-   * when each port last saw a packet. UDP conntrack entries count down from 180 s
-   * (assured stream) after the last packet, so the remaining timeout gives the age.
+   * when each port last saw a packet. UDP conntrack entries count down from the
+   * kernel's udp timeout after the last packet, so the remaining time gives the
+   * age. /proc/net/nf_conntrack is missing on some kernels (Ubuntu 24.04 VMs), so
+   * the conntrack tool is tried too; with neither, lastSeen stays null and the
+   * caller derives presence from counter growth.
    */
   async getUdpRelayStats(ports: number[]): Promise<Map<number, { rx: number; tx: number; lastSeen: number | null }>> {
     const out = new Map<number, { rx: number; tx: number; lastSeen: number | null }>();
@@ -771,17 +774,25 @@ export class LinuxWireGuardClient {
       out.set(port, entry);
     }
 
+    const timeouts = (await this.executeCommand(
+      `sysctl -n net.netfilter.nf_conntrack_udp_timeout net.netfilter.nf_conntrack_udp_timeout_stream 2>/dev/null || true`
+    )).trim().split(/\s+/).map(Number);
+    const timeoutUnreplied = timeouts[0] > 0 ? timeouts[0] : 30;
+    const timeoutStream = timeouts[1] > 0 ? timeouts[1] : 120;
+
+    const pattern = ` dport=(${ports.join("|")}) `;
     const tracked = await this.executeCommand(
-      `cat /proc/net/nf_conntrack 2>/dev/null | grep -E " dport=(${ports.join("|")}) " || true`
+      `bash -c "( cat /proc/net/nf_conntrack 2>/dev/null || conntrack -L -p udp 2>/dev/null ) | grep -E '${pattern}' || true"`
     );
     const nowSec = Math.floor(Date.now() / 1000);
     for (const line of tracked.split("\n")) {
-      // ipv4 2 udp 17 <remaining> src=… dst=… sport=… dport=<slot port> … [ASSURED]
-      const m = line.match(/^ipv4\s+\d+\s+udp\s+\d+\s+(\d+)\s+src=\S+\s+dst=\S+\s+sport=\d+\s+dport=(\d+)\s/);
+      // proc:      ipv4 2 udp 17 <remaining> src=… dst=… sport=… dport=<slot port> … [ASSURED]
+      // conntrack: udp      17 <remaining> src=… dst=… sport=… dport=<slot port> … [ASSURED]
+      const m = line.match(/^(?:ipv4\s+\d+\s+)?udp\s+\d+\s+(\d+)\s+src=\S+\s+dst=\S+\s+sport=\d+\s+dport=(\d+)\s/);
       if (!m) continue;
       const port = Number(m[2]);
       if (!ports.includes(port)) continue;
-      const timeout = line.includes("[ASSURED]") ? 180 : 30;
+      const timeout = line.includes("[ASSURED]") ? timeoutStream : timeoutUnreplied;
       const seen = nowSec - Math.max(0, timeout - Number(m[1]));
       const entry = out.get(port) || { rx: 0, tx: 0, lastSeen: null };
       if (!entry.lastSeen || seen > entry.lastSeen) entry.lastSeen = seen;

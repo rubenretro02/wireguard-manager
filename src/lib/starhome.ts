@@ -417,6 +417,8 @@ export async function starhomeSlotsByPublicKey(admin: SupabaseClient, accountId:
  */
 const PEERS_SYNC_TTL_MS = 60_000;
 const syncInFlight = new Map<string, Promise<void>>();
+/** Last byte total per relay port and when it last grew (presence fallback without conntrack). */
+const relayGrowth = new Map<string, { bytes: number; at: number }>();
 
 async function syncIfStale(admin: SupabaseClient, account: StarhomeAccountRow, force: boolean): Promise<void> {
   const age = account.last_synced_at ? Date.now() - new Date(account.last_synced_at).getTime() : Infinity;
@@ -460,7 +462,18 @@ export async function starhomePeersForRouter(
     const read = await cachedRouterRead(`starhome-relay:${relayRouter.id}`, () =>
       relayClient(relayRouter).getUdpRelayStats(ports)
     ).catch(() => null);
-    relay = { host: relayRouter.endpoint_ip || relayRouter.host, stats: read?.data || new Map() };
+    const stats = read?.data || new Map<number, RelayStats>();
+    // No conntrack listing on this server → "seen" = the moment the counters last grew
+    const nowSec = Math.floor(Date.now() / 1000);
+    for (const [port, s] of stats) {
+      const key = `${relayRouter.id}:${port}`;
+      const total = s.rx + s.tx;
+      const prev = relayGrowth.get(key);
+      if (!prev) relayGrowth.set(key, { bytes: total, at: 0 });
+      else if (total > prev.bytes) relayGrowth.set(key, { bytes: total, at: nowSec });
+      if (!s.lastSeen) s.lastSeen = relayGrowth.get(key)?.at || null;
+    }
+    relay = { host: relayRouter.endpoint_ip || relayRouter.host, stats };
   }
 
   return slots.map((s) =>
