@@ -155,7 +155,8 @@ export async function POST(request: Request) {
       try {
         await setSlotRelayEnabled(adminClient, account, slot as StarhomeSlotRow, enable);
       } catch (e) {
-        const status = e instanceof StarhomeError ? 400 : 502;
+        // 500, not 502: Cloudflare replaces 502s with its own HTML page
+        const status = e instanceof StarhomeError ? 400 : 500;
         return NextResponse.json({ error: (e as Error).message }, { status });
       }
       await logActivity({

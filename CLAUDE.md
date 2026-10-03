@@ -752,6 +752,7 @@ Buy / Payments (agents solo ven los 3 primeros).
 
 | Síntoma | Causa real | Fix |
 |---|---|---|
+| Toast `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` | Una ruta respondió **502/503/504** y Cloudflare (delante del panel) lo reemplazó por su página HTML | Nunca devolver 502/504 desde `/api/*`: errores del proveedor → 400, inesperados → 500 |
 | `"sudo: a terminal is required to read the password"` | Usuario SSH sin NOPASSWD | Ver bloque `visudo` arriba |
 | `"No interfaces found"` al cargar dropdown | `wg show` falla (sin sudo) o no hay `.conf` | Ejecutar `sudo wg show` a mano y diagnosticar |
 | Crear interface devuelve `"Interface did not start"` | Conflicto de puerto no detectado, o `wg-quick` falla | Revisar `journalctl -u wg-quick@wgN` en el servidor |

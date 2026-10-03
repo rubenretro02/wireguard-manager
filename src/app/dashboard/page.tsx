@@ -1543,8 +1543,8 @@ export default function DashboardPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "getLocationOptions" }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Couldn't load the locations");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Couldn't load the locations (HTTP ${res.status})`);
       setLocationOptions(json.countries || []);
     } catch (e) {
       toast.error((e as Error).message);
@@ -1567,8 +1567,8 @@ export default function DashboardPage() {
           isp: locIsp,
         }),
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Couldn't change the location");
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Couldn't change the location (HTTP ${res.status})`);
       toast.success("Location updated — the slot gets a new IP there; the client config stays the same");
       setLocationPeer(null);
       fetchWireGuardData(true);

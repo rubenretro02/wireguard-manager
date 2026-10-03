@@ -442,7 +442,9 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
     }
   } catch (e) {
-    if (e instanceof StarhomeError) return NextResponse.json({ error: e.message }, { status: 502 });
+    // Never 502/504 here: the panel sits behind Cloudflare, which swaps those for its own
+    // HTML error page and the browser then fails to parse the JSON.
+    if (e instanceof StarhomeError) return NextResponse.json({ error: e.message }, { status: 400 });
     return NextResponse.json({ error: (e as Error).message || "Unexpected error" }, { status: 500 });
   }
 }
