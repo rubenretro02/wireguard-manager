@@ -727,7 +727,8 @@ export class LinuxWireGuardClient {
   /** Idempotent: <port> → target:targetPort. Replaces whatever the port pointed at before. */
   async setUdpRelay(port: number, target: string, targetPort: number, opts?: { persist?: boolean }): Promise<void> {
     const tag = `wgm-relay-${port}`;
-    await this.removeUdpRelay(port, { persist: false });
+    await this.removeUdpRelay(port, { persist: false, block: false });
+    await this.unblockUdpRelay(port);
     await this.executeCommand(
       `iptables -t nat -I PREROUTING 1 -p udp --dport ${port} -m comment --comment ${tag} -j DNAT --to-destination ${target}:${targetPort}`
     );
@@ -749,8 +750,15 @@ export class LinuxWireGuardClient {
     if (opts?.persist !== false) await this.persistIptables();
   }
 
-  /** Drops the DNAT + counter rules of one slot port: the tunnel dies within the keepalive. */
-  async removeUdpRelay(port: number, opts?: { persist?: boolean }): Promise<void> {
+  /**
+   * Drops the DNAT + counter rules of one slot port. Deleting the DNAT alone is
+   * not enough: NAT rules are consulted for the first packet only and conntrack
+   * keeps translating an established flow — with WireGuard's keepalives it never
+   * expires. So, unless `block: false`, a DROP for that port is left in FORWARD
+   * (it also stops the flow's packets) and the conntrack entries are flushed when
+   * the conntrack tool happens to be installed.
+   */
+  async removeUdpRelay(port: number, opts?: { persist?: boolean; block?: boolean }): Promise<void> {
     const tag = `wgm-relay-${port}`;
     for (const [table, chain] of [["nat", "PREROUTING"], ["filter", "FORWARD"]] as const) {
       // -S prints rules in a form that can be deleted verbatim, whatever target they had
@@ -761,7 +769,24 @@ export class LinuxWireGuardClient {
         await this.executeCommand(`iptables -t ${table} ${line.replace(/^-A /, "-D ")} || true`);
       }
     }
+    if (opts?.block !== false) {
+      const blocked = await this.executeCommand(`iptables -S FORWARD | grep -c -- "--comment ${tag}-block " || true`);
+      if (!Number(blocked.trim())) {
+        await this.executeCommand(
+          `iptables -I FORWARD 1 -p udp -m conntrack --ctorigdstport ${port} -m comment --comment ${tag}-block -j DROP`
+        );
+      }
+      await this.executeCommand(`conntrack -D -p udp --orig-port-dst ${port} >/dev/null 2>&1 || true`);
+    }
     if (opts?.persist !== false) await this.persistIptables();
+  }
+
+  /** Lifts the DROP left by removeUdpRelay (the port is being relayed again). */
+  async unblockUdpRelay(port: number): Promise<void> {
+    const listing = await this.executeCommand(`iptables -S FORWARD | grep -- "--comment wgm-relay-${port}-block " || true`);
+    for (const line of listing.split("\n").map((l) => l.trim()).filter((l) => l.startsWith("-A "))) {
+      await this.executeCommand(`iptables ${line.replace(/^-A /, "-D ")} || true`);
+    }
   }
 
   /**

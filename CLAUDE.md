@@ -109,7 +109,12 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   `wg.starzone.io:1276` (`LinuxWireGuardClient.setUdpRelay/removeUdpRelay`: `-t nat PREROUTING`
   DNAT con comment `wgm-relay-<port>` + dos reglas FORWARD con `--ctorigdstport` para contar bytes
   por dirección + un MASQUERADE compartido `wgm-relay-nat`; todo persistido en
-  `/etc/iptables/rules.v4`). Disable = quitar la DNAT (el túnel muere en ~25 s), enable = ponerla;
+  `/etc/iptables/rules.v4`). Disable = quitar la DNAT **y dejar un DROP en FORWARD para ese puerto**
+  (`wgm-relay-<port>-block`): borrar solo la DNAT no corta nada, porque iptables consulta NAT solo
+  para el primer paquete y conntrack sigue traduciendo el flujo establecido, que con keepalive de
+  25 s nunca caduca (homevpn siguió navegando por un puerto ya sin regla). Enable = quitar el DROP
+  y poner la DNAT. Si en el relay está instalado `conntrack`, además se flushean las entradas
+  (`conntrack -D -p udp --orig-port-dst`); sin él, el DROP basta. Enable = ponerla;
   el `.conf` del cliente no cambia. `starhome_slots.disabled` guarda el estado; sin relay el slot
   siempre está "enabled" y el toggle devuelve 400 explicando. Al vencer el timer,
   `expireSlotAssignments` apaga el relay (eso es el auto-disable) y marca `disabled`; Renew hace
