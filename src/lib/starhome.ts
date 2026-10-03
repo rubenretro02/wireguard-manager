@@ -184,19 +184,16 @@ export async function fetchAccountData(creds: StarhomeCredentials): Promise<Star
 }
 
 /**
- * "Update IP Now" — asks StarHome for a fresh IP on one slot.
- * TODO: the dashboard's generated command for this function hasn't been
- * captured yet, so the command name and the slot field are unknown. Fill
- * ROTATE_COMMAND / ROTATE_SLOT_FIELD in and the route + UI already work.
+ * "Update IP Now" — asks StarHome for a fresh IP on one slot (uses one of the
+ * slot's monthly updates). Command captured from the dashboard 2026-10-03:
+ * `{ command: "ip_update_now", port: "17", ip_type: "Static Residential IP" }`
+ * — the slot number travels as a STRING in `port`.
  */
-const ROTATE_COMMAND: string | null = null;
-const ROTATE_SLOT_FIELD = "port";
-
-export async function rotateSlotIp(creds: StarhomeCredentials, slotNumber: number): Promise<void> {
-  if (!ROTATE_COMMAND) {
-    throw new StarhomeError("IP rotation isn't wired to StarHome yet");
-  }
-  await starhomeRequest(creds, ROTATE_COMMAND, { [ROTATE_SLOT_FIELD]: slotNumber });
+export async function rotateSlotIp(creds: StarhomeCredentials, slot: { slot_number: number; ip_type: string | null }): Promise<void> {
+  await starhomeRequest(creds, "ip_update_now", {
+    port: String(slot.slot_number),
+    ip_type: slot.ip_type || "Static Residential IP",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -258,22 +255,18 @@ export async function getLocationOptions(): Promise<LocationCountry[]> {
 
 /**
  * "Update IP Configuration" — moves a slot to another country/region/ISP.
- * TODO: like ROTATE_COMMAND, the generated command hasn't been captured yet.
- * The selection travels as the catalogue's ids and keys so whichever the API
- * wants is at hand once the field names are known.
+ * Command captured from the dashboard 2026-10-03:
+ * `{ command: "update_ip_configuration", port: "17", ip_type: "Static Residential IP",
+ *    country: "us", region: "fl6", isp: "verizon" }` — the catalogue keys.
  */
-const UPDATE_LOCATION_COMMAND: string | null = null;
-
 export async function updateSlotLocation(
   creds: StarhomeCredentials,
-  slotNumber: number,
+  slot: { slot_number: number; ip_type: string | null },
   selection: { country: LocationOption; region: LocationOption; isp: LocationOption }
 ): Promise<void> {
-  if (!UPDATE_LOCATION_COMMAND) {
-    throw new StarhomeError("Changing the location isn't wired to StarHome yet");
-  }
-  await starhomeRequest(creds, UPDATE_LOCATION_COMMAND, {
-    port: slotNumber,
+  await starhomeRequest(creds, "update_ip_configuration", {
+    port: String(slot.slot_number),
+    ip_type: slot.ip_type || "Static Residential IP",
     country: selection.country.key,
     region: selection.region.key,
     isp: selection.isp.key,
@@ -599,11 +592,29 @@ export async function relayRouterFor(admin: SupabaseClient, account: StarhomeAcc
   return (data as Router | null) || null;
 }
 
-/** Current addresses of the provider's WireGuard ingress (a CNAME to a pool of ~16 IPs, TTL 300). */
-export async function resolveIngressIps(): Promise<string[]> {
-  const ips = await dns.resolve4(STARHOME_WG_ENDPOINT);
+/**
+ * Current addresses of the provider's WireGuard ingress (a CNAME to a pool of
+ * IPs, TTL 300). The provider uses geo-DNS, so the answer must come from the
+ * relay server itself — the panel's own resolver got a different node once —
+ * with the panel's resolver only as a fallback. Cached a few minutes per relay.
+ */
+const ingressCache = new Map<string, { at: number; ips: string[] }>();
+const INGRESS_TTL_MS = 5 * 60 * 1000;
+
+export async function resolveIngressIps(relay?: Router | null): Promise<string[]> {
+  const key = relay?.id || "panel";
+  const hit = ingressCache.get(key);
+  if (hit && Date.now() - hit.at < INGRESS_TTL_MS) return hit.ips;
+
+  let ips: string[] = [];
+  if (relay) {
+    ips = await relayClient(relay).resolveHostIpv4(STARHOME_WG_ENDPOINT).catch(() => []);
+  }
+  if (!ips.length) ips = await dns.resolve4(STARHOME_WG_ENDPOINT).catch(() => []);
   if (!ips.length) throw new StarhomeError(`${STARHOME_WG_ENDPOINT} did not resolve`);
-  return ips.sort();
+  ips.sort();
+  ingressCache.set(key, { at: Date.now(), ips });
+  return ips;
 }
 
 /**
@@ -615,7 +626,7 @@ export async function applyRelay(admin: SupabaseClient, account: StarhomeAccount
   const router = await relayRouterFor(admin, account);
   if (!router) throw new StarhomeError("This account has no relay server");
 
-  const ips = await resolveIngressIps();
+  const ips = await resolveIngressIps(router);
   const target = account.relay_target_ip && ips.includes(account.relay_target_ip) ? account.relay_target_ip : ips[0];
   if (target !== account.relay_target_ip) {
     await admin.from("starhome_accounts").update({ relay_target_ip: target }).eq("id", account.id);
@@ -651,7 +662,7 @@ export async function setSlotRelayEnabled(admin: SupabaseClient, account: Starho
   const client = relayClient(router);
   const port = relayPortForSlot(slot.slot_number);
   if (enabled) {
-    const ips = await resolveIngressIps();
+    const ips = await resolveIngressIps(router);
     const target = account.relay_target_ip && ips.includes(account.relay_target_ip) ? account.relay_target_ip : ips[0];
     await client.setUdpRelay(port, target, STARHOME_WG_PORT);
   } else {
@@ -667,11 +678,12 @@ export async function setSlotRelayEnabled(admin: SupabaseClient, account: Starho
 export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
   const { data: accounts } = await admin.from("starhome_accounts").select(ACCOUNT_COLS).not("relay_router_id", "is", null);
   if (!accounts?.length) return;
-  const ips = await resolveIngressIps().catch(() => null);
-  if (!ips) return;
   for (const account of accounts as StarhomeAccountRow[]) {
-    if (account.relay_target_ip && ips.includes(account.relay_target_ip)) continue;
     try {
+      const router = await relayRouterFor(admin, account);
+      if (!router) continue;
+      const ips = await resolveIngressIps(router);
+      if (account.relay_target_ip && ips.includes(account.relay_target_ip)) continue;
       await applyRelay(admin, account);
     } catch (e) {
       console.error(`[starhome] relay repair failed for ${account.label}:`, (e as Error).message);

@@ -661,8 +661,8 @@ export class LinuxWireGuardClient {
         `iptables -t nat -I POSTROUTING 1 -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress}`
       );
 
-      // Save iptables rules for persistence
-      await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+      // Save iptables rules for persistence (as root — see persistIptables)
+      await this.persistIptables();
 
       console.log(`[LinuxWG] Added NAT rule: ${srcNetwork} -> ${toAddress}`);
       return { success: true };
@@ -690,8 +690,8 @@ export class LinuxWireGuardClient {
         `iptables -t nat -D POSTROUTING -s ${srcNetwork} -o ${outIface} -j SNAT --to-source ${toAddress} || true`
       );
 
-      // Save iptables rules
-      await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+      // Save iptables rules (as root — see persistIptables)
+      await this.persistIptables();
 
       console.log(`[LinuxWG] Removed NAT rule for ${srcNetwork}`);
       return true;
@@ -706,6 +706,12 @@ export class LinuxWireGuardClient {
   // can switch them off without touching their keys. One DNAT per slot port;
   // the FORWARD rules carry the byte counters; conntrack tells who is online.
   // =====================================================
+
+  /** IPv4 addresses `host` resolves to FROM THIS SERVER (geo-DNS can answer differently elsewhere). */
+  async resolveHostIpv4(host: string): Promise<string[]> {
+    const out = await this.executeCommand(`getent ahostsv4 ${host} | awk '{print $1}' | sort -u || true`);
+    return out.split(/\s+/).filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip));
+  }
 
   /** Idempotent: <port> → target:targetPort. Replaces whatever the port pointed at before. */
   async setUdpRelay(port: number, target: string, targetPort: number, opts?: { persist?: boolean }): Promise<void> {
@@ -729,7 +735,7 @@ export class LinuxWireGuardClient {
         `iptables -t nat -A POSTROUTING -d ${target} -p udp --dport ${targetPort} -m comment --comment wgm-relay-nat -j MASQUERADE`
       );
     }
-    if (opts?.persist !== false) await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+    if (opts?.persist !== false) await this.persistIptables();
   }
 
   /** Drops the DNAT + counter rules of one slot port: the tunnel dies within the keepalive. */
@@ -744,11 +750,16 @@ export class LinuxWireGuardClient {
         await this.executeCommand(`iptables -t ${table} ${line.replace(/^-A /, "-D ")} || true`);
       }
     }
-    if (opts?.persist !== false) await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+    if (opts?.persist !== false) await this.persistIptables();
   }
 
+  /**
+   * The redirect has to run as root too: `sudo iptables-save > file` lets the
+   * SSH user's shell open the file, which failed silently under `|| true` for
+   * months (rules.v4 on Ohio was dated 2026-08-06 while rules kept being added).
+   */
   async persistIptables(): Promise<void> {
-    await this.executeCommand(`iptables-save > /etc/iptables/rules.v4 || true`);
+    await this.executeCommand(`bash -c "iptables-save > /etc/iptables/rules.v4" || true`);
   }
 
   /**

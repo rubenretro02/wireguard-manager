@@ -1579,6 +1579,25 @@ export default function DashboardPage() {
     }
   };
 
+  // ===== StarVPN: new IP in the same location (uses one of the slot's monthly updates) =====
+  const handleRotateSlotIp = async (peer: PeerWithMetadata) => {
+    const label = peer.name || `slot ${peer.slot_number ?? ""}`;
+    if (!confirm(`Ask the provider for a new IP on ${label}? It uses one of the slot's monthly IP updates.`)) return;
+    try {
+      const res = await fetch("/api/starhome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "rotateIp", slotId: peer[".id"].replace(/^\*sh:/, "") }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || `Couldn't update the IP (HTTP ${res.status})`);
+      toast.success("New IP requested — it shows up within a minute");
+      fetchWireGuardData(true);
+    } catch (e) {
+      toast.error((e as Error).message);
+    }
+  };
+
   // ===== Bulk actions =====
   const getSelectedPeers = () => peers.filter((p) => selectedPeerIds.has(p[".id"]));
 
@@ -2898,6 +2917,14 @@ PersistentKeepalive = 25`;
                                 title="History"
                               >
                                 <ScrollText className="w-4 h-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleRotateSlotIp(peer)}
+                                title="Update IP (a new IP in the same location)"
+                              >
+                                <RotateCw className="w-4 h-4" />
                               </Button>
                               {/* On/off works through the account's relay server (keys untouched) */}
                               <Button

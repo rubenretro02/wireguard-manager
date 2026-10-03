@@ -69,6 +69,17 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   `vpnusername`, `vpnpassword`, `wg_private_key`, `wg_ipv4/6`, `awg_ipv4/6`) y
   `remaining_ip_updates[]` (`limits: {"Static Residential": 20, "Static Datacenter": 500}` = rotaciones
   que quedan). **No trae la IP pública actual del slot.**
+- **Las 6 funciones del dashboard, capturadas 2026-10-03** (todas con el mismo envelope; el slot
+  va como STRING en `port`):
+  - `refresh_data` — toda la cuenta (arriba).
+  - `ip_update_now` + `port`, `ip_type:"Static Residential IP"` — nueva IP en la misma ubicación
+    (consume un "IP update" mensual; 20 por slot).
+  - `update_ip_configuration` + `port`, `ip_type`, `country:"us"`, `region:"fl6"`, `isp:"verizon"` —
+    cambiar ubicación; los valores son los `key` del catálogo público.
+  - `get_current_vpnusage` (sin `port`) — devuelve `{"data": 99439}`: un solo número para TODA la
+    cuenta (MB, aparentemente), no por slot. No sirve para tráfico por peer.
+  - `update_dns` + `port`, `dnstunnel:0`, `dnsserver1:"<ip>"` — DNS del slot (no se usa).
+  - `get_ip_configuration_options` — GET público, sin auth (catálogo).
 - Token inválido → HTTP 200 con `{"result":"error","message":"Authorization failed"}`; el cliente
   mira `result`, no el status.
 - El proxy SOCKS5 no responde desde una IP no autorizada (timeout con y sin user/pass): parece lista
@@ -123,9 +134,9 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   del endpoint público `get_ip_configuration_options` (`getLocationOptions`, cache 1 h): cada nivel
   es un objeto con claves numéricas (orden/nombres) y claves por nombre con `{id, key, …}`; `key`
   coincide con los códigos de `refresh_data` (`us`, `ny2`, `centurylink`). `setSlotLocation` valida
-  contra el catálogo y llama `updateSlotLocation`, **que todavía no tiene comando**
-  (`UPDATE_LOCATION_COMMAND` null → 400 "isn't wired yet"), igual que `ROTATE_COMMAND`. Hace falta
-  capturar en API Information los JSON de "Update IP Now" y "Update IP Configuration".
+  contra el catálogo y llama `updateSlotLocation` (`update_ip_configuration`); después hace sync y
+  dispara el probe de IP. Botón **Update IP** (RotateCw) en la fila → `rotateIp` (`ip_update_now`)
+  con `confirm()` porque gasta uno de los 20 updates mensuales del slot.
 - Diálogo "View config" en slots StarVPN: sin botón Edit (ni New Keys ni Save): las llaves son del
   proveedor; la única rotación es cambiar el username del slot en StarVPN.
 - **Sync automático:** `starhomePeersForRouter` re-lee StarVPN como máximo cada 60 s por cuenta
@@ -178,6 +189,18 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   acceso al server y, con relay, apaga su DNAT (no hay cron). En StarHome no cambia nada.
 - Las reglas del relay viven en el server (`/etc/iptables/rules.v4`): si se formatea, el restore
   script no las recrea — cambiar el relay a otro server y volver, o "Sync" en Profile (`applyRelay`).
+- **Persistencia de iptables (bug histórico, arreglado 2026-10-03):** `sudo iptables-save >
+  /etc/iptables/rules.v4 || true` nunca escribía (el `>` lo abría el shell del usuario SSH, no root;
+  en Ohio `rules.v4` tenía fecha 2026-08-06). Ahora todo pasa por `persistIptables()` =
+  `sudo bash -c "iptables-save > …"`. Las SNAT creadas entre agosto y octubre se re-persisten la
+  próxima vez que se agregue/quite cualquier regla en ese server (o con "Sync" del relay).
+- **El ingreso de StarVPN es geo-DNS:** `wg.starzone.io` resuelto desde el host del panel dio
+  `206.217.142.117` (no es un nodo WG; Ohio ve el pool `66.206.6.x`). `resolveIngressIps(relay)`
+  resuelve **en el relay** por SSH (`getent ahostsv4`), cache 5 min, y solo cae al resolver del panel
+  si falla. El cron corrige solo un `relay_target_ip` que no esté en el set del relay.
+- Al activar el relay el tenant TIENE que cambiar su DNS de `CNAME → wg.starzone.io` a
+  `A → <IP del relay>` (Profile lo muestra); si no, el cliente manda el WG a StarVPN por el puerto
+  del slot (4204x) y nunca hay handshake. Es lo que le pasó a homevpn con el slot 17.
 - Los peers StarVPN NO tienen `peer_metadata`: el timer vive solo en `starhome_slots.expires_at`.
   No agregar acciones de timer del Dashboard a estos peers (volverían los dos relojes de v24).
 - Semi-admins solo asignan a `profiles.created_by_user_id = yo`; admin a cualquiera.
@@ -185,9 +208,6 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   no rompe nada (los campos SSH/API se ignoran).
 
 **Pendiente:**
-- **Rotar IP no está cableado**: falta capturar el comando que genera el dashboard para "Update IP Now"
-  (`ROTATE_COMMAND` / `ROTATE_SLOT_FIELD` en `starhome.ts`). Hoy el botón devuelve 502 con
-  "IP rotation isn't wired to StarHome yet".
 - **El proxy SOCKS5 autentica por IP autorizada** (FAQ de StarVPN: hasta 5 IPs, 10 con ≥10 slots;
   user:pass solo en planes Enterprise). `vpnusername`/`vpnpassword` son del VPN, no del proxy. Así
   que repartir slots como proxies a sub-usuarios con IPs distintas no escala: la vía es WireGuard.
@@ -204,12 +224,9 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
 - El client area de StarVPN (`starvpn.com/dashboard`, WHMCS) está detrás del managed challenge de
   Cloudflare: ni curl ni Playwright (headed, perfil persistente, flags anti-automation) pasan de
   forma confiable. Lo que haga falta del dashboard lo tiene que sacar una persona.
-- **Conexión/tráfico por slot:** no hay forma hoy. La función "Get Current VPN usage" del dashboard
-  podría servir, pero su `command` es desconocido: probados sin éxito (`Function not found`)
-  `vpn_usage`, `get_vpn_usage`, `usage`, `get_usage`, `current_usage`, `bandwidth`, `traffic`,
-  `data_usage`, `vpn_status`, `status` y variantes. Un comando inexistente devuelve
-  `{"result":"error","message":"Function not found"}`, así que probar nombres de lectura es inocuo;
-  NO adivinar los de escritura (Update IP consume rotaciones).
+- **Conexión/tráfico por slot:** solo vía relay (contadores/conntrack en nuestro server). La API
+  (`get_current_vpnusage`) da un único total de cuenta. Un comando inexistente devuelve
+  `{"result":"error","message":"Function not found"}`.
 
 ### 2026-09-30 — Customers sin Telegram, historial por peer y extender activos (v30/v31)
 

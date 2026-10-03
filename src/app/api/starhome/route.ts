@@ -389,8 +389,9 @@ export async function POST(request: Request) {
         const region = country?.regions.find((g) => g.key === String(body.region || ""));
         const isp = region?.isps.find((i) => i.key === String(body.isp || ""));
         if (!country || !region || !isp) return NextResponse.json({ error: "Pick a country, region and ISP" }, { status: 400 });
-        await updateSlotLocation(r.account, r.slot.slot_number, { country, region, isp });
+        await updateSlotLocation(r.account, r.slot, { country, region, isp });
         await syncAccount(admin, r.account).catch(() => {});
+        void refreshExitIps(admin, r.account, { force: true }).catch(() => {});
         await logActivity({
           supabase: admin,
           userId: ctx.userId,
@@ -417,7 +418,7 @@ export async function POST(request: Request) {
       case "rotateIp": {
         const r = await loadOwnedSlot(ctx, body.slotId);
         if ("error" in r) return r.error;
-        await rotateSlotIp(r.account, r.slot.slot_number);
+        await rotateSlotIp(r.account, r.slot);
         await admin
           .from("starhome_slots")
           .update({
@@ -425,6 +426,9 @@ export async function POST(request: Request) {
             remaining_updates: r.slot.remaining_updates != null ? Math.max(0, r.slot.remaining_updates - 1) : null,
           })
           .eq("id", r.slot.id);
+        // The provider's counters and the slot's new IP show up on the next poll
+        await syncAccount(admin, r.account).catch(() => {});
+        void refreshExitIps(admin, r.account, { force: true }).catch(() => {});
         await logActivity({
           supabase: admin,
           userId: ctx.userId,
