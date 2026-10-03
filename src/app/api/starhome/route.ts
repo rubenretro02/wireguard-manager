@@ -13,6 +13,7 @@ import {
   fetchAccountData,
   getLocationOptions,
   grantServerAccess,
+  probeSlotSoon,
   refreshExitIps,
   revokeServerAccessIfUnused,
   rotateSlotIp,
@@ -391,7 +392,8 @@ export async function POST(request: Request) {
         if (!country || !region || !isp) return NextResponse.json({ error: "Pick a country, region and ISP" }, { status: 400 });
         await updateSlotLocation(r.account, r.slot, { country, region, isp });
         await syncAccount(admin, r.account).catch(() => {});
-        void refreshExitIps(admin, r.account, { force: true }).catch(() => {});
+        // The provider moves the slot with a delay: re-probe this slot over the next minutes
+        probeSlotSoon(admin, r.account, r.slot);
         await logActivity({
           supabase: admin,
           userId: ctx.userId,
@@ -426,9 +428,9 @@ export async function POST(request: Request) {
             remaining_updates: r.slot.remaining_updates != null ? Math.max(0, r.slot.remaining_updates - 1) : null,
           })
           .eq("id", r.slot.id);
-        // The provider's counters and the slot's new IP show up on the next poll
+        // The provider's counters show up on the next poll; the new IP takes a while, so keep probing this slot
         await syncAccount(admin, r.account).catch(() => {});
-        void refreshExitIps(admin, r.account, { force: true }).catch(() => {});
+        probeSlotSoon(admin, r.account, r.slot);
         await logActivity({
           supabase: admin,
           userId: ctx.userId,

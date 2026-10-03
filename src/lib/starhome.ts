@@ -370,14 +370,28 @@ export async function storeAccountData(admin: SupabaseClient, accountId: string,
   if (error) throw new Error(error.message);
 }
 
-/** Fetch + store. A failure is recorded in last_sync_error and re-thrown; the old rows stay. */
+/**
+ * Fetch + store. A failure is recorded in last_sync_error and re-thrown; the old
+ * rows stay. Slots whose region/ISP changed at the provider (from its site or
+ * from here) get their public IP re-probed right away through the relay.
+ */
 export async function syncAccount(
   admin: SupabaseClient,
-  account: { id: string } & StarhomeCredentials
+  account: ({ id: string } & StarhomeCredentials) | StarhomeAccountRow
 ): Promise<StarhomeAccountData> {
   try {
+    const { data: before } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", account.id);
     const data = await fetchAccountData(account);
     await storeAccountData(admin, account.id, data);
+    if ("relay_router_id" in account && account.relay_router_id) {
+      const previous = new Map(((before || []) as StarhomeSlotRow[]).map((s) => [s.slot_number, s]));
+      for (const s of data.slots) {
+        const old = previous.get(s.slot_number);
+        if (old && (old.region !== s.region || old.isp !== s.isp || old.country !== s.country)) {
+          probeSlotSoon(admin, account, old);
+        }
+      }
+    }
     return data;
   } catch (e) {
     await admin
@@ -705,8 +719,62 @@ export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
 // Public IP of each slot (v35)
 // ---------------------------------------------------------------------------
 
-const EXIT_IPS_TTL_MS = 10 * 60 * 1000;
+const EXIT_IPS_TTL_MS = 5 * 60 * 1000;
 const exitIpsInFlight = new Map<string, Promise<number>>();
+
+/** Stores a freshly seen exit IP and writes the change to the slot's history. */
+async function recordSlotExitIp(
+  admin: SupabaseClient,
+  account: StarhomeAccountRow,
+  slot: Pick<StarhomeSlotRow, "id" | "slot_number" | "name" | "public_ip" | "raw" | "country" | "region" | "isp">,
+  ip: string
+): Promise<void> {
+  const now = new Date().toISOString();
+  if (ip === slot.public_ip) {
+    await admin.from("starhome_slots").update({ public_ip_checked_at: now }).eq("id", slot.id);
+    return;
+  }
+  await admin.from("starhome_slots").update({ public_ip: ip, public_ip_checked_at: now }).eq("id", slot.id);
+  const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
+  await logActivity({
+    supabase: admin,
+    userId: null,
+    routerId: account.router_id,
+    action: "update",
+    entityType: "starhome_slot",
+    entityId: slot.id,
+    entityName: slot.name || `Slot ${slot.slot_number}`,
+    peerPublicKey: privateKey ? publicKeyFromPrivate(privateKey) : null,
+    details: { publicIp: ip, previousPublicIp: slot.public_ip, location: slotLocation(slot) },
+  });
+}
+
+/**
+ * After "Update IP" / a location change the provider takes a while to move the
+ * slot, so one probe right away would store the OLD address. Probe this slot
+ * alone a few times over the next two minutes (fire-and-forget; the panel runs
+ * as a long-lived process, not a serverless function).
+ */
+export function probeSlotSoon(
+  admin: SupabaseClient,
+  account: StarhomeAccountRow,
+  slot: Pick<StarhomeSlotRow, "id" | "port" | "slot_number" | "name" | "public_ip" | "raw" | "country" | "region" | "isp">,
+  delaysMs: number[] = [3_000, 15_000, 45_000, 120_000]
+): void {
+  void (async () => {
+    const router = await relayRouterFor(admin, account);
+    if (!router) return;
+    let current = { ...slot };
+    for (const delay of delaysMs) {
+      await new Promise((r) => setTimeout(r, delay));
+      const seen = await relayClient(router).probeSocksExitIps(account.proxy_host, [slot.port]).catch(() => new Map<number, string>());
+      const ip = seen.get(slot.port);
+      if (!ip) continue;
+      await recordSlotExitIp(admin, account, current, ip);
+      current = { ...current, public_ip: ip };
+    }
+  })().catch((e) => console.error(`[starhome] slot probe failed:`, (e as Error).message));
+}
 
 /**
  * The provider's API never reports a slot's public IP, but the slot's SOCKS5
@@ -726,31 +794,14 @@ export async function refreshExitIps(admin: SupabaseClient, account: StarhomeAcc
       const { data: slots } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", account.id);
       const rows = (slots || []) as StarhomeSlotRow[];
       const seen = await relayClient(router).probeSocksExitIps(account.proxy_host, rows.map((s) => s.port));
-      const now = new Date().toISOString();
       let answered = 0;
       for (const slot of rows) {
         const ip = seen.get(slot.port);
         if (!ip) continue;
         answered++;
-        if (ip === slot.public_ip) {
-          await admin.from("starhome_slots").update({ public_ip_checked_at: now }).eq("id", slot.id);
-          continue;
-        }
-        await admin.from("starhome_slots").update({ public_ip: ip, public_ip_checked_at: now }).eq("id", slot.id);
-        const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
-        await logActivity({
-          supabase: admin,
-          userId: null,
-          routerId: account.router_id,
-          action: "update",
-          entityType: "starhome_slot",
-          entityId: slot.id,
-          entityName: slot.name || `Slot ${slot.slot_number}`,
-          peerPublicKey: privateKey ? publicKeyFromPrivate(privateKey) : null,
-          details: { publicIp: ip, previousPublicIp: slot.public_ip, location: slotLocation(slot) },
-        });
+        await recordSlotExitIp(admin, account, slot, ip);
       }
-      await admin.from("starhome_accounts").update({ exit_ips_checked_at: now }).eq("id", account.id);
+      await admin.from("starhome_accounts").update({ exit_ips_checked_at: new Date().toISOString() }).eq("id", account.id);
       return answered;
     })().finally(() => exitIpsInFlight.delete(account.id));
     exitIpsInFlight.set(account.id, p);

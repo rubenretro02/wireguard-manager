@@ -129,10 +129,14 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   los puertos en paralelo (`LinuxWireGuardClient.probeSocksExitIps`), guarda
   `starhome_slots.public_ip` (+ `public_ip_checked_at`, `starhome_accounts.exit_ips_checked_at`) y
   registra en `activity_logs` cada cambio de IP. Cadencia: cron `peer-presence` → `starhomeCronTick`
-  (relay repair + sync del proveedor cada 5 min + probe cada 10 min) y "Force Refresh" (dispara el
-  probe sin esperar). Sin relay no hay IP (no hay desde dónde consultar). La columna Public IP del
-  Dashboard muestra `peer.comment` = `public_ip`. Supuesto: la IP del proxy y la del túnel WG del
-  mismo slot son la misma (el slot ES la IP).
+  (relay repair + sync del proveedor cada 5 min + probe de todos cada 5 min), "Force Refresh"
+  (probe completo sin esperar) y **`probeSlotSoon`** tras Update IP / Change location o cuando el
+  sync ve que a un slot le cambió país/región/ISP (hecho en la web de StarVPN): re-consulta SOLO ese
+  slot a los 3 s, 15 s, 45 s y 2 min, porque StarVPN tarda en aplicar el cambio y una consulta
+  inmediata guardaba la IP vieja (pasó con el slot 17: mostraba una IP AT&T de la ubicación
+  anterior). Sin relay no hay IP (no hay desde dónde consultar). La columna Public IP del
+  Dashboard muestra `peer.comment` = `public_ip`. Verificado: la IP del proxy y la del túnel WG del
+  mismo slot coinciden (slot 16: proxy 63.113.141.37 y speedtest por WG en el mismo /24 Verizon).
 - **Change location:** botón (globo) al lado de Location → diálogo país/región/ISP. El catálogo sale
   del endpoint público `get_ip_configuration_options` (`getLocationOptions`, cache 1 h): cada nivel
   es un objeto con claves numéricas (orden/nombres) y claves por nombre con `{id, key, …}`; `key`
