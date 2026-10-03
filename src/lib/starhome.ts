@@ -634,12 +634,22 @@ export async function applyRelay(admin: SupabaseClient, account: StarhomeAccount
 
   const { data: slots } = await admin.from("starhome_slots").select("slot_number, disabled").eq("account_id", account.id);
   const client = relayClient(router);
+  // Only touch what differs: rewriting a rule resets its byte counters
+  const existing = await client.listUdpRelays();
+  let changed = 0;
   for (const s of (slots || []) as Array<{ slot_number: number; disabled: boolean }>) {
     const port = relayPortForSlot(s.slot_number);
-    if (s.disabled) await client.removeUdpRelay(port, { persist: false });
-    else await client.setUdpRelay(port, target, STARHOME_WG_PORT, { persist: false });
+    const current = existing.get(port);
+    if (s.disabled) {
+      if (current === undefined) continue;
+      await client.removeUdpRelay(port, { persist: false });
+    } else {
+      if (current === target) continue;
+      await client.setUdpRelay(port, target, STARHOME_WG_PORT, { persist: false });
+    }
+    changed++;
   }
-  await client.persistIptables();
+  if (changed > 0) await client.persistIptables();
   return { target, slots: slots?.length || 0 };
 }
 

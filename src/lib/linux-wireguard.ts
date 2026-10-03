@@ -713,6 +713,17 @@ export class LinuxWireGuardClient {
     return out.split(/\s+/).filter((ip) => /^\d{1,3}(\.\d{1,3}){3}$/.test(ip));
   }
 
+  /** Current relays: slot port → target address of its DNAT rule. */
+  async listUdpRelays(): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+    const listing = await this.executeCommand(`iptables -t nat -S PREROUTING | grep "wgm-relay-" || true`);
+    for (const line of listing.split("\n")) {
+      const m = line.match(/--dport (\d+) .*--to-destination (\d{1,3}(?:\.\d{1,3}){3}):/);
+      if (m) out.set(Number(m[1]), m[2]);
+    }
+    return out;
+  }
+
   /** Idempotent: <port> → target:targetPort. Replaces whatever the port pointed at before. */
   async setUdpRelay(port: number, target: string, targetPort: number, opts?: { persist?: boolean }): Promise<void> {
     const tag = `wgm-relay-${port}`;

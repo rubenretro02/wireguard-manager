@@ -417,6 +417,9 @@ export default function DashboardPage() {
   // StarVPN (v32): the server already scopes the slots (owner sees all, others
   // only theirs) and there is nothing to edit — no peer_metadata, no IP access.
   const isStarhomeRouter = routers.find((r) => r.id === selectedRouterId)?.connection_type === "starhome";
+  // Connection/Traffic only exist for these peers when the account relays through
+  // our server (counters + conntrack there); without a relay the columns are hidden.
+  const hideLiveColumns = isStarhomeRouter && !peers.some((p) => p.rx !== undefined);
 
   // Get visible peers for this user (for stats calculation)
   // This uses the same filtering logic as filteredPeers but without search/status filters
@@ -2566,7 +2569,7 @@ PersistentKeepalive = 25`;
                   </TableHead>
                   {isStarhomeRouter && <TableHead className="text-muted-foreground">Slot</TableHead>}
                   <TableHead className="text-muted-foreground">Name</TableHead>
-                  {!isStarhomeRouter && (
+                  {!hideLiveColumns && (
                     <TableHead className="text-muted-foreground">
                       <div className="flex items-center gap-1">
                         <Signal className="w-3 h-3" />
@@ -2578,7 +2581,7 @@ PersistentKeepalive = 25`;
                   <TableHead className="text-muted-foreground">Allowed Address</TableHead>
                   <TableHead className="text-muted-foreground">Public IP</TableHead>
                   {isStarhomeRouter && <TableHead className="text-muted-foreground">Location</TableHead>}
-                  {!isStarhomeRouter && <TableHead className="text-muted-foreground">Traffic</TableHead>}
+                  {!hideLiveColumns && <TableHead className="text-muted-foreground">Traffic</TableHead>}
                   <TableHead className="text-muted-foreground">
                     <div className="flex items-center gap-1">
                       <User className="w-3 h-3" />
@@ -2659,8 +2662,8 @@ PersistentKeepalive = 25`;
                         )}
                       </TableCell>
 
-                      {/* Connection Status Column (StarVPN slots don't show it) */}
-                      {!isStarhomeRouter && (
+                      {/* Connection Status Column (StarVPN slots only with a relay) */}
+                      {!hideLiveColumns && (
                       <TableCell>
                         {isDisabled ? (
                           <div className="flex items-center gap-2">
@@ -2760,8 +2763,8 @@ PersistentKeepalive = 25`;
                         </TableCell>
                       )}
 
-                      {/* Traffic Column (StarVPN slots don't show it) */}
-                      {!isStarhomeRouter && (
+                      {/* Traffic Column (StarVPN slots only with a relay) */}
+                      {!hideLiveColumns && (
                       <TableCell className="text-sm">
                         <div className="flex flex-col gap-0.5 whitespace-nowrap">
                           <div className="flex items-center gap-1">

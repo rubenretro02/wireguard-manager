@@ -116,9 +116,12 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   reescribe las reglas (`applyRelay`). `sync` también re-aplica (slots nuevos). Con relay, el
   registro DNS del tenant pasa a **A → IP del relay** y `endpoint-port` del peer es el puerto del
   slot. Tráfico y presencia (`getUdpRelayStats`: counters de FORWARD + `/proc/net/nf_conntrack`)
-  llegan en `rx/tx/last-handshake` y alimentan las tarjetas, aunque homevpn pidió que las columnas
-  Connection y Traffic no se muestren para estos slots. Costo: todo el tráfico de los slots pasa
-  por el relay (sube y baja), elegir un server con ancho de banda.
+  llegan en `rx/tx/last-handshake`; las columnas Connection y Traffic se muestran **solo cuando hay
+  relay** (`hideLiveColumns` = starhome sin `rx`), porque sin relay solo mostraban "—" y homevpn
+  las pidió fuera. Los contadores son desde que se escribió la regla: `applyRelay` solo toca las
+  reglas que faltan o cuyo destino cambió (`listUdpRelays`), así "Sync" no los resetea. Costo del
+  relay: todo el tráfico pasa por él (sube y baja) y el ping del cliente se duplica (medido por
+  homevpn: velocidad igual, latencia ×2); elegir un relay cercano a los clientes.
 - **Public IP por slot (v35):** la API no la da, pero el proxy SOCKS5 del slot
   (`proxy.starzone.io:51312+N`) sale por esa IP. Con la IP del relay autorizada en StarVPN (Proxy
   Configuration → Authorized IP's — UNA IP cubre los 70 slots porque el puerto identifica el slot),
