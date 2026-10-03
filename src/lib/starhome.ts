@@ -547,8 +547,9 @@ export async function starhomePeersForRouter(
   const account = await accountForRouter(admin, routerId);
   if (!account) return [];
   await syncIfStale(admin, account, Boolean(opts?.forceSync));
-  // Force Refresh also re-probes the public IPs; it takes a few seconds, so the next poll shows them
-  if (opts?.forceSync) void refreshExitIps(admin, account, { force: true }).catch(() => {});
+  // Public IPs: re-probed every 5 min while the Dashboard is open (doesn't rely on the external
+  // cron), and right away on Force Refresh. It takes a few seconds, so the next poll shows them.
+  void refreshExitIps(admin, account, { force: Boolean(opts?.forceSync) }).catch(() => {});
   const { slots, emails } = await visibleSlots(admin, account, viewer);
 
   // White-label (v26): <slug>.<tenant domain>, which the tenant points at
