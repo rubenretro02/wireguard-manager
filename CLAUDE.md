@@ -114,7 +114,8 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   para el primer paquete y conntrack sigue traduciendo el flujo establecido, que con keepalive de
   25 s nunca caduca (homevpn siguió navegando por un puerto ya sin regla). Enable = quitar el DROP
   y poner la DNAT. Si en el relay está instalado `conntrack`, además se flushean las entradas
-  (`conntrack -D -p udp --orig-port-dst`); sin él, el DROP basta. Enable = ponerla;
+  (`conntrack -D -p udp --orig-port-dst`); sin él, el DROP basta. En Ohio no está instalado
+  (`apt install conntrack` lo haría instantáneo y limpio);
   el `.conf` del cliente no cambia. `starhome_slots.disabled` guarda el estado; sin relay el slot
   siempre está "enabled" y el toggle devuelve 400 explicando. Al vencer el timer,
   `expireSlotAssignments` apaga el relay (eso es el auto-disable) y marca `disabled`; Renew hace
