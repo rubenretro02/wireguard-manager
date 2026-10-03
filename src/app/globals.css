@@ -63,13 +63,18 @@
   }
 }
 
-/* Dashboard peers table: chunky, obvious horizontal scrollbars — the mirror above the table
-   (.peers-hscroll) and the table's own wrapper (.peers-table-host > div). Only -webkit
-   pseudo-elements on purpose: setting scrollbar-width/scrollbar-color makes Chrome ignore them. */
+/* Dashboard peers table: one chunky horizontal scrollbar ABOVE the table (.peers-hscroll, a
+   mirror synced with the wrapper) and no horizontal bar below it; the wrapper keeps only its
+   vertical bar. Only -webkit pseudo-elements on purpose: setting scrollbar-width/scrollbar-color
+   makes Chrome ignore them. */
 .peers-hscroll::-webkit-scrollbar,
 .peers-table-host > div::-webkit-scrollbar {
   width: 14px;
   height: 14px;
+}
+
+.peers-table-host > div::-webkit-scrollbar:horizontal {
+  height: 0;
 }
 
 .peers-hscroll::-webkit-scrollbar-track,

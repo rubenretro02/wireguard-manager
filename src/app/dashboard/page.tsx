@@ -2632,7 +2632,7 @@ PersistentKeepalive = 25`;
             </div>
           ) : (
             <>
-              {/* Mirror of the table's horizontal scrollbar, reachable without scrolling to the bottom */}
+              {/* The table's only horizontal scrollbar: a mirror above it (the wrapper's own is hidden in CSS) */}
               <div
                 ref={peersTopBarRef}
                 className="peers-hscroll overflow-x-auto overflow-y-hidden border-b border-border"
