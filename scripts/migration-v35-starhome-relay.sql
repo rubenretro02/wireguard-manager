@@ -22,4 +22,15 @@ ALTER TABLE starhome_slots
     ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT false;
 COMMENT ON COLUMN starhome_slots.disabled IS 'Relay apagado para este slot (solo tiene efecto con relay_router_id)';
 
+-- IP pública de cada slot: la API no la da, pero el proxy del slot sí
+-- (proxy.starzone.io:51312+N). Con la IP del relay autorizada en StarVPN
+-- (Proxy Configuration → Authorized IP's), el relay consulta la IP de salida de
+-- cada slot y el cron la guarda aquí (y registra en activity_logs cuando cambia).
+ALTER TABLE starhome_slots
+    ADD COLUMN IF NOT EXISTS public_ip TEXT;
+ALTER TABLE starhome_slots
+    ADD COLUMN IF NOT EXISTS public_ip_checked_at TIMESTAMPTZ;
+ALTER TABLE starhome_accounts
+    ADD COLUMN IF NOT EXISTS exit_ips_checked_at TIMESTAMPTZ;
+
 NOTIFY pgrst, 'reload schema';

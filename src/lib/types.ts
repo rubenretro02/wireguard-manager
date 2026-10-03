@@ -162,4 +162,6 @@ export interface WireGuardPeer {
   location?: string | null;
   // v32: the provider's slot number (fixed); `name` is the tenant's own label for the slot
   slot_number?: number;
+  // v32: the provider's codes behind `location`, to preselect the "change location" dialog
+  slot_location?: { country: string | null; region: string | null; isp: string | null };
 }

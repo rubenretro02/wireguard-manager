@@ -191,6 +191,15 @@ export default function DashboardPage() {
   // is the last known data; this holds its fetch time (null = data is live).
   const [staleSince, setStaleSince] = useState<number | null>(null);
   const [routerDown, setRouterDown] = useState(false);
+
+  // StarVPN: "change location" dialog (country / region / ISP from the provider's catalogue)
+  interface LocationOpt { id: number; key: string; name: string }
+  const [locationPeer, setLocationPeer] = useState<PeerWithMetadata | null>(null);
+  const [locationOptions, setLocationOptions] = useState<Array<LocationOpt & { regions: Array<LocationOpt & { isps: LocationOpt[] }> }>>([]);
+  const [locCountry, setLocCountry] = useState("");
+  const [locRegion, setLocRegion] = useState("");
+  const [locIsp, setLocIsp] = useState("");
+  const [savingLocation, setSavingLocation] = useState(false);
   const lastGoodFetchRef = useRef<number | null>(null);
   const fetchInFlightRef = useRef(false);
   // Espejos de peers/metadata para el auto-disable: leerlos de refs evita que su
@@ -1521,6 +1530,55 @@ export default function DashboardPage() {
     }
   };
 
+  // ===== StarVPN: change a slot's location =====
+  const openChangeLocation = async (peer: PeerWithMetadata) => {
+    setLocationPeer(peer);
+    setLocCountry(peer.slot_location?.country || "");
+    setLocRegion(peer.slot_location?.region || "");
+    setLocIsp(peer.slot_location?.isp || "");
+    if (locationOptions.length > 0) return;
+    try {
+      const res = await fetch("/api/starhome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getLocationOptions" }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't load the locations");
+      setLocationOptions(json.countries || []);
+    } catch (e) {
+      toast.error((e as Error).message);
+      setLocationPeer(null);
+    }
+  };
+
+  const handleChangeLocation = async () => {
+    if (!locationPeer) return;
+    setSavingLocation(true);
+    try {
+      const res = await fetch("/api/starhome", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "setSlotLocation",
+          slotId: locationPeer[".id"].replace(/^\*sh:/, ""),
+          country: locCountry,
+          region: locRegion,
+          isp: locIsp,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Couldn't change the location");
+      toast.success("Location updated — the slot gets a new IP there; the client config stays the same");
+      setLocationPeer(null);
+      fetchWireGuardData(true);
+    } catch (e) {
+      toast.error((e as Error).message);
+    } finally {
+      setSavingLocation(false);
+    }
+  };
+
   // ===== Bulk actions =====
   const getSelectedPeers = () => peers.filter((p) => selectedPeerIds.has(p[".id"]));
 
@@ -2667,8 +2725,19 @@ PersistentKeepalive = 25`;
 
                       {/* Location Column (StarVPN slots only) */}
                       {isStarhomeRouter && (
-                        <TableCell className="font-mono text-sm text-emerald-400 whitespace-nowrap">
-                          {peer.location || "-"}
+                        <TableCell className="whitespace-nowrap">
+                          <div className="flex items-center gap-1">
+                            <span className="font-mono text-sm text-emerald-400">{peer.location || "-"}</span>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-muted-foreground"
+                              title="Change location"
+                              onClick={() => openChangeLocation(peer)}
+                            >
+                              <Globe className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
                         </TableCell>
                       )}
 
@@ -3230,7 +3299,9 @@ PersistentKeepalive = 25`;
             <DialogTitle className="flex items-center justify-between">
               <span>{managingPeer?.name || "Peer Configuration"}</span>
               <div className="flex items-center gap-2">
-                {!dialogEditMode ? (
+                {/* StarVPN slots: keys and addresses belong to the provider (a new key = change the
+                    slot's username on StarVPN's site), so there is nothing to edit here */}
+                {isStarhomeRouter ? null : !dialogEditMode ? (
                   <Button variant="outline" size="sm" onClick={toggleDialogEditMode} className="gap-1">
                     <Pencil className="w-4 h-4" />
                     Edit
@@ -3983,6 +4054,65 @@ PersistentKeepalive = 25"
       </Dialog>
 
       {/* Per-peer history */}
+      {/* StarVPN: change a slot's location (country / region / ISP) */}
+      <Dialog open={!!locationPeer} onOpenChange={(o) => !o && setLocationPeer(null)}>
+        <DialogContent className="bg-card border-border">
+          <DialogHeader>
+            <DialogTitle>Change location — {locationPeer?.name || `Slot ${locationPeer?.slot_number ?? ""}`}</DialogTitle>
+            <DialogDescription>
+              The provider moves the slot there and gives it a new IP; the client config does not change.
+              {locationPeer?.location ? ` Now: ${locationPeer.location}.` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {locationOptions.length === 0 ? (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground py-4">
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading locations…
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label>Country</Label>
+                <Select value={locCountry} onValueChange={(v) => { setLocCountry(v); setLocRegion(""); setLocIsp(""); }}>
+                  <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="Country" /></SelectTrigger>
+                  <SelectContent>
+                    {locationOptions.map((c) => <SelectItem key={c.key} value={c.key}>{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>Region</Label>
+                <Select value={locRegion} onValueChange={(v) => { setLocRegion(v); setLocIsp(""); }} disabled={!locCountry}>
+                  <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="Region" /></SelectTrigger>
+                  <SelectContent>
+                    {(locationOptions.find((c) => c.key === locCountry)?.regions || []).map((g) => (
+                      <SelectItem key={g.key} value={g.key}>{g.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label>ISP</Label>
+                <Select value={locIsp} onValueChange={setLocIsp} disabled={!locRegion}>
+                  <SelectTrigger className="bg-secondary border-border"><SelectValue placeholder="ISP" /></SelectTrigger>
+                  <SelectContent>
+                    {(locationOptions.find((c) => c.key === locCountry)?.regions.find((g) => g.key === locRegion)?.isps || []).map((i) => (
+                      <SelectItem key={i.key} value={i.key}>{i.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLocationPeer(null)}>Cancel</Button>
+            <Button onClick={handleChangeLocation} disabled={!locCountry || !locRegion || !locIsp || savingLocation}>
+              {savingLocation && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Change location
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <PeerLogDialog
         open={!!logPeer}
         onOpenChange={(o) => !o && setLogPeer(null)}

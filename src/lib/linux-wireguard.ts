@@ -752,6 +752,24 @@ export class LinuxWireGuardClient {
   }
 
   /**
+   * Exit IP of each SOCKS5 proxy port, as seen from this server (it must be an
+   * authorized IP at the provider). All ports are probed in parallel; a port
+   * that doesn't answer is simply missing from the result.
+   */
+  async probeSocksExitIps(proxyHost: string, ports: number[]): Promise<Map<number, string>> {
+    const out = new Map<number, string>();
+    if (ports.length === 0) return out;
+    const script =
+      `for p in ${ports.join(" ")}; do ( ip=$(curl -s --max-time 15 -x socks5h://${proxyHost}:$p https://api.ipify.org); echo "$p ${"$"}{ip:--}" ) & done; wait`;
+    const listing = await this.executeCommand(`bash -c '${script}'`);
+    for (const line of listing.split("\n")) {
+      const m = line.trim().match(/^(\d+) (\d{1,3}(?:\.\d{1,3}){3})$/);
+      if (m) out.set(Number(m[1]), m[2]);
+    }
+    return out;
+  }
+
+  /**
    * Bytes relayed per port (rx = what the client sent, tx = what it received) and
    * when each port last saw a packet. UDP conntrack entries count down from the
    * kernel's udp timeout after the last packet, so the remaining time gives the

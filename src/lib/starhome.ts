@@ -200,6 +200,87 @@ export async function rotateSlotIp(creds: StarhomeCredentials, slotNumber: numbe
 }
 
 // ---------------------------------------------------------------------------
+// Location (country / region / ISP) of a slot
+// ---------------------------------------------------------------------------
+
+export interface LocationOption {
+  id: number;
+  key: string;
+  name: string;
+}
+export interface LocationRegion extends LocationOption {
+  isps: LocationOption[];
+}
+export interface LocationCountry extends LocationOption {
+  regions: LocationRegion[];
+}
+
+/**
+ * The public catalogue (`get_ip_configuration_options`, no auth). Each level is
+ * an object whose numeric keys list the names in display order and whose named
+ * keys hold `{ id, key, <children> }`; `key` is what refresh_data reports
+ * (country "us", region "ny2", isp "centurylink").
+ */
+let locationOptionsCache: { at: number; countries: LocationCountry[] } | null = null;
+const LOCATION_OPTIONS_TTL_MS = 60 * 60 * 1000;
+
+export async function getLocationOptions(): Promise<LocationCountry[]> {
+  if (locationOptionsCache && Date.now() - locationOptionsCache.at < LOCATION_OPTIONS_TTL_MS) {
+    return locationOptionsCache.countries;
+  }
+  const res = await fetch(`${STARHOME_API_URL}get_ip_configuration_options`, {
+    signal: AbortSignal.timeout(20_000),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new StarhomeError(`Couldn't load the location options (HTTP ${res.status})`);
+  const json = await res.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const level = (obj: any, childKey?: string): any[] => {
+    if (!obj || typeof obj !== "object") return [];
+    const names = Object.keys(obj)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => String(obj[k]));
+    return names
+      .map((name) => {
+        const node = obj[name];
+        if (!node || typeof node !== "object") return null;
+        const base = { id: Number(node.id), key: String(node.key || ""), name };
+        return childKey ? { ...base, [childKey]: level(node[childKey === "regions" ? "region" : "isp"], childKey === "regions" ? "isps" : undefined) } : base;
+      })
+      .filter(Boolean);
+  };
+  const countries = level(json?.data?.["Static Residential IP"]?.countries, "regions") as LocationCountry[];
+  if (!countries.length) throw new StarhomeError("StarHome returned no location options");
+  locationOptionsCache = { at: Date.now(), countries };
+  return countries;
+}
+
+/**
+ * "Update IP Configuration" — moves a slot to another country/region/ISP.
+ * TODO: like ROTATE_COMMAND, the generated command hasn't been captured yet.
+ * The selection travels as the catalogue's ids and keys so whichever the API
+ * wants is at hand once the field names are known.
+ */
+const UPDATE_LOCATION_COMMAND: string | null = null;
+
+export async function updateSlotLocation(
+  creds: StarhomeCredentials,
+  slotNumber: number,
+  selection: { country: LocationOption; region: LocationOption; isp: LocationOption }
+): Promise<void> {
+  if (!UPDATE_LOCATION_COMMAND) {
+    throw new StarhomeError("Changing the location isn't wired to StarHome yet");
+  }
+  await starhomeRequest(creds, UPDATE_LOCATION_COMMAND, {
+    port: slotNumber,
+    country: selection.country.key,
+    region: selection.region.key,
+    isp: selection.isp.key,
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Database rows
 // ---------------------------------------------------------------------------
 
@@ -221,6 +302,8 @@ export interface StarhomeAccountRow extends StarhomeCredentials {
   relay_router_id: string | null;
   /** The wg.starzone.io address the DNAT rules currently point at. */
   relay_target_ip: string | null;
+  /** Last time the slots' public IPs were probed through the relay. */
+  exit_ips_checked_at: string | null;
   created_at: string;
 }
 
@@ -244,10 +327,13 @@ export interface StarhomeSlotRow {
   last_rotated_at: string | null;
   /** v35: relay switched off for this slot (only meaningful with a relay server). */
   disabled: boolean;
+  /** Exit IP seen through the slot's proxy from the relay server (null = never probed). */
+  public_ip: string | null;
+  public_ip_checked_at: string | null;
 }
 
-export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, relay_router_id, relay_target_ip, created_at";
-export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at, disabled";
+export const ACCOUNT_COLS = "id, router_id, owner_user_id, label, email, auth_token, proxy_host, package, status, next_due_date, total_slots, last_synced_at, last_sync_error, wg_server_public_key, relay_router_id, relay_target_ip, exit_ips_checked_at, created_at";
+export const SLOT_COLS = "id, account_id, slot_number, port, ip_type, country, region, isp, vpn_username, vpn_password, remaining_updates, raw, name, assigned_user_id, assigned_at, expires_at, last_rotated_at, disabled, public_ip, public_ip_checked_at";
 
 export interface Viewer {
   userId: string;
@@ -377,9 +463,10 @@ export function slotAsPeer(
     "public-key": (privateKey && publicKeyFromPrivate(privateKey)) || `starhome:${slot.id}`,
     "private-key": privateKey || undefined,
     "allowed-address": addresses,
-    // comment is the public IP column; StarVPN doesn't report the slot's IP
-    comment: "",
+    // The public IP column: probed through the slot's proxy from the relay (empty until then)
+    comment: slot.public_ip || "",
     location: slotLocation(slot),
+    slot_location: { country: slot.country, region: slot.region, isp: slot.isp },
     // Without a relay nothing can switch the slot off, so it is always "enabled"
     disabled: relay ? slot.disabled : false,
     "endpoint-port": relay ? relayPortForSlot(slot.slot_number) : STARHOME_WG_PORT,
@@ -443,6 +530,8 @@ export async function starhomePeersForRouter(
   const account = await accountForRouter(admin, routerId);
   if (!account) return [];
   await syncIfStale(admin, account, Boolean(opts?.forceSync));
+  // Force Refresh also re-probes the public IPs; it takes a few seconds, so the next poll shows them
+  if (opts?.forceSync) void refreshExitIps(admin, account, { force: true }).catch(() => {});
   const { slots, emails } = await visibleSlots(admin, account, viewer);
 
   // White-label (v26): <slug>.<tenant domain>, which the tenant points at
@@ -587,6 +676,76 @@ export async function ensureRelayTargets(admin: SupabaseClient): Promise<void> {
     } catch (e) {
       console.error(`[starhome] relay repair failed for ${account.label}:`, (e as Error).message);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public IP of each slot (v35)
+// ---------------------------------------------------------------------------
+
+const EXIT_IPS_TTL_MS = 10 * 60 * 1000;
+const exitIpsInFlight = new Map<string, Promise<number>>();
+
+/**
+ * The provider's API never reports a slot's public IP, but the slot's SOCKS5
+ * proxy exits through it. From the relay server (whose IP the tenant authorized
+ * at StarVPN → Proxy Configuration) every port is probed and the result stored;
+ * a change is written to the slot's history. Returns how many slots answered.
+ */
+export async function refreshExitIps(admin: SupabaseClient, account: StarhomeAccountRow, opts?: { force?: boolean }): Promise<number> {
+  const age = account.exit_ips_checked_at ? Date.now() - new Date(account.exit_ips_checked_at).getTime() : Infinity;
+  if (!opts?.force && age < EXIT_IPS_TTL_MS) return 0;
+  const router = await relayRouterFor(admin, account);
+  if (!router) return 0;
+
+  let p = exitIpsInFlight.get(account.id);
+  if (!p) {
+    p = (async () => {
+      const { data: slots } = await admin.from("starhome_slots").select(SLOT_COLS).eq("account_id", account.id);
+      const rows = (slots || []) as StarhomeSlotRow[];
+      const seen = await relayClient(router).probeSocksExitIps(account.proxy_host, rows.map((s) => s.port));
+      const now = new Date().toISOString();
+      let answered = 0;
+      for (const slot of rows) {
+        const ip = seen.get(slot.port);
+        if (!ip) continue;
+        answered++;
+        if (ip === slot.public_ip) {
+          await admin.from("starhome_slots").update({ public_ip_checked_at: now }).eq("id", slot.id);
+          continue;
+        }
+        await admin.from("starhome_slots").update({ public_ip: ip, public_ip_checked_at: now }).eq("id", slot.id);
+        const privateKey = typeof slot.raw?.wg_private_key === "string" ? (slot.raw.wg_private_key as string) : null;
+        await logActivity({
+          supabase: admin,
+          userId: null,
+          routerId: account.router_id,
+          action: "update",
+          entityType: "starhome_slot",
+          entityId: slot.id,
+          entityName: slot.name || `Slot ${slot.slot_number}`,
+          peerPublicKey: privateKey ? publicKeyFromPrivate(privateKey) : null,
+          details: { publicIp: ip, previousPublicIp: slot.public_ip, location: slotLocation(slot) },
+        });
+      }
+      await admin.from("starhome_accounts").update({ exit_ips_checked_at: now }).eq("id", account.id);
+      return answered;
+    })().finally(() => exitIpsInFlight.delete(account.id));
+    exitIpsInFlight.set(account.id, p);
+  }
+  return p;
+}
+
+/** Cron tick: relay repair, provider re-read (≤ every 5 min) and exit-IP probe (≤ every 10 min). */
+export async function starhomeCronTick(admin: SupabaseClient): Promise<void> {
+  await ensureRelayTargets(admin);
+  const { data: accounts } = await admin.from("starhome_accounts").select(ACCOUNT_COLS);
+  for (const account of (accounts || []) as StarhomeAccountRow[]) {
+    const age = account.last_synced_at ? Date.now() - new Date(account.last_synced_at).getTime() : Infinity;
+    if (age > 5 * 60 * 1000) {
+      await syncAccount(admin, account).catch((e) => console.error(`[starhome] cron sync of ${account.label}:`, (e as Error).message));
+    }
+    await refreshExitIps(admin, account).catch((e) => console.error(`[starhome] exit IPs of ${account.label}:`, (e as Error).message));
   }
 }
 

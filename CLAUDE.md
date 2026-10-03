@@ -108,6 +108,26 @@ app escribe con service role. **Borrar el router borra todo en cascada** (cuenta
   llegan en `rx/tx/last-handshake` y alimentan las tarjetas, aunque homevpn pidió que las columnas
   Connection y Traffic no se muestren para estos slots. Costo: todo el tráfico de los slots pasa
   por el relay (sube y baja), elegir un server con ancho de banda.
+- **Public IP por slot (v35):** la API no la da, pero el proxy SOCKS5 del slot
+  (`proxy.starzone.io:51312+N`) sale por esa IP. Con la IP del relay autorizada en StarVPN (Proxy
+  Configuration → Authorized IP's — UNA IP cubre los 70 slots porque el puerto identifica el slot),
+  `refreshExitIps` corre en el relay `curl -x socks5h://proxy:PORT https://api.ipify.org` para todos
+  los puertos en paralelo (`LinuxWireGuardClient.probeSocksExitIps`), guarda
+  `starhome_slots.public_ip` (+ `public_ip_checked_at`, `starhome_accounts.exit_ips_checked_at`) y
+  registra en `activity_logs` cada cambio de IP. Cadencia: cron `peer-presence` → `starhomeCronTick`
+  (relay repair + sync del proveedor cada 5 min + probe cada 10 min) y "Force Refresh" (dispara el
+  probe sin esperar). Sin relay no hay IP (no hay desde dónde consultar). La columna Public IP del
+  Dashboard muestra `peer.comment` = `public_ip`. Supuesto: la IP del proxy y la del túnel WG del
+  mismo slot son la misma (el slot ES la IP).
+- **Change location:** botón (globo) al lado de Location → diálogo país/región/ISP. El catálogo sale
+  del endpoint público `get_ip_configuration_options` (`getLocationOptions`, cache 1 h): cada nivel
+  es un objeto con claves numéricas (orden/nombres) y claves por nombre con `{id, key, …}`; `key`
+  coincide con los códigos de `refresh_data` (`us`, `ny2`, `centurylink`). `setSlotLocation` valida
+  contra el catálogo y llama `updateSlotLocation`, **que todavía no tiene comando**
+  (`UPDATE_LOCATION_COMMAND` null → 400 "isn't wired yet"), igual que `ROTATE_COMMAND`. Hace falta
+  capturar en API Information los JSON de "Update IP Now" y "Update IP Configuration".
+- Diálogo "View config" en slots StarVPN: sin botón Edit (ni New Keys ni Save): las llaves son del
+  proveedor; la única rotación es cambiar el username del slot en StarVPN.
 - **Sync automático:** `starhomePeersForRouter` re-lee StarVPN como máximo cada 60 s por cuenta
   mientras alguien tiene el Dashboard abierto (`syncIfStale`, coalescido por cuenta), y "Force
   Refresh" lo fuerza. Motivo (reporte de homevpn 2026-10-03): cambiar la región del slot en StarVPN

@@ -11,11 +11,14 @@ import {
   canManageAccount,
   clearRelay,
   fetchAccountData,
+  getLocationOptions,
   grantServerAccess,
+  refreshExitIps,
   revokeServerAccessIfUnused,
   rotateSlotIp,
   storeAccountData,
   syncAccount,
+  updateSlotLocation,
   type StarhomeAccountRow,
   type StarhomeSlotRow,
 } from "@/lib/starhome";
@@ -372,6 +375,43 @@ export async function POST(request: Request) {
           details: { unassigned: r.slot.assigned_user_id },
         });
         return NextResponse.json({ unassigned: true });
+      }
+
+      case "getLocationOptions": {
+        return NextResponse.json({ countries: await getLocationOptions() });
+      }
+
+      case "setSlotLocation": {
+        const r = await loadOwnedSlot(ctx, body.slotId);
+        if ("error" in r) return r.error;
+        const countries = await getLocationOptions();
+        const country = countries.find((c) => c.key === String(body.country || ""));
+        const region = country?.regions.find((g) => g.key === String(body.region || ""));
+        const isp = region?.isps.find((i) => i.key === String(body.isp || ""));
+        if (!country || !region || !isp) return NextResponse.json({ error: "Pick a country, region and ISP" }, { status: 400 });
+        await updateSlotLocation(r.account, r.slot.slot_number, { country, region, isp });
+        await syncAccount(admin, r.account).catch(() => {});
+        await logActivity({
+          supabase: admin,
+          userId: ctx.userId,
+          routerId: r.account.router_id,
+          action: "update",
+          entityType: "starhome_slot",
+          entityId: r.slot.id,
+          entityName: r.slot.name || `Slot ${r.slot.slot_number}`,
+          details: { location: `${country.name} / ${region.name} / ${isp.name}` },
+        });
+        return NextResponse.json({ updated: true });
+      }
+
+      case "refreshExitIps": {
+        const r = await loadOwnedAccount(ctx, body.accountId);
+        if ("error" in r) return r.error;
+        if (!r.account.relay_router_id) {
+          return NextResponse.json({ error: "Set a relay server first — its IP is what StarVPN must authorize" }, { status: 400 });
+        }
+        const answered = await refreshExitIps(admin, r.account, { force: true });
+        return NextResponse.json({ answered });
       }
 
       case "rotateIp": {

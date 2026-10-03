@@ -6,7 +6,7 @@ import {
   parseMikroTikDuration,
 } from "@/lib/tg-store";
 import type { Router } from "@/lib/types";
-import { ensureRelayTargets } from "@/lib/starhome";
+import { starhomeCronTick } from "@/lib/starhome";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,8 +80,8 @@ export async function GET(request: Request) {
 
   const { data: routers } = await supabase.from("routers").select("*");
 
-  // StarVPN relays (v35): if the provider dropped the ingress IP an account points at, move it
-  await ensureRelayTargets(supabase).catch((e) => console.error("[peer-presence] relay check:", e));
+  // StarVPN (v35): relay repair, provider re-read and public-IP probe, each on its own TTL
+  await starhomeCronTick(supabase).catch((e) => console.error("[peer-presence] starhome tick:", e));
 
   for (const router of (routers || []) as Router[]) {
     // StarVPN accounts have no WireGuard server we can read handshakes from

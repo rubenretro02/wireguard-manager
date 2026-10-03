@@ -851,6 +851,12 @@ export default function ProfilePage() {
                   <p className="text-xs text-muted-foreground">
                     StarVPN dashboard → API Information → Create Auth Token. One token covers every slot of the account.
                   </p>
+                  {starhomeAccounts.some((a) => a.relay_router_id) && (
+                    <p className="text-xs text-muted-foreground">
+                      With a relay set, add the relay server&apos;s IP under StarVPN → Proxy Configuration → Authorized
+                      IP&apos;s: the panel then reads each slot&apos;s public IP through its proxy (checked every 10 minutes).
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             )}
