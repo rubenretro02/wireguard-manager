@@ -18,6 +18,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -255,6 +256,7 @@ function AdminTelegramPageContent() {
   const [extending, setExtending] = useState(false);
 
   const [busyPeerId, setBusyPeerId] = useState<string | null>(null);
+  const [confirmDialog, confirmAction] = useConfirm();
 
   // Peers tab filters
   const [peerSearch, setPeerSearch] = useState("");
@@ -633,7 +635,20 @@ function AdminTelegramPageContent() {
   };
 
   const peerAction = async (peer: AdminPeer, action: "disableCustomerPeer" | "enableCustomerPeer" | "deleteCustomerPeer") => {
-    if (action === "deleteCustomerPeer" && !confirm(`Delete peer "${peer.peer_name}"? It will be removed from the server and the customer.`)) return;
+    if (action === "deleteCustomerPeer") {
+      const confirmed = await confirmAction({
+        title: "Delete peer?",
+        confirmLabel: "Delete peer",
+        destructive: true,
+        description: (
+          <>
+            <p className="font-medium text-foreground">{peer.peer_name}</p>
+            <p className="mt-2">It is removed from the server and from the customer. The client&apos;s config stops working. This cannot be undone.</p>
+          </>
+        ),
+      });
+      if (!confirmed) return;
+    }
     setBusyPeerId(peer.id);
     try {
       await tgAdmin(action, { id: peer.id });
@@ -1860,6 +1875,7 @@ function AdminTelegramPageContent() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {confirmDialog}
       </PageContent>
     </DashboardLayout>
   );

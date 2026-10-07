@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft, Copy, Download, Loader2, Pencil, Power, PowerOff, QrCode, RefreshCw,
@@ -109,6 +110,7 @@ export default function CustomerDetailPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [confirmDialog, confirmAction] = useConfirm();
 
   // Edit customer
   const [editOpen, setEditOpen] = useState(false);
@@ -267,8 +269,32 @@ export default function CustomerDetailPage() {
 
   /* ---------- peer actions ---------- */
   const peerAction = async (peer: CustomerPeer, action: "disableCustomerPeer" | "enableCustomerPeer" | "deleteCustomerPeer" | "unassignPeer") => {
-    if (action === "deleteCustomerPeer" && !confirm(`Delete "${peer.peer_name}"? It is removed from the server too.`)) return;
-    if (action === "unassignPeer" && !confirm(`Remove "${peer.peer_name}" from this customer? The peer stays on the server.`)) return;
+    if (action === "deleteCustomerPeer") {
+      const confirmed = await confirmAction({
+        title: "Delete peer?",
+        confirmLabel: "Delete peer",
+        destructive: true,
+        description: (
+          <>
+            <p className="font-medium text-foreground">
+              {peer.peer_name}
+              <span className="font-mono font-normal text-muted-foreground"> · {peer.allowed_address}{peer.public_ip ? ` · ${peer.public_ip}` : ""}</span>
+            </p>
+            {peer.routers?.name && <p className="mt-1">Server: {peer.routers.name}</p>}
+            <p className="mt-2">It is removed from the server and from this customer. The client&apos;s config stops working. This cannot be undone.</p>
+          </>
+        ),
+      });
+      if (!confirmed) return;
+    }
+    if (action === "unassignPeer") {
+      const confirmed = await confirmAction({
+        title: "Remove from customer?",
+        confirmLabel: "Remove",
+        description: `"${peer.peer_name}" is unlinked from this customer. The peer stays on the server.`,
+      });
+      if (!confirmed) return;
+    }
     setBusyId(peer.id);
     try {
       await tgAdmin(action, { id: peer.id });
@@ -756,7 +782,7 @@ export default function CustomerDetailPage() {
         peerName={logPeer?.peer_name}
         subtitle={logPeer ? `${logPeer.routers?.name || ""} · ${logPeer.allowed_address}` : null}
       />
-
+      {confirmDialog}
     </DashboardLayout>
   );
 }

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
@@ -67,6 +68,7 @@ export default function PublicIpsPage() {
 
   // Single peer detail dialog
   const [peerDetailOpen, setPeerDetailOpen] = useState(false);
+  const [confirmDialog, confirmAction] = useConfirm();
   const [selectedPeerDetail, setSelectedPeerDetail] = useState<PeerInfo | null>(null);
 
   // User capabilities
@@ -407,7 +409,23 @@ export default function PublicIpsPage() {
       toast.error("You don't have permission to delete peers");
       return;
     }
-    if (!confirm("Delete this peer?")) return;
+    const serverName = routers.find((r) => r.id === selectedRouterId)?.name;
+    const confirmed = await confirmAction({
+      title: "Delete peer?",
+      confirmLabel: "Delete peer",
+      destructive: true,
+      description: (
+        <>
+          <p className="font-medium text-foreground">
+            {peer.name || "Unnamed"}
+            <span className="font-mono font-normal text-muted-foreground"> · {peer.address}{peer.comment ? ` · ${peer.comment}` : ""}</span>
+          </p>
+          {serverName && <p className="mt-1">Server: {serverName}</p>}
+          <p className="mt-2">It is removed from the server and the client&apos;s config stops working. This cannot be undone.</p>
+        </>
+      ),
+    });
+    if (!confirmed) return;
     try {
       const res = await fetch("/api/wireguard", {
         method: "POST",
@@ -760,6 +778,7 @@ PersistentKeepalive = 25`}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirmDialog}
     </DashboardLayout>
   );
 }

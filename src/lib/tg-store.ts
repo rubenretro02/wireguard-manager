@@ -297,7 +297,15 @@ export async function nextDisplayName(supabase: SupabaseClient, customerId: stri
  * registrado en DB (linux_peers + tg_customer_peers) — los peers disabled no
  * están en `wg show` pero su IP sigue reservada.
  */
-async function getNextFreeIp(
+/**
+ * Next free host in the public IP's /24, crossing `wg show` with linux_peers and
+ * tg_customer_peers: a disabled (or missing) peer is not in wg but still owns
+ * its address — the client has that .conf. Reusing it creates two rows on one
+ * IP and `wg set` moves the address to whichever is applied last. Shared with
+ * /api/wireguard createPeerSimplified since 2026-10-07 (it used wg alone and
+ * handed a ghost's address to a re-created peer).
+ */
+export async function getNextFreeIp(
   supabase: SupabaseClient,
   client: LinuxWireGuardClient,
   publicIp: PublicIP,

@@ -74,19 +74,24 @@ export async function logActivity({
       peer_public_key: entityType === "peer" ? peerKey : null,
     };
 
-    let { data, error } = await supabase.from("activity_logs").insert(row).select();
+    // No `.select()` after the insert: with the user's RLS client that adds a
+    // RETURNING clause, and activity_logs only lets admins SELECT, so for every
+    // non-admin the whole insert failed with "new row violates row-level
+    // security policy" (verified 2026-10-07: not one log row from a non-admin
+    // in the table's history). Insert-only works for any authenticated user.
+    let { error } = await supabase.from("activity_logs").insert(row);
 
     // Until migration v31 runs the column doesn't exist — never let that kill
     // the whole log (that exact silent failure already happened once, see v25).
     if (error && /peer_public_key/.test(error.message)) {
       delete row.peer_public_key;
-      ({ data, error } = await supabase.from("activity_logs").insert(row).select());
+      ({ error } = await supabase.from("activity_logs").insert(row));
     }
 
     if (error) {
       console.error("[Activity Logger] Supabase error:", error);
     } else {
-      console.log("[Activity Logger] Log inserted successfully:", data);
+      console.log("[Activity Logger] Log inserted successfully");
     }
   } catch (error) {
     // Log error but don't throw - activity logging shouldn't break main functionality

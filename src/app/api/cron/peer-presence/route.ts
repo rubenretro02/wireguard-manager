@@ -7,6 +7,7 @@ import {
 } from "@/lib/tg-store";
 import type { Router } from "@/lib/types";
 import { starhomeCronTick } from "@/lib/starhome";
+import { logActivity } from "@/lib/activity-logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +77,7 @@ export async function GET(request: Request) {
 
   const supabase = getServiceClient();
   const now = new Date();
-  const summary: Record<string, { online: number; opened: number; closed: number } | { error: string }> = {};
+  const summary: Record<string, { online: number; opened: number; closed: number; reconciled: number } | { error: string }> = {};
 
   const { data: routers } = await supabase.from("routers").select("*");
 
@@ -95,6 +96,48 @@ export async function GET(request: Request) {
       }
 
       const live = await readLivePeers(router, Array.from(interfaces));
+
+      // Reconciliation (2026-10-07): a linux_peers row flagged enabled whose peer
+      // is not on the server is a "ghost" — getPeers now lists it as Disabled,
+      // but the flag still feeds the v1 API and the customer pages, and nobody
+      // knows when it went missing. Flag it and leave one log line. Rows created
+      // in the last 5 min are skipped (createPeer inserts right after `wg set`),
+      // and the update is conditioned on the key so a rotation racing this read
+      // can't flag the renamed row.
+      let reconciled = 0;
+      if (router.connection_type === "linux-ssh" && live.length > 0) {
+        const liveKeys = new Set(live.map((e) => e.publicKey));
+        const { data: enabledRows } = await supabase
+          .from("linux_peers")
+          .select("id, public_key, name")
+          .eq("router_id", router.id)
+          .eq("disabled", false)
+          .lt("created_at", new Date(now.getTime() - 5 * 60 * 1000).toISOString());
+        for (const row of enabledRows || []) {
+          if (liveKeys.has(row.public_key)) continue;
+          const { data: flagged } = await supabase
+            .from("linux_peers")
+            .update({ disabled: true })
+            .eq("id", row.id)
+            .eq("public_key", row.public_key)
+            .eq("disabled", false)
+            .select("id");
+          if (!flagged?.length) continue;
+          reconciled++;
+          await logActivity({
+            supabase,
+            userId: null,
+            routerId: router.id,
+            action: "disable",
+            entityType: "peer",
+            entityId: row.id,
+            entityName: row.name,
+            peerPublicKey: row.public_key,
+            details: { auto: true, reason: "missing from the server while enabled in the DB", source: "cron peer-presence" },
+          });
+        }
+      }
+
       const onlineNow = new Map<string, LiveEntry>();
       for (const entry of live) {
         if (entry.handshakeAt && now.getTime() - entry.handshakeAt.getTime() < HANDSHAKE_WINDOW_SEC * 1000) {
@@ -147,7 +190,7 @@ export async function GET(request: Request) {
         closed++;
       }
 
-      summary[router.name] = { online: onlineNow.size, opened, closed };
+      summary[router.name] = { online: onlineNow.size, opened, closed, reconciled };
     } catch (err) {
       summary[router.name] = { error: err instanceof Error ? err.message : "unreachable" };
     }

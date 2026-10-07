@@ -41,6 +41,73 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-10-07 — Peers "fantasma" (sacados de wg sin marca en la DB) + confirmación de borrado
+
+**Síntoma:** peers con config ya entregada al cliente que no aparecían en ningún server ni en el
+Dashboard, sin rastro en Logs. Caso: "wedsonley vm" (Zoe, 10.10.89.2) desapareció a las 16:41 UTC,
+35 s después de vencer su timer; el journal de sudo del server tiene el `wg set wg0 peer … remove`.
+
+**Causa raíz (verificada con el journal y con una transacción de prueba bajo RLS):**
+- `/api/wireguard` `disablePeer`/`enablePeer`/`deletePeer` ejecutan el cambio por SSH con las
+  credenciales del router (sin RLS) pero escribían `linux_peers` y `activity_logs` con el cliente
+  RLS del usuario. Un no-admin actuando sobre un peer que no creó: `wg set … remove` OK, UPDATE o
+  DELETE en `linux_peers` → 0 filas, y el log no se insertaba. Como `getPeers` solo listaba los
+  peers ausentes de wg si tenían `disabled=true`, el peer quedaba invisible: "fantasma". Había 27
+  (Zoe 3, Miami Linux 23, TX 1).
+- El loop de auto-disable del Dashboard (60 s) recorre TODOS los peers que devuelve la API, no
+  solo los visibles: el navegador de zoeeboss100 (rol user) apagó peers del admin con timer vencido.
+- `logActivity` hacía `.insert(row).select()`: el RETURNING dispara la política SELECT de
+  `activity_logs` (solo admin) y para cualquier no-admin el insert entero fallaba con 42501. En toda
+  la historia de la tabla no hay UNA fila de un no-admin: los deletes de homevpn/leonaldo/
+  casemanager (tienen `can_delete`) en Ohio y TX se ejecutaron y nunca se registraron.
+- El cron `enforce-peer-expiry` ve el peer ya ausente de wg y lo saltea sin reparar la marca.
+
+**Cambios:**
+- `activity-logger.ts`: insert sin `.select()` → los no-admin loggean.
+- `route.ts`: `peerScopeError()` — los no-admin solo pueden enable/disable/delete peers dentro de
+  su alcance (`access-scope.ts`, misma regla que el filtro del Dashboard); si no, 403. En MikroTik,
+  si solo llega el `.id`, `mikrotikPeerKey()` resuelve la llave. Espejo en `linux_peers` y log con
+  `dbClient` (service role).
+- `getPeers` Linux: TODO peer de `linux_peers` ausente de wg se lista como Disabled (antes solo con
+  `disabled=true`) → los fantasmas reaparecen y se recuperan con Enable (misma llave; el .conf del
+  cliente vuelve a andar).
+- `enablePeer` Linux: 409 si otro peer vivo ya tiene ese `allowed_ips`. `wg set` le "roba" la IP
+  al que la tiene; con los fantasmas visibles, una fila vieja cuya IP se reutilizó no debe pisar a
+  la nueva (pasó con 10.10.89.2: el admin recreó wedsonley con llave nueva y la fila vieja quedó).
+- `src/components/ConfirmDialog.tsx` (`useConfirm`): diálogo real en vez de `window.confirm()`
+  (bloqueado en el webview de Telegram) para borrar peers en Dashboard (fila, bulk, modal), Public
+  IPs, Admin → Public IPs (×2), Customers y Admin → Telegram. Muestra nombre, dirección, IP y server.
+- **Reconciliación en el cron `peer-presence`:** por cada server Linux con dump vivo, toda fila de
+  `linux_peers` enabled (creada hace > 5 min) cuyo peer no está en wg pasa a `disabled=true` con un
+  log `disable` auto ("missing from the server while enabled in the DB", source `cron peer-presence`).
+  El UPDATE va condicionado a la llave para que una rotación de llaves que corra a la vez no marque
+  la fila renombrada. Así la bandera (que alimenta la API v1 y las páginas de customers) converge
+  sola y queda fecha de cuándo se notó.
+- **IP interna al crear (Dashboard, `createPeerSimplified`):** usaba `getNextAvailableIp` = solo
+  `wg show`, así que le daba a un peer nuevo la IP de un peer disabled o fantasma (pasó con
+  wedsonley: dos filas en 10.10.89.2). Ahora usa `getNextFreeIp` de `tg-store.ts` (exportada), que
+  cruza wg + `linux_peers` + `tg_customer_peers`, igual que la tienda.
+- **`scripts/restore-ghost-peers.mjs`** (`[--apply] [--host <ip>]`): por host lee `wg show all dump`
+  + `ip addr` (una conexión), y por cada fantasma: IP libre → lo vuelve a agregar con `wg set` +
+  `wg-quick save` (todos los `wg set` del host en UN exec) y registra `enable`; IP ocupada por un
+  peer vivo u otra fila enabled → siguiente IP libre del /24 en `linux_peers`/`peer_metadata`/
+  `tg_customer_peers`, `disabled=true` y registra `update` con `old_address`/`new_address`. Corrido
+  el 2026-10-07 a pedido del admin: **Zoe** 3 renumerados (10.10.94.2→.3, 10.10.103.2→.3,
+  10.10.89.2→.4; los tres tenían la IP reusada por el peer recreado), **Miami** 9 restaurados y 14
+  renumerados, **TX** 1 restaurado. Todo en `activity_logs` con `details.source =
+  "restore-ghost-peers"`. Un renumerado sigue teniendo el .conf viejo en el cliente: si se lo quiere
+  volver a usar hay que bajarle el config nuevo (cambió `Address`) y habilitarlo.
+
+**Sin resolver:** MikroTik Miami FL tiene 22 filas de `peer_metadata` (del admin, abr–jul) cuyo
+peer ya no está en el router y sin log; el log de RouterOS guarda ~10 min, no se puede datar (para
+rastrear: `/system logging` a disco o remoto). Miami Linux: los 23 fantasmas (homevpn, creados el
+2026-07-11) se sacaron antes de la retención del journal (volátil, arranca el mismo día), así que
+no se sabe qué los sacó; desde ahora el cron los marca y registra el mismo minuto.
+
+**Gotcha (diagnóstico):** `journalctl _COMM=sudo | grep "wg set"` en cada server Linux tiene cada
+llave sacada con fecha. Miami y Zoe tienen fail2ban: abrir SSH en paralelo desde la misma IP termina
+en ECONNRESET/timeout; ir de a un server por vez.
+
 ### 2026-10-07 — Nombre propio del customer + buscador de peers (v36)
 
 **Migración:** `scripts/migration-v36-customer-name.sql` (aplicada) — `tg_customers.name`.

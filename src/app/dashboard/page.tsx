@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -374,6 +375,26 @@ export default function DashboardPage() {
   const canSeeRestrictedPeers = isAdmin || capabilities.can_see_restricted_peers; // For VIEWING peers
   const canCreateUsers = capabilities.can_create_users; // For semiadmin functionality
   const canDelete = isAdmin || capabilities.can_delete; // Can delete peers and proxies
+  // Real dialog for deletes (window.confirm is blocked in the Telegram webview)
+  const [confirmDialog, confirmAction] = useConfirm();
+  const selectedRouterName = routers.find((r) => r.id === selectedRouterId)?.name || "";
+  const confirmPeerDelete = (target: { name?: string | null; address?: string | null; ip?: string | null }) =>
+    confirmAction({
+      title: "Delete peer?",
+      confirmLabel: "Delete peer",
+      destructive: true,
+      description: (
+        <>
+          <p className="font-medium text-foreground">
+            {target.name || "Unnamed"}
+            {target.address && <span className="font-mono font-normal text-muted-foreground"> · {target.address}</span>}
+            {target.ip && <span className="font-mono font-normal text-muted-foreground"> · {target.ip}</span>}
+          </p>
+          {selectedRouterName && <p className="mt-1">Server: {selectedRouterName}</p>}
+          <p className="mt-2">It is removed from the server and the client&apos;s config stops working. This cannot be undone.</p>
+        </>
+      ),
+    });
 
   // Peers asignados a customers de Telegram (badge "TG" en la tabla, solo admin)
   const [tgAssigned, setTgAssigned] = useState<Record<string, string>>({});
@@ -1458,7 +1479,8 @@ export default function DashboardPage() {
       toast.error("You don't have permission to delete peers");
       return;
     }
-    if (!confirm("Delete this peer?")) return;
+    const target = peers.find((p) => p[".id"] === id || (publicKey && p["public-key"] === publicKey));
+    if (!(await confirmPeerDelete({ name: target?.name, address: target?.["allowed-address"], ip: target?.comment }))) return;
     const res = await fetch("/api/wireguard", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1734,7 +1756,24 @@ export default function DashboardPage() {
     }
     const selected = getSelectedPeers();
     if (!selected.length) return;
-    if (!confirm(`Delete ${selected.length} peer(s)? This cannot be undone.`)) return;
+    const confirmed = await confirmAction({
+      title: `Delete ${selected.length} peer${selected.length === 1 ? "" : "s"}?`,
+      confirmLabel: `Delete ${selected.length} peer${selected.length === 1 ? "" : "s"}`,
+      destructive: true,
+      description: (
+        <>
+          <ul className="max-h-48 overflow-y-auto font-mono text-xs text-foreground">
+            {selected.slice(0, 12).map((p) => (
+              <li key={p[".id"]}>{p.name || "Unnamed"} · {p["allowed-address"]}{p.comment ? ` · ${p.comment}` : ""}</li>
+            ))}
+            {selected.length > 12 && <li>… and {selected.length - 12} more</li>}
+          </ul>
+          {selectedRouterName && <p className="mt-1">Server: {selectedRouterName}</p>}
+          <p className="mt-2">They are removed from the server and the clients&apos; configs stop working. This cannot be undone.</p>
+        </>
+      ),
+    });
+    if (!confirmed) return;
     setBulkWorking(true);
     let ok = 0;
     let fail = 0;
@@ -4089,7 +4128,7 @@ PersistentKeepalive = 25"
                             className="h-8 w-8 text-red-500 hover:text-red-400 hover:bg-red-500/20 hover:scale-110 transition-all duration-150"
                             onClick={async (e) => {
                               e.stopPropagation();
-                              if (!confirm(`Delete peer "${peer.name || 'Unnamed'}"?`)) return;
+                              if (!(await confirmPeerDelete({ name: peer.name, address: peer["allowed-address"], ip: peer.comment }))) return;
                               try {
                                 const res = await fetch("/api/wireguard", {
                                   method: "POST",
@@ -4330,6 +4369,7 @@ PersistentKeepalive = 25"
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirmDialog}
     </DashboardLayout>
   );
 }

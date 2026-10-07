@@ -10,6 +10,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -363,6 +364,25 @@ export default function AdminPage() {
 
   // Single peer detail dialog
   const [peerDetailOpen, setPeerDetailOpen] = useState(false);
+  const [confirmDialog, confirmAction] = useConfirm();
+  const confirmPeerDelete = (peer: { name?: string; address?: string }) => {
+    const serverName = routers.find((r) => r.id === selectedRouterForIps)?.name;
+    return confirmAction({
+      title: "Delete peer?",
+      confirmLabel: "Delete peer",
+      destructive: true,
+      description: (
+        <>
+          <p className="font-medium text-foreground">
+            {peer.name || "Unnamed"}
+            {peer.address && <span className="font-mono font-normal text-muted-foreground"> · {peer.address}</span>}
+          </p>
+          {serverName && <p className="mt-1">Server: {serverName}</p>}
+          <p className="mt-2">It is removed from the server and the client&apos;s config stops working. This cannot be undone.</p>
+        </>
+      ),
+    });
+  };
   const [selectedPeerDetail, setSelectedPeerDetail] = useState<{ id: string; name: string; address: string; publicKey?: string; privateKey?: string; interface?: string; disabled?: boolean; rx?: number; tx?: number; comment?: string } | null>(null);
 
   // User Router Access states
@@ -4312,7 +4332,7 @@ export default function AdminPage() {
                         variant="ghost"
                         size="sm"
                         onClick={async () => {
-                          if (!confirm("Delete this peer?")) return;
+                          if (!(await confirmPeerDelete(peer))) return;
                           const res = await fetch("/api/wireguard", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
@@ -4507,7 +4527,7 @@ PersistentKeepalive = 25`}
               variant="destructive"
               onClick={async () => {
                 if (!selectedPeerDetail) return;
-                if (!confirm("Delete this peer?")) return;
+                if (!(await confirmPeerDelete(selectedPeerDetail))) return;
                 const res = await fetch("/api/wireguard", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -5076,6 +5096,7 @@ PersistentKeepalive = 25`}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {confirmDialog}
     </DashboardLayout>
   );
 }

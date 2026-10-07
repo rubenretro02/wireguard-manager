@@ -7,6 +7,8 @@ import { cachedRouterRead, invalidateRouterReadCache } from "@/lib/router-read-c
 import { logActivity } from "@/lib/activity-logger";
 import { movePeerTimerToNewKey, resolveExpiry, setUnifiedExpiry, type ExpiryMode } from "@/lib/peer-expiry";
 import { buildEndpointResolver } from "@/lib/endpoint-domain";
+import { buildPeerScope, peerInScope } from "@/lib/access-scope";
+import { getNextFreeIp } from "@/lib/tg-store";
 import type { ConnectionType, AuthMethod, TimeUnit } from "@/lib/types";
 import {
   accountForRouter,
@@ -87,6 +89,56 @@ export async function POST(request: Request) {
 
   const connectionType: ConnectionType = router.connection_type || "api";
   const isLinux = connectionType === "linux-ssh";
+
+  // DB mirror of enable/disable/delete (linux_peers + logs) is written with the
+  // service role. With the caller's RLS client a non-admin touching a peer they
+  // did not create removed it from WireGuard (SSH ignores RLS) while the UPDATE
+  // hit 0 rows: the peer vanished from the dashboard with disabled=false and no
+  // log (Zoe, 2026-10-07: timer expiry fired from a sub-user's browser).
+  const dbClient = getAdminClient() ?? supabase;
+
+  /**
+   * Non-admins may only act on peers they can see — same rule as the dashboard
+   * filter and the v1 API (access-scope.ts). The dashboard's 60s auto-disable
+   * loop runs over every peer the API returns, not only the visible ones, so
+   * without this a sub-user's browser disables the admin's peers.
+   * Returns an error message, or null when the action may proceed.
+   */
+  const peerScopeError = async (publicKey: string | null, linuxPeerId: string | null): Promise<string | null> => {
+    if (isAdmin) return null;
+    const adminClient = getAdminClient();
+    if (!adminClient) return null;
+    const scope = await buildPeerScope(
+      adminClient,
+      { userId: user.id, email: user.email || "", isAdmin: false, capabilities: userProfile?.capabilities || {} },
+      routerId
+    );
+    if (scope.seesEverything) return null;
+
+    let owner: { created_by_user_id?: string | null; created_by_email?: string | null; comment?: string | null } | null = null;
+    if (isLinux && (publicKey || (linuxPeerId && !linuxPeerId.startsWith("*")))) {
+      const query = adminClient
+        .from("linux_peers")
+        .select("created_by_user_id, created_by_email, public_ip")
+        .eq("router_id", routerId)
+        .limit(1);
+      const { data: rows } = publicKey ? await query.eq("public_key", publicKey) : await query.eq("id", linuxPeerId);
+      const row = rows?.[0];
+      if (row) owner = { created_by_user_id: row.created_by_user_id, created_by_email: row.created_by_email, comment: row.public_ip };
+    }
+    if (!owner && publicKey) {
+      const { data: rows } = await adminClient
+        .from("peer_metadata")
+        .select("created_by_user_id, created_by_email")
+        .eq("router_id", routerId)
+        .eq("peer_public_key", publicKey)
+        .limit(1);
+      if (rows?.[0]) owner = rows[0];
+    }
+    // Unknown peer (created outside the app) → not visible to non-admins either.
+    if (!owner || !peerInScope(scope, owner)) return "This peer belongs to another user";
+    return null;
+  };
 
   // =====================================================
   // STARVPN (v32) — la cuenta es el "server", los slots son peers de solo lectura
@@ -523,12 +575,18 @@ export async function POST(request: Request) {
             };
           });
 
-          // Also include disabled peers (stored but not in WireGuard). When the
-          // server is unreachable, include ALL stored peers missing from the live
-          // dump so the list can be reconstructed from the DB.
+          // Also include every stored peer that is not in WireGuard, shown as
+          // disabled. Until 2026-10-07 only rows flagged disabled were included,
+          // so a peer removed from wg without the flag (RLS-blocked mirror, manual
+          // `wg set … remove`, a server rebuilt from an old .conf) disappeared from
+          // the dashboard although the DB still had its keys — found 27 of those
+          // across Miami/TX/Zoe. Listing them as Disabled makes them visible and
+          // recoverable with Enable (same key, the client's config keeps working).
+          // When the server is unreachable this also reconstructs the list from
+          // the DB.
           const livePeerKeys = new Set(livePeers.map(p => p.publicKey));
           const disabledPeers = (storedPeers || [])
-            .filter((p: any) => (p.disabled || routerDown) && !livePeerKeys.has(p.public_key))
+            .filter((p: any) => !livePeerKeys.has(p.public_key))
             .map((stored: any) => ({
               endpoint_host: resolveEndpoint(stored.created_by_user_id || legacyMetaMap.get(stored.public_key)?.created_by_user_id),
               ".id": stored.id,
@@ -541,7 +599,10 @@ export async function POST(request: Request) {
               rx: 0,
               tx: 0,
               interface: router.wg_interface || "wg1",
-              disabled: Boolean(stored.disabled),
+              // Not in wg = disabled in effect, whatever the flag says. With the
+              // server down the real state is unknown; keep the flag as the dashboard
+              // already shows a "server down" banner for that case.
+              disabled: routerDown ? Boolean(stored.disabled) : true,
               name: stored.name || "",
               comment: stored.comment || stored.public_ip || "",
               created_by_user_id: stored.created_by_user_id || legacyMetaMap.get(stored.public_key)?.created_by_user_id,
@@ -641,10 +702,13 @@ export async function POST(request: Request) {
           // v15: per-IP wg_interface — fall back to whatever the frontend sent (router default)
           const effectiveInterface = publicIp.wg_interface || wgInterface;
 
-          // Get next available IP in the subnet
-          const nextIp = await linuxClient.getNextAvailableIp(publicIp.ip_number);
-          if (!nextIp) {
-            return NextResponse.json({ error: "No available IPs in this subnet" }, { status: 400 });
+          // Next free IP: wg + linux_peers + tg_customer_peers, so a disabled or
+          // missing peer keeps its address (its client still has that .conf).
+          let nextIp: number;
+          try {
+            nextIp = await getNextFreeIp(dbClient, linuxClient, publicIp, routerId);
+          } catch (ipErr) {
+            return NextResponse.json({ error: ipErr instanceof Error ? ipErr.message : "No available IPs in this subnet" }, { status: 400 });
           }
 
           const allowedAddress = `${publicIp.internal_subnet}.${nextIp}/32`;
@@ -766,6 +830,9 @@ export async function POST(request: Request) {
               return NextResponse.json({ error: "Public key required to delete peer on Linux" }, { status: 400 });
             }
 
+            const scopeError = await peerScopeError(publicKey, null);
+            if (scopeError) return NextResponse.json({ error: scopeError }, { status: 403 });
+
             const success = await linuxClient.removePeer(publicKey);
 
             if (!success) {
@@ -773,7 +840,7 @@ export async function POST(request: Request) {
             }
 
             // Also delete from linux_peers table
-            await supabase
+            await dbClient
               .from("linux_peers")
               .delete()
               .eq("router_id", routerId)
@@ -781,7 +848,7 @@ export async function POST(request: Request) {
 
             // Log activity
             await logActivity({
-              supabase,
+              supabase: dbClient,
               userId: user.id,
               routerId,
               action: "delete",
@@ -808,9 +875,12 @@ export async function POST(request: Request) {
             const publicKey = data["public-key"] || data.publicKey;
             let loggedKey: string | null = publicKey || null;
 
+            const scopeError = await peerScopeError(publicKey || null, data.id || null);
+            if (scopeError) return NextResponse.json({ error: scopeError }, { status: 403 });
+
             if (!publicKey) {
               // Try to get public key from database using ID
-              const { data: storedPeer } = await supabase
+              const { data: storedPeer } = await dbClient
                 .from("linux_peers")
                 .select("public_key")
                 .eq("id", data.id)
@@ -825,7 +895,7 @@ export async function POST(request: Request) {
               await linuxClient.removePeer(storedPeer.public_key);
 
               // Update database to mark as disabled
-              await supabase
+              await dbClient
                 .from("linux_peers")
                 .update({ disabled: true })
                 .eq("id", data.id);
@@ -834,7 +904,7 @@ export async function POST(request: Request) {
               await linuxClient.removePeer(publicKey);
 
               // Update database to mark as disabled
-              await supabase
+              await dbClient
                 .from("linux_peers")
                 .update({ disabled: true })
                 .eq("router_id", routerId)
@@ -843,7 +913,7 @@ export async function POST(request: Request) {
 
             // Log activity
             await logActivity({
-              supabase,
+              supabase: dbClient,
               userId: user.id,
               routerId,
               action: "disable",
@@ -867,11 +937,14 @@ export async function POST(request: Request) {
           // Enable = add peer back to WireGuard from database
           console.log("[WireGuard API] Enabling Linux peer:", data.id);
           try {
+            const scopeError = await peerScopeError(data["public-key"] || data.publicKey || null, data.id || null);
+            if (scopeError) return NextResponse.json({ error: scopeError }, { status: 403 });
+
             // Get peer data from database
             let storedPeer;
 
             if (data.id && !data.id.startsWith("*")) {
-              const { data: peer } = await supabase
+              const { data: peer } = await dbClient
                 .from("linux_peers")
                 .select("*")
                 .eq("id", data.id)
@@ -879,7 +952,7 @@ export async function POST(request: Request) {
               storedPeer = peer;
             } else if (data["public-key"] || data.publicKey) {
               const publicKey = data["public-key"] || data.publicKey;
-              const { data: peer } = await supabase
+              const { data: peer } = await dbClient
                 .from("linux_peers")
                 .select("*")
                 .eq("router_id", routerId)
@@ -892,6 +965,22 @@ export async function POST(request: Request) {
               return NextResponse.json({ error: "Peer not found in database. Cannot enable." }, { status: 404 });
             }
 
+            // An allowed-ip belongs to ONE peer per interface: `wg set` silently
+            // moves it from whoever has it to this peer. Since stored-but-absent
+            // peers are now listed as Disabled, an old row whose address was
+            // reused by a re-created peer must not be re-enabled over the new one.
+            const enableIface = router.wg_interface || "wg0";
+            const liveOnIface = await linuxClient.getPeersForInterface(enableIface);
+            const addressOwner = liveOnIface.find(
+              (p) => p.allowedIps === storedPeer.allowed_ips && p.publicKey !== storedPeer.public_key
+            );
+            if (addressOwner) {
+              return NextResponse.json(
+                { error: `${storedPeer.allowed_ips} is already in use by another peer on ${enableIface}. Delete this one or give it a different address.` },
+                { status: 409 }
+              );
+            }
+
             // Add peer back to WireGuard
             const success = await linuxClient.addPeer(storedPeer.public_key, storedPeer.allowed_ips);
 
@@ -900,14 +989,14 @@ export async function POST(request: Request) {
             }
 
             // Update database to mark as enabled
-            await supabase
+            await dbClient
               .from("linux_peers")
               .update({ disabled: false })
               .eq("id", storedPeer.id);
 
             // Log activity
             await logActivity({
-              supabase,
+              supabase: dbClient,
               userId: user.id,
               routerId,
               action: "enable",
@@ -1402,6 +1491,14 @@ export async function POST(request: Request) {
     useSsl: useApiSsl,
     connectionType: baseConnectionType as "api" | "rest",
   });
+
+  // The scope check keys on the peer's public key; some callers only send the
+  // router .id (row buttons in Admin → Public IPs). Non-admins only.
+  const mikrotikPeerKey = async (id: string | undefined): Promise<string | null> => {
+    if (isAdmin || !id) return null;
+    const { data: peers } = await cachedRouterRead(`mt-peers:${routerId}`, () => client.getWireGuardPeers());
+    return peers.find((p) => p[".id"] === id)?.["public-key"] || null;
+  };
 
   try {
     switch (action) {
@@ -2119,6 +2216,8 @@ export async function POST(request: Request) {
       }
       case "deletePeer": {
         console.log("[WireGuard API] Deleting peer:", data.id);
+        const deleteScopeError = await peerScopeError(data.publicKey || data["public-key"] || (await mikrotikPeerKey(data.id)), null);
+        if (deleteScopeError) return NextResponse.json({ error: deleteScopeError }, { status: 403 });
         await client.deleteWireGuardPeer(data.id);
         console.log("[WireGuard API] Peer deleted, logging activity...");
         // Log activity
@@ -2138,6 +2237,8 @@ export async function POST(request: Request) {
       }
       case "enablePeer": {
         console.log("[WireGuard API] Enabling peer:", data.id);
+        const enableScopeError = await peerScopeError(data.publicKey || data["public-key"] || (await mikrotikPeerKey(data.id)), null);
+        if (enableScopeError) return NextResponse.json({ error: enableScopeError }, { status: 403 });
         await client.enableWireGuardPeer(data.id);
         console.log("[WireGuard API] Peer enabled, logging activity...");
         // Log activity
@@ -2157,6 +2258,8 @@ export async function POST(request: Request) {
       }
       case "disablePeer": {
         console.log("[WireGuard API] Disabling peer:", data.id);
+        const disableScopeError = await peerScopeError(data.publicKey || data["public-key"] || (await mikrotikPeerKey(data.id)), null);
+        if (disableScopeError) return NextResponse.json({ error: disableScopeError }, { status: 403 });
         await client.disableWireGuardPeer(data.id);
         console.log("[WireGuard API] Peer disabled, logging activity...");
         // Log activity
