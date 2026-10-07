@@ -72,6 +72,8 @@ export async function linkTelegramToCustomer(
     language_code: tg.language_code || null,
     last_seen_at: new Date().toISOString(),
   };
+  // The panel's own label for this customer (v36). Older manual rows kept it in first/last.
+  const manualName = target.name || [target.first_name, target.last_name].filter(Boolean).join(" ").trim() || null;
 
   const { data: existing } = await supabase
     .from("tg_customers")
@@ -88,11 +90,13 @@ export async function linkTelegramToCustomer(
       .from("tg_customers")
       .update({
         ...tgFields,
+        // Our label survives the merge; first/last stay Telegram's
+        name: keep.name || manualName,
         email: keep.email || target.email,
         phone: keep.phone || target.phone,
         notes: [keep.notes, target.notes].filter(Boolean).join("\n") || null,
-        first_name: keep.first_name || target.first_name,
-        last_name: keep.last_name || target.last_name,
+        first_name: keep.first_name || tg.first_name || null,
+        last_name: keep.last_name || tg.last_name || null,
       })
       .eq("id", keep.id);
     await supabase.from("tg_customers").delete().eq("id", customerId);
@@ -104,9 +108,11 @@ export async function linkTelegramToCustomer(
     .update({
       telegram_id: tg.id,
       ...tgFields,
-      // The admin typed the name on purpose; only fill what is empty
-      first_name: target.first_name || tg.first_name || null,
-      last_name: target.last_name || tg.last_name || null,
+      // The admin's label is kept in `name`; first/last become Telegram's (the Mini App
+      // login rewrites them anyway)
+      name: manualName,
+      first_name: tg.first_name || null,
+      last_name: tg.last_name || null,
     })
     .eq("id", customerId);
   if (error) return { ok: false, reason: `Could not link: ${error.message}` };

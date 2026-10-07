@@ -284,7 +284,7 @@ export default function DashboardPage() {
   const [bulkWorking, setBulkWorking] = useState(false);
   // Bulk assign to Telegram customer
   const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
-  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; username: string | null; first_name: string | null; last_name?: string | null; email?: string | null; phone?: string | null; customer_type?: string; source?: string }[]>([]);
+  const [bulkCustomers, setBulkCustomers] = useState<{ id: string; telegram_id: number | null; name?: string | null; username: string | null; first_name: string | null; last_name?: string | null; email?: string | null; phone?: string | null; customer_type?: string; source?: string }[]>([]);
   // Customer picked in Create Peer (v30) — the peer is assigned to them on creation
   const [createCustomerId, setCreateCustomerId] = useState("");
   // Per-peer history dialog (v31)
@@ -384,14 +384,14 @@ export default function DashboardPage() {
     }
     const { data } = await supabase
       .from("tg_customer_peers")
-      .select("peer_public_key, display_name, tg_customers(username, first_name, telegram_id)")
+      .select("peer_public_key, display_name, tg_customers(username, name, first_name, telegram_id)")
       .eq("router_id", selectedRouterId);
     const map: Record<string, string> = {};
     for (const row of data || []) {
       // biome-ignore lint/suspicious/noExplicitAny: joined shape
       const r = row as any;
       const c = r.tg_customers;
-      const who = c?.username ? `@${c.username}` : c?.first_name || String(c?.telegram_id || "TG");
+      const who = c?.name || (c?.username ? `@${c.username}` : c?.first_name || String(c?.telegram_id || "TG"));
       // incluye el nombre que ve el cliente ("Peer 4") para mapear tarjetas ↔ peers
       map[r.peer_public_key] = r.display_name ? `${who} · ${r.display_name}` : who;
     }

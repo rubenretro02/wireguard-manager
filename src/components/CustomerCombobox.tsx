@@ -9,6 +9,8 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 export interface CustomerOption {
   id: string;
   telegram_id: number | null;
+  /** The panel's own label (v36); Telegram's first/last are separate */
+  name?: string | null;
   username: string | null;
   first_name: string | null;
   last_name?: string | null;
@@ -18,6 +20,7 @@ export interface CustomerOption {
 }
 
 export function customerLabel(c: CustomerOption): string {
+  if (c.name) return c.name;
   if (c.username) return `@${c.username}`;
   const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
   return full || c.email || (c.telegram_id ? String(c.telegram_id) : "Customer");
@@ -54,7 +57,7 @@ export function CustomerCombobox({ customers, value, onChange, onCreateNew, allo
 
   const renderItem = (c: CustomerOption) => {
     // Everything searchable goes into `value`; cmdk filters on it
-    const haystack = [customerLabel(c), c.first_name, c.last_name, c.username, c.email, c.phone, c.telegram_id, c.customer_type]
+    const haystack = [customerLabel(c), c.name, c.first_name, c.last_name, c.username, c.email, c.phone, c.telegram_id, c.customer_type]
       .filter(Boolean)
       .join(" ");
     return (

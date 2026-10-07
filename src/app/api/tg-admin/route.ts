@@ -129,14 +129,16 @@ export async function POST(request: Request) {
 
       // v30: cliente manual — misma tabla que los de Telegram, sin telegram_id
       case "createCustomer": {
-        const { firstName, lastName, email, phone, notes, customerType } = data;
-        const first = String(firstName || "").trim();
+        const { name, firstName, lastName, email, phone, notes, customerType } = data;
+        // v36: one "Name" field (older clients still send firstName)
+        const first = String(name ?? firstName ?? "").trim();
         if (!first) return NextResponse.json({ error: "Name is required" }, { status: 400 });
         const { data: customer, error } = await supabase
           .from("tg_customers")
           .insert({
             telegram_id: null,
             source: "manual",
+            name: first.slice(0, 80),
             first_name: first.slice(0, 80),
             last_name: String(lastName || "").trim().slice(0, 80) || null,
             email: String(email || "").trim().toLowerCase().slice(0, 120) || null,
@@ -161,9 +163,10 @@ export async function POST(request: Request) {
       }
 
       case "updateCustomer": {
-        const { id, firstName, lastName, email, phone, notes } = data;
+        const { id, name, firstName, lastName, email, phone, notes } = data;
         if (!id) return NextResponse.json({ error: "Missing customer id" }, { status: 400 });
         const update: Record<string, string | null> = {};
+        if (name !== undefined) update.name = String(name).trim().slice(0, 80) || null;
         if (firstName !== undefined) update.first_name = String(firstName).trim().slice(0, 80) || null;
         if (lastName !== undefined) update.last_name = String(lastName).trim().slice(0, 80) || null;
         if (email !== undefined) update.email = String(email).trim().toLowerCase().slice(0, 120) || null;
@@ -251,7 +254,7 @@ export async function POST(request: Request) {
       case "listCustomerPeers": {
         let peersQuery = supabase
           .from("tg_customer_peers")
-          .select("*, tg_customers(telegram_id, username, first_name, last_name, email, source), tg_plans(name), routers(name)")
+          .select("*, tg_customers(telegram_id, username, name, first_name, last_name, email, source), tg_plans(name), routers(name)")
           .order("created_at", { ascending: false });
         // v30: la página de un cliente pide solo los suyos
         if (data?.customerId) peersQuery = peersQuery.eq("customer_id", data.customerId);
@@ -615,7 +618,7 @@ export async function POST(request: Request) {
       case "listPayments": {
         const { data: payments, error } = await supabase
           .from("tg_payments")
-          .select("*, tg_customers(telegram_id, username, first_name), tg_plans(name)")
+          .select("*, tg_customers(telegram_id, username, name, first_name), tg_plans(name)")
           .order("created_at", { ascending: false })
           .limit(200);
         if (error) throw new Error(error.message);

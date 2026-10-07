@@ -41,6 +41,26 @@ Acciones implementadas: ver `src/app/api/wireguard/route.ts`.
 
 ## Historial de cambios
 
+### 2026-10-07 — Nombre propio del customer + buscador de peers (v36)
+
+**Migración:** `scripts/migration-v36-customer-name.sql` (aplicada) — `tg_customers.name`.
+
+**Problema (reporte del admin):** un cliente manual "fijurno" se vinculó a Telegram (@TXSMVRT) y
+el nombre desapareció: `first_name`/`last_name` son de TELEGRAM (`tg-auth.ts` los reescribe en
+cada login de la Mini App y `linkTelegramToCustomer` los pisaba al fusionar), así que el cliente
+manual guardaba "su" nombre en un campo que Telegram iba a sobrescribir.
+- `tg_customers.name` = etiqueta NUESTRA; Telegram nunca la toca. `customerDisplayName` /
+  `customerLabel` (Combobox, admin/telegram, badge del Dashboard) la prefieren sobre `@username`.
+- `linkTelegramToCustomer`: en los dos caminos (directo y merge) `name` = `name` del manual (o su
+  first/last viejo); first/last pasan a ser los de Telegram.
+- `tg-admin`: `createCustomer` recibe `name` (un solo campo; también lo copia a `first_name` para
+  los manuales), `updateCustomer` acepta `name`; los `select` de peers/pagos traen `name`.
+- `/customers`: columnas **Name** (lápiz inline → `updateCustomer`) y **Telegram** (@user + nombre
+  de TG, "not linked" si manual); buscador cubre `name`. `/customers/[id]`: tarjeta y Edit usan
+  `name`, y la tabla de peers tiene **buscador** (fuzzy sobre nombre/display/address/IP/server).
+- Backfill: manuales sin vincular copian first/last a `name`. Los ya vinculados no (su first/last
+  ya era de Telegram): @TXSMVRT quedó "T S" y se corrigió a mano a "fijurno".
+
 ### 2026-09-30 — Cuentas StarHome (StarVPN) con slots residenciales (v32)
 
 **Qué es:** un admin o semi-admin (`can_create_users`) conecta su cuenta de StarVPN desde

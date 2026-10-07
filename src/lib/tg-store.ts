@@ -20,6 +20,9 @@ export interface TgCustomer {
   id: string;
   // NULL = cliente manual (v30): creado desde el panel, sin Telegram
   telegram_id: number | null;
+  // v36: etiqueta del panel (la pone el admin). first/last_name son de Telegram y
+  // se reescriben en cada login de la Mini App, así que no sirven como "nuestro" nombre.
+  name: string | null;
   username: string | null;
   first_name: string | null;
   last_name: string | null;
@@ -36,9 +39,10 @@ export interface TgCustomer {
   last_seen_at: string;
 }
 
-/** Nombre para mostrar: @username > nombre completo > email > telegram_id. */
+/** Nombre para mostrar: nombre del panel > @username > nombre de Telegram > email > telegram_id. */
 export function customerDisplayName(c: Partial<TgCustomer> | null | undefined): string {
   if (!c) return "—";
+  if (c.name) return c.name;
   if (c.username) return `@${c.username}`;
   const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
   if (full) return full;

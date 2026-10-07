@@ -17,13 +17,16 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from "@/components/ui/textarea";
 import {
   ArrowLeft, Copy, Download, Loader2, Pencil, Power, PowerOff, QrCode, RefreshCw,
-  ScrollText, Send, Server, Timer, Trash2, Unlink, UserRound, Wifi, WifiOff,
+  ScrollText, Search, Send, Server, Timer, Trash2, Unlink, UserRound, Wifi, WifiOff,
 } from "lucide-react";
+import { fuzzyScore } from "@/lib/fuzzy";
 import type { Profile } from "@/lib/types";
 
 interface Customer {
   id: string;
   telegram_id: number | null;
+  /** Our label (v36); first/last are Telegram's */
+  name: string | null;
   username: string | null;
   first_name: string | null;
   last_name: string | null;
@@ -59,10 +62,12 @@ interface CustomerPeer {
 }
 
 
+const tgFullName = (c: Customer): string => [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
+
 function displayName(c: Customer): string {
+  if (c.name) return c.name;
   if (c.username) return `@${c.username}`;
-  const full = [c.first_name, c.last_name].filter(Boolean).join(" ").trim();
-  return full || c.email || (c.telegram_id ? String(c.telegram_id) : "Customer");
+  return tgFullName(c) || c.email || (c.telegram_id ? String(c.telegram_id) : "Customer");
 }
 
 function buildConfig(p: CustomerPeer): string {
@@ -107,7 +112,7 @@ export default function CustomerDetailPage() {
 
   // Edit customer
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ firstName: "", lastName: "", email: "", phone: "", notes: "" });
+  const [editForm, setEditForm] = useState({ name: "", email: "", phone: "", notes: "" });
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Extend
@@ -205,6 +210,7 @@ export default function CustomerDetailPage() {
   const [peerFilter, setPeerFilter] = useState<PeerFilter>("all");
   const [serverFilter, setServerFilter] = useState<string>("all");
   const [showServers, setShowServers] = useState(false);
+  const [peerSearch, setPeerSearch] = useState("");
 
   const serverOptions = useMemo(() => {
     const map = new Map<string, string>();
@@ -212,20 +218,32 @@ export default function CustomerDetailPage() {
     return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
   }, [peers]);
 
-  const visiblePeers = useMemo(() => peers.filter((p) => {
-    if (serverFilter !== "all" && p.router_id !== serverFilter) return false;
-    if (peerFilter === "online") return Boolean(p.connected);
-    if (peerFilter === "active") return p.status === "active";
-    if (peerFilter === "down") return p.status !== "active";
-    return true;
-  }), [peers, peerFilter, serverFilter]);
+  const visiblePeers = useMemo(() => {
+    const base = peers.filter((p) => {
+      if (serverFilter !== "all" && p.router_id !== serverFilter) return false;
+      if (peerFilter === "online") return Boolean(p.connected);
+      if (peerFilter === "active") return p.status === "active";
+      if (peerFilter === "down") return p.status !== "active";
+      return true;
+    });
+    if (!peerSearch.trim()) return base;
+    // Same fuzzy search as the Customers list: name, address, IP, server…
+    return base
+      .map((p) => ({
+        p,
+        score: fuzzyScore([p.peer_name, p.display_name, p.allowed_address, p.public_ip, p.endpoint_host, p.routers?.name, p.wg_interface, p.status], peerSearch),
+      }))
+      .filter(({ score }) => score >= 0)
+      .sort((a, b) => b.score - a.score)
+      .map(({ p }) => p);
+  }, [peers, peerFilter, serverFilter, peerSearch]);
+  const hasPeerFilters = peerFilter !== "all" || serverFilter !== "all" || peerSearch.trim() !== "";
 
   /* ---------- customer edit ---------- */
   const openEdit = () => {
     if (!customer) return;
     setEditForm({
-      firstName: customer.first_name || "",
-      lastName: customer.last_name || "",
+      name: customer.name || "",
       email: customer.email || "",
       phone: customer.phone || "",
       notes: customer.notes || "",
@@ -341,7 +359,12 @@ export default function CustomerDetailPage() {
     <DashboardLayout userRole={profile.role} userEmail={profile.email} userCapabilities={profile.capabilities} onLogout={handleLogout}>
       <PageHeader
         title={displayName(customer)}
-        description={`${customer.telegram_id ? "Telegram customer" : "Manual customer (no Telegram yet)"} · ${customer.customer_type}`}
+        description={[
+          customer.telegram_id
+            ? `Telegram customer${customer.name && customer.username ? ` · @${customer.username}` : ""}`
+            : "Manual customer (no Telegram yet)",
+          customer.customer_type,
+        ].join(" · ")}
       >
         <Button variant="outline" onClick={() => router.push("/customers")} className="gap-2">
           <ArrowLeft className="w-4 h-4" />
@@ -369,7 +392,7 @@ export default function CustomerDetailPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-x-8 gap-y-2 text-sm flex-1">
               <div>
                 <div className="text-muted-foreground text-xs">Name</div>
-                <div className="font-medium">{[customer.first_name, customer.last_name].filter(Boolean).join(" ") || "—"}</div>
+                <div className="font-medium">{customer.name || <span className="text-muted-foreground italic font-normal">No name — Edit to set one</span>}</div>
               </div>
               <div>
                 <div className="text-muted-foreground text-xs">Email</div>
@@ -382,6 +405,9 @@ export default function CustomerDetailPage() {
               <div>
                 <div className="text-muted-foreground text-xs">Telegram</div>
                 <div className="font-mono">{customer.telegram_id ? `${customer.username ? "@" + customer.username + " · " : ""}${customer.telegram_id}` : "not linked"}</div>
+                {customer.telegram_id && tgFullName(customer) && (
+                  <div className="text-xs text-muted-foreground">{tgFullName(customer)}</div>
+                )}
               </div>
               {customer.notes && (
                 <div className="col-span-2 md:col-span-4">
@@ -443,13 +469,22 @@ export default function CustomerDetailPage() {
         )}
 
         {/* Peers across every server */}
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
           <h3 className="text-lg font-semibold">
             Peers <span className="text-muted-foreground text-sm">({visiblePeers.length}{visiblePeers.length !== peers.length ? ` of ${peers.length}` : ""})</span>
           </h3>
-          <div className="flex items-center gap-2">
-            {(peerFilter !== "all" || serverFilter !== "all") && (
-              <Button variant="ghost" size="sm" onClick={() => { setPeerFilter("all"); setServerFilter("all"); }} className="h-8 text-xs">
+          <div className="flex items-center gap-2 flex-1 justify-end">
+            <div className="relative flex-1 max-w-sm min-w-[200px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Search peer, address, public IP, server…"
+                value={peerSearch}
+                onChange={(e) => setPeerSearch(e.target.value)}
+                className="pl-9 h-9 bg-secondary border-border"
+              />
+            </div>
+            {hasPeerFilters && (
+              <Button variant="ghost" size="sm" onClick={() => { setPeerFilter("all"); setServerFilter("all"); setPeerSearch(""); }} className="h-8 text-xs">
                 Clear filters
               </Button>
             )}
@@ -576,9 +611,13 @@ export default function CustomerDetailPage() {
             <DialogTitle>Edit customer</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2"><Label>First name</Label><Input value={editForm.firstName} onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })} className="bg-secondary" /></div>
-              <div className="space-y-2"><Label>Last name</Label><Input value={editForm.lastName} onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })} className="bg-secondary" /></div>
+            <div className="space-y-2">
+              <Label>Name</Label>
+              <Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} className="bg-secondary" placeholder="How you call this customer" />
+              <p className="text-xs text-muted-foreground">
+                Your own label; Telegram never changes it.
+                {customer.telegram_id && tgFullName(customer) ? ` On Telegram they are "${tgFullName(customer)}"${customer.username ? ` (@${customer.username})` : ""}.` : ""}
+              </p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2"><Label>Email</Label><Input value={editForm.email} onChange={(e) => setEditForm({ ...editForm, email: e.target.value })} className="bg-secondary" /></div>

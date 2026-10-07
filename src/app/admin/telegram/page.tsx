@@ -46,6 +46,7 @@ interface AdminPlan {
 interface AdminCustomer {
   id: string;
   telegram_id: number;
+  name?: string | null;
   username: string | null;
   first_name: string | null;
   last_name: string | null;
@@ -73,7 +74,7 @@ interface AdminPeer {
   latest_handshake?: string | null;
   renewal_price_usd: number | null;
   renewal_duration_days: number | null;
-  tg_customers?: { telegram_id: number; username: string | null; first_name: string | null } | null;
+  tg_customers?: { telegram_id: number; name?: string | null; username: string | null; first_name: string | null } | null;
   tg_plans?: { name: string } | null;
   routers?: { name: string } | null;
 }
@@ -86,7 +87,7 @@ interface AdminPayment {
   order_id: string;
   created_at: string;
   paid_at: string | null;
-  tg_customers?: { telegram_id: number; username: string | null; first_name: string | null } | null;
+  tg_customers?: { telegram_id: number; name?: string | null; username: string | null; first_name: string | null } | null;
   tg_plans?: { name: string } | null;
 }
 interface RouterOption {
@@ -131,9 +132,10 @@ const emptyPlanForm = {
   sort_order: "0",
 };
 
-function customerLabel(c?: { telegram_id: number | null; username: string | null; first_name: string | null } | null): string {
+function customerLabel(c?: { telegram_id: number | null; name?: string | null; username: string | null; first_name: string | null } | null): string {
   if (!c) return "—";
-  // Manual customers (v30) have no telegram_id
+  // The panel's own label (v36) first; manual customers (v30) have no telegram_id
+  if (c.name) return c.name;
   return c.username ? `@${c.username}` : c.first_name || (c.telegram_id ? String(c.telegram_id) : "Customer");
 }
 
@@ -653,6 +655,7 @@ function AdminTelegramPageContent() {
           [
             peer.peer_name,
             customerLabel(peer.tg_customers),
+            peer.tg_customers?.username,
             peer.tg_customers?.first_name,
             peer.tg_customers ? String(peer.tg_customers.telegram_id) : null,
             peer.public_ip,
@@ -998,6 +1001,9 @@ function AdminTelegramPageContent() {
                     <TableRow key={c.id} className="cursor-pointer" onClick={() => setCustomerDialog(c)}>
                       <TableCell className="font-medium">
                         {customerLabel(c)}
+                        {c.name && c.username && (
+                          <span className="text-muted-foreground text-xs ml-2">@{c.username}</span>
+                        )}
                         {c.first_name && c.username && (
                           <span className="text-muted-foreground text-xs ml-2">{c.first_name} {c.last_name || ""}</span>
                         )}
